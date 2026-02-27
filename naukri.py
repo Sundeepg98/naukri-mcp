@@ -88,6 +88,9 @@ def _cache_key(question_name: str, answer_option: dict) -> str:
     return f"{question_name}_{json.dumps(answer_option, sort_keys=True)}"
 
 
+_cache_lock = asyncio.Lock()
+
+
 # ============================================================================
 # Browser State — for login and browser-based tools only
 # ============================================================================
@@ -588,6 +591,129 @@ async def naukri_get_job(job_url: str) -> dict:
 # ============================================================================
 
 
+async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
+    """Core apply logic — POST to apply endpoint, handle questions from cache.
+
+    Used by both naukri_apply (single) and naukri_batch_apply (parallel).
+    """
+    if answers is None:
+        answers = {}
+    job_id = _extract_job_id(job_id)
+
+    try:
+        async with _cache_lock:
+            cache = _load_cache()
+
+        body = {
+            "strJobsarr": [job_id],
+            **APPLY_TRAILER,
+        }
+
+        if answers:
+            apply_answers = _build_apply_answers(job_id, answers, cache)
+            if apply_answers:
+                body["applyData"] = {job_id: {"answers": apply_answers}}
+
+        data = await api_post(
+            "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+            body,
+        )
+
+        jobs = data.get("jobs", [])
+        if not jobs:
+            msg = data.get("message", "")
+            if "already" in msg.lower():
+                return {"status": "already_applied", "job_id": job_id}
+            return {"status": "error", "job_id": job_id, "message": msg or "Unexpected response"}
+
+        job_result = jobs[0]
+        status_code = job_result.get("status")
+        questionnaire = job_result.get("questionnaire", [])
+
+        if status_code == 200:
+            if questionnaire and answers:
+                async with _cache_lock:
+                    cache = _load_cache()
+                    _cache_answers(questionnaire, answers, cache)
+                    _save_cache(cache)
+            return {
+                "status": "applied",
+                "job_id": job_id,
+                "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
+            }
+
+        if questionnaire:
+            pending = []
+            auto_answers = {}
+
+            async with _cache_lock:
+                cache = _load_cache()
+
+            for q in questionnaire:
+                qid = str(q.get("questionId", ""))
+                q_name = q.get("questionName", "")
+                q_type = q.get("questionType", "")
+                options = q.get("answerOption", {})
+                cache_k = _cache_key(q_name, options)
+
+                cached = cache.get(cache_k)
+                if cached:
+                    auto_answers[qid] = cached["answer"]
+                    continue
+
+                user_answer = _find_user_answer(qid, q_name, answers)
+                if user_answer is not None:
+                    formatted = _format_answer(user_answer, q_type, options)
+                    auto_answers[qid] = formatted
+                    cache[cache_k] = {
+                        "questionType": q_type,
+                        "questionName": q_name,
+                        "answer": formatted,
+                    }
+                    continue
+
+                pending.append({
+                    "question_id": qid,
+                    "question": q_name,
+                    "type": q_type,
+                    "options": options,
+                })
+
+            if not pending and auto_answers:
+                async with _cache_lock:
+                    _save_cache(cache)
+                body["applyData"] = {job_id: {"answers": auto_answers}}
+                data2 = await api_post(
+                    "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+                    body,
+                )
+                jobs2 = data2.get("jobs", [])
+                if jobs2 and jobs2[0].get("status") == 200:
+                    return {
+                        "status": "applied",
+                        "job_id": job_id,
+                        "questions_answered": len(auto_answers),
+                        "daily_applied": data2.get("quotaDetails", {}).get("dailyApplied"),
+                    }
+
+            if pending:
+                async with _cache_lock:
+                    _save_cache(cache)
+                return {
+                    "status": "needs_input",
+                    "job_id": job_id,
+                    "questions": pending,
+                    "auto_answered": len(auto_answers),
+                }
+
+        return {"status": "error", "job_id": job_id, "message": f"Apply returned status {status_code}"}
+
+    except ValueError as e:
+        return {"status": "error", "job_id": job_id, "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}"}
+
+
 @mcp.tool()
 async def naukri_apply(
     job_id: str,
@@ -615,136 +741,121 @@ async def naukri_apply(
         - {status: "already_applied"} — already applied
         - {status: "error", message: "..."} — failure
     """
+    return await _apply_single(job_id, answers)
+
+
+@mcp.tool()
+async def naukri_batch_apply(
+    keywords: str,
+    location: Optional[str] = None,
+    experience: Optional[int] = None,
+    limit: int = 5,
+    answers: Optional[dict] = None,
+) -> dict:
+    """Search and apply to multiple jobs in parallel. Like Naukri Pro's auto-apply.
+
+    Searches for jobs, filters out already-applied ones, then applies to all
+    remaining jobs concurrently. Screening questions are auto-answered from
+    the cache or the provided answers dict.
+
+    Args:
+        keywords: Job title or skills (e.g., "python developer", "react node.js")
+        location: City name (e.g., "Bangalore", "Mumbai", "Remote")
+        experience: Years of experience filter
+        limit: Max jobs to apply to (default 5, max 20)
+        answers: Pre-filled answers for common screening questions.
+                 Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
+    """
     if answers is None:
         answers = {}
+    limit = min(limit, 20)
 
-    job_id = _extract_job_id(job_id)
+    # Step 1: Search
+    search_result = await naukri_search_jobs(keywords, location, experience, limit)
+    if search_result.get("status") != "success":
+        return {"status": "error", "message": "Search failed", "search_result": search_result}
 
-    try:
-        # Load answer cache
-        cache = _load_cache()
+    all_jobs = search_result.get("jobs", [])
+    if not all_jobs:
+        return {"status": "error", "message": "No jobs found for this search"}
 
-        # Build apply body
-        body = {
-            "strJobsarr": [job_id],
-            **APPLY_TRAILER,
-        }
-
-        # If we have answers, build applyData
-        if answers:
-            apply_answers = _build_apply_answers(job_id, answers, cache)
-            if apply_answers:
-                body["applyData"] = {job_id: {"answers": apply_answers}}
-
-        # POST to apply endpoint
-        data = await api_post(
-            "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
-            body,
-        )
-
-        # Parse response
-        jobs = data.get("jobs", [])
-        if not jobs:
-            # Might mean already applied
-            msg = data.get("message", "")
-            if "already" in msg.lower():
-                return {"status": "already_applied", "job_id": job_id}
-            return {"status": "error", "message": msg or "Unexpected response from apply API", "raw": data}
-
-        job_result = jobs[0]
-        status_code = job_result.get("status")
-        questionnaire = job_result.get("questionnaire", [])
-
-        if status_code == 200:
-            # Applied successfully — cache any answered questions
-            if questionnaire and answers:
-                _cache_answers(questionnaire, answers, cache)
-                _save_cache(cache)
-            return {
-                "status": "applied",
-                "job_id": job_id,
-                "message": "Successfully applied!",
-                "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
-            }
-
-        if questionnaire:
-            # Questions returned — try to auto-answer from cache
-            pending = []
-            auto_answers = {}
-
-            for q in questionnaire:
-                qid = str(q.get("questionId", ""))
-                q_name = q.get("questionName", "")
-                q_type = q.get("questionType", "")
-                options = q.get("answerOption", {})
-                cache_k = _cache_key(q_name, options)
-
-                # Check cache first
-                cached = cache.get(cache_k)
-                if cached:
-                    auto_answers[qid] = cached["answer"]
-                    continue
-
-                # Check if answer was provided by user
-                user_answer = _find_user_answer(qid, q_name, answers)
-                if user_answer is not None:
-                    formatted = _format_answer(user_answer, q_type, options)
-                    auto_answers[qid] = formatted
-                    # Cache it
-                    cache[cache_k] = {
-                        "questionType": q_type,
-                        "questionName": q_name,
-                        "answer": formatted,
-                    }
-                    continue
-
-                # Not in cache or answers — return to user
-                pending.append({
-                    "question_id": qid,
-                    "question": q_name,
-                    "type": q_type,
-                    "options": options,
-                })
-
-            # If we resolved all questions, re-apply with answers
-            if not pending and auto_answers:
-                _save_cache(cache)
-                body["applyData"] = {job_id: {"answers": auto_answers}}
-                data2 = await api_post(
-                    "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
-                    body,
-                )
-                jobs2 = data2.get("jobs", [])
-                if jobs2 and jobs2[0].get("status") == 200:
-                    return {
-                        "status": "applied",
-                        "job_id": job_id,
-                        "message": "Applied with cached/auto answers!",
-                        "questions_answered": len(auto_answers),
-                        "daily_applied": data2.get("quotaDetails", {}).get("dailyApplied"),
-                    }
-
-            if pending:
-                _save_cache(cache)
-                return {
-                    "status": "needs_input",
-                    "job_id": job_id,
-                    "questions": pending,
-                    "auto_answered": len(auto_answers),
-                    "message": f"{len(pending)} question(s) need your input. Provide answers and call again.",
-                }
-
+    # Step 2: Filter out already-applied
+    to_apply = [j for j in all_jobs if not j.get("is_applied")]
+    if not to_apply:
         return {
-            "status": "error",
-            "job_id": job_id,
-            "message": f"Apply returned status {status_code}",
-            "raw": job_result,
+            "status": "completed",
+            "message": f"All {len(all_jobs)} jobs already applied to",
+            "searched": len(all_jobs),
+            "filtered": 0,
         }
 
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e!r}"}
+    # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
+    apply_tasks = [_apply_single(j["job_id"], answers) for j in to_apply]
+    results = await asyncio.gather(*apply_tasks, return_exceptions=True)
+
+    # Step 4: Collect results
+    applied = 0
+    needs_input = 0
+    errors = 0
+    already = 0
+    pending_questions = {}  # deduplicated: question_text -> {info, job_ids}
+    per_job = []
+
+    for job_info, result in zip(to_apply, results):
+        if isinstance(result, Exception):
+            errors += 1
+            per_job.append({
+                "job_id": job_info["job_id"],
+                "title": job_info.get("title"),
+                "company": job_info.get("company"),
+                "status": "error",
+                "message": str(result),
+            })
+            continue
+
+        status = result.get("status")
+        entry = {
+            "job_id": job_info["job_id"],
+            "title": job_info.get("title"),
+            "company": job_info.get("company"),
+            "status": status,
+        }
+
+        if status == "applied":
+            applied += 1
+        elif status == "already_applied":
+            already += 1
+        elif status == "needs_input":
+            needs_input += 1
+            entry["questions"] = result.get("questions", [])
+            # Deduplicate questions across jobs
+            for q in result.get("questions", []):
+                q_key = q["question"]
+                if q_key not in pending_questions:
+                    pending_questions[q_key] = {
+                        "question": q["question"],
+                        "type": q["type"],
+                        "options": q.get("options", {}),
+                        "affects_jobs": [],
+                    }
+                pending_questions[q_key]["affects_jobs"].append(job_info["job_id"])
+        else:
+            errors += 1
+            entry["message"] = result.get("message")
+
+        per_job.append(entry)
+
+    return {
+        "status": "completed",
+        "searched": len(all_jobs),
+        "filtered": len(to_apply),
+        "applied": applied,
+        "already_applied": already,
+        "needs_input": needs_input,
+        "errors": errors,
+        "pending_questions": list(pending_questions.values()),
+        "results": per_job,
+    }
 
 
 def _find_user_answer(qid: str, q_name: str, answers: dict) -> Optional[str]:
