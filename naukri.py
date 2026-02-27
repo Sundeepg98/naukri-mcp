@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-Naukri.com Job Automation MCP Server (6 tools)
+Naukri.com Job Automation MCP Server v2 (8 tools)
 
-Self-contained MCP with embedded Playwright browser — Unipile-style architecture.
-Browser runs internally; each tool call does all automation server-side.
-One tool call = one complete action. Zero context burn for Claude.
+Hybrid architecture:
+  - Playwright browser for login/cookies/profile-refresh (visual tasks)
+  - REST API calls for search/get_job/apply/profile (fast, reliable)
+  - Answer cache for screening questions (same question never asked twice)
 
-Tools: login, verify_otp, search_jobs, get_job, apply, refresh_profile
+Browser runs internally for login; all data operations use Naukri's REST APIs
+with the nauk_at JWT extracted from browser cookies.
 """
 
 import asyncio
 import json
 import logging
-import os
 import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
 from mcp.server.fastmcp import FastMCP
 from playwright.async_api import async_playwright, BrowserContext, Page
 
@@ -29,35 +31,80 @@ logging.basicConfig(
 )
 logger = logging.getLogger("naukri")
 
-# Persistent chrome profile directory (cookies survive restarts)
+# Paths
 CHROME_PROFILE = str(Path(__file__).parent / "chrome-profile")
+CACHE_FILE = Path(__file__).parent / "questions.json"
 NAUKRI_BASE = "https://www.naukri.com"
 
-# Default timeouts (ms)
+# Timeouts (ms for Playwright, seconds for aiohttp)
 NAV_TIMEOUT = 20_000
 ELEMENT_TIMEOUT = 5_000
-SHORT_WAIT = 2_000
+API_TIMEOUT = 30  # seconds
+
+# API headers (from Naukri-Automation reverse engineering)
+API_HEADERS = {
+    "accept": "application/json",
+    "appid": "121",
+    "clientid": "d3skt0p",
+    "content-type": "application/json",
+    "systemid": "Naukri",
+    "gid": "LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE",
+    "x-requested-with": "XMLHttpRequest",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+}
+
+# Apply request trailer fields (required by Naukri's apply endpoint)
+APPLY_TRAILER = {
+    "flowtype": "show",
+    "crossdomain": True,
+    "jquery": 1,
+    "rdxMsgId": "",
+    "chatBotSDK": True,
+    "applyTypeId": "107",
+    "closebtn": "y",
+    "applySrc": "drecomm_profile",
+}
 
 
 # ============================================================================
-# Browser State — persists across all tool calls within one MCP session
+# Answer Cache — persists across sessions
+# ============================================================================
+
+
+def _load_cache() -> dict:
+    if CACHE_FILE.exists():
+        try:
+            return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_cache(cache: dict):
+    CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _cache_key(question_name: str, answer_option: dict) -> str:
+    return f"{question_name}_{json.dumps(answer_option, sort_keys=True)}"
+
+
+# ============================================================================
+# Browser State — for login and browser-based tools only
 # ============================================================================
 
 
 class NaukriBrowser:
-    """Manages a single Playwright browser that lives for the entire MCP session."""
+    """Playwright browser for login + cookie extraction. Lives entire MCP session."""
 
     def __init__(self):
         self.pw = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self.token: Optional[str] = None  # nauk_at JWT
         self._lock = asyncio.Lock()
 
     async def start(self):
         self.pw = await async_playwright().start()
-        # NOTE: Do NOT use channel="chrome" — system Chrome uses
-        # --remote-debugging-pipe which conflicts with MCP's stdio transport.
-        # Playwright's bundled Chromium uses websocket protocol instead.
         self.context = await self.pw.chromium.launch_persistent_context(
             user_data_dir=CHROME_PROFILE,
             headless=False,
@@ -65,7 +112,8 @@ class NaukriBrowser:
             args=["--disable-blink-features=AutomationControlled"],
         )
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        logger.info("Browser started with profile: %s", CHROME_PROFILE)
+        await self._extract_token()
+        logger.info("Browser started, token: %s", "found" if self.token else "none")
 
     async def stop(self):
         if self.context:
@@ -74,31 +122,40 @@ class NaukriBrowser:
             await self.pw.stop()
         logger.info("Browser stopped")
 
+    async def _extract_token(self) -> Optional[str]:
+        """Extract nauk_at JWT from browser cookies."""
+        try:
+            cookies = await self.context.cookies(NAUKRI_BASE)
+            for c in cookies:
+                if c["name"] == "nauk_at":
+                    self.token = c["value"]
+                    return self.token
+        except Exception:
+            pass
+        self.token = None
+        return None
+
+    async def ensure_token(self) -> str:
+        """Get fresh token, raising if not logged in."""
+        await self._extract_token()
+        if not self.token:
+            raise ValueError("Not logged in — call naukri_login first")
+        return self.token
+
     async def goto(self, url: str, wait: str = "domcontentloaded") -> None:
-        """Navigate with retry on timeout."""
         try:
             await self.page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
         except Exception:
-            # Retry with looser wait
             await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
 
     async def text(self, selector: str) -> Optional[str]:
-        """Get text content of an element, or None if not found."""
         el = await self.page.query_selector(selector)
         return (await el.text_content()).strip() if el else None
 
     async def exists(self, selector: str) -> bool:
         return await self.page.query_selector(selector) is not None
 
-    async def click_if_exists(self, selector: str) -> bool:
-        el = await self.page.query_selector(selector)
-        if el:
-            await el.click()
-            return True
-        return False
-
     async def safe_fill(self, selector: str, value: str, delay: int = 30):
-        """Fill a field with human-like delay."""
         el = await self.page.wait_for_selector(selector, timeout=ELEMENT_TIMEOUT)
         await el.click()
         await el.fill("")
@@ -109,7 +166,66 @@ browser = NaukriBrowser()
 
 
 # ============================================================================
-# MCP Lifespan — browser starts once, lives until MCP disconnects
+# API Helpers — two strategies for different endpoints
+# ============================================================================
+
+
+async def _cookie_header() -> str:
+    """Build raw Cookie header string from all browser cookies."""
+    try:
+        cookies = await browser.context.cookies(NAUKRI_BASE)
+        return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    except Exception:
+        return ""
+
+
+async def api_get(path: str, params: dict = None) -> dict:
+    """GET request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
+    token = await browser.ensure_token()
+    cookie_str = await _cookie_header()
+    headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
+    url = f"{NAUKRI_BASE}{path}" if path.startswith("/") else path
+    if params:
+        from urllib.parse import urlencode
+        url = f"{url}?{urlencode(params)}"
+    logger.info("API GET %s", url)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=API_TIMEOUT),
+        trust_env=True,
+    ) as session:
+        async with session.get(url, headers=headers) as resp:
+            logger.info("API GET %s -> %s", path, resp.status)
+            if resp.status == 401:
+                raise ValueError("Token expired — call naukri_login to re-authenticate")
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"HTTP {resp.status}: {text[:500]}")
+            return await resp.json()
+
+
+async def api_post(path: str, body: dict) -> dict:
+    """POST request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
+    token = await browser.ensure_token()
+    cookie_str = await _cookie_header()
+    headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
+    url = f"{NAUKRI_BASE}{path}" if path.startswith("/") else path
+    logger.info("API POST %s", url)
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=API_TIMEOUT),
+        trust_env=True,
+    ) as session:
+        async with session.post(url, headers=headers, json=body) as resp:
+            logger.info("API POST %s -> %s", path, resp.status)
+            if resp.status == 401:
+                raise ValueError("Token expired — call naukri_login to re-authenticate")
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"HTTP {resp.status}: {text[:500]}")
+            return await resp.json()
+
+
+# ============================================================================
+# MCP Lifespan
 # ============================================================================
 
 
@@ -126,7 +242,7 @@ mcp = FastMCP("naukri", lifespan=lifespan)
 
 
 # ============================================================================
-# Tool 1: Login
+# Tool 1: Login (Playwright — handles Google SSO visually)
 # ============================================================================
 
 
@@ -138,13 +254,11 @@ async def naukri_login(
 ) -> dict:
     """Login to Naukri.com. Supports Google SSO (recommended) or email/password.
 
-    Google SSO is the easiest path — if Google is already signed in via the
-    Chrome profile, login is automatic. First time requires one manual click
-    to authorize. Cookies persist across sessions (~30 days).
+    Google SSO uses the Chrome profile's saved Google session — no credentials
+    needed. Cookies and API token persist across sessions (~30 days).
 
     Args:
-        method: "google" (recommended) or "email". Google SSO uses the Chrome
-                profile's saved Google session — no credentials needed.
+        method: "google" (recommended) or "email"
         email: Naukri email (only for method="email")
         password: Naukri password (only for method="email")
     """
@@ -152,21 +266,17 @@ async def naukri_login(
         await browser.goto(f"{NAUKRI_BASE}/nlogin/login")
         await asyncio.sleep(2)
 
-        # Check if already logged in (redirected to homepage)
         if "/nlogin" not in browser.page.url:
+            token = await browser._extract_token()
             name = await browser.text(".nI-gNb-sb__main-text")
-            return {"status": "already_logged_in", "profile_name": name or "unknown"}
+            return {"status": "already_logged_in", "profile_name": name or "unknown", "has_token": bool(token)}
 
         if method == "google":
-            # Click "Login with Google" button
             google_clicked = False
             for selector in [
-                "button:has-text('Google')",
-                "a:has-text('Google')",
-                "[class*='google']",
-                "button[data-ga-track*='google']",
-                "[class*='social'] button:first-child",
-                "img[alt*='Google']",
+                "button:has-text('Google')", "a:has-text('Google')",
+                "[class*='google']", "button[data-ga-track*='google']",
+                "[class*='social'] button:first-child", "img[alt*='Google']",
             ]:
                 try:
                     el = await browser.page.query_selector(selector)
@@ -178,42 +288,29 @@ async def naukri_login(
                     continue
 
             if not google_clicked:
-                return {
-                    "status": "error",
-                    "message": "Google login button not found. Try method='email' instead.",
-                }
+                return {"status": "error", "message": "Google login button not found. Try method='email'."}
 
-            # Google OAuth flow — may open popup or redirect
-            # Wait for either: Google account picker, or redirect back to Naukri
             await asyncio.sleep(5)
 
-            # If Google session exists in Chrome profile, auto-redirects back
             if "/nlogin" not in browser.page.url and "accounts.google" not in browser.page.url:
+                token = await browser._extract_token()
                 name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown"}
+                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown", "has_token": bool(token)}
 
-            # If Google account picker is showing, user needs to select account
             if "accounts.google" in browser.page.url:
-                return {
-                    "status": "waiting_for_user",
-                    "message": "Google account picker is open in the browser. "
-                               "Please select your account manually. "
-                               "Then call naukri_login() again to verify.",
-                }
+                return {"status": "waiting_for_user", "message": "Google account picker is open. Select your account, then call naukri_login() again."}
 
-            # Check if we landed on Naukri logged in
             await asyncio.sleep(3)
             if "/nlogin" not in browser.page.url:
+                token = await browser._extract_token()
                 name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown"}
+                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown", "has_token": bool(token)}
 
             return {"status": "error", "message": "Google login did not complete. Check the browser."}
 
         else:
-            # Email/password login
             if not email or not password:
                 return {"status": "error", "message": "email and password required for method='email'"}
-
             try:
                 await browser.safe_fill("input#usernameField", email)
                 await browser.safe_fill("input#passwordField", password)
@@ -223,28 +320,27 @@ async def naukri_login(
 
             await asyncio.sleep(3)
 
-            # OTP screen
             otp_field = await browser.page.query_selector("input#otp")
             if otp_field:
                 return {"status": "otp_required", "needs_otp": True, "message": "Enter OTP sent to your phone"}
 
-            # Successful login
             if "/nlogin" not in browser.page.url:
+                token = await browser._extract_token()
                 name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "email", "profile_name": name or "unknown"}
+                return {"status": "logged_in", "method": "email", "profile_name": name or "unknown", "has_token": bool(token)}
 
             error = await browser.text(".err-message, .error-msg, [class*='error']")
             return {"status": "error", "message": error or "Login failed — check credentials"}
 
 
 # ============================================================================
-# Tool 2: Verify OTP
+# Tool 2: Verify OTP (Playwright)
 # ============================================================================
 
 
 @mcp.tool()
 async def naukri_verify_otp(otp: str) -> dict:
-    """Enter OTP code after login. Call this after naukri_login returns needs_otp.
+    """Enter OTP code after login. Call after naukri_login returns needs_otp.
 
     Args:
         otp: 6-digit OTP from SMS/email
@@ -256,8 +352,9 @@ async def naukri_verify_otp(otp: str) -> dict:
             await asyncio.sleep(3)
 
             if "/nlogin" not in browser.page.url:
+                token = await browser._extract_token()
                 name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "profile_name": name or "unknown"}
+                return {"status": "logged_in", "profile_name": name or "unknown", "has_token": bool(token)}
 
             error = await browser.text(".err-message, .error-msg")
             return {"status": "error", "message": error or "OTP verification failed"}
@@ -266,7 +363,7 @@ async def naukri_verify_otp(otp: str) -> dict:
 
 
 # ============================================================================
-# Tool 3: Search Jobs
+# Tool 3: Search Jobs (Browser intercept — captures API JSON response)
 # ============================================================================
 
 
@@ -279,451 +376,428 @@ async def naukri_search_jobs(
 ) -> dict:
     """Search for jobs on Naukri.com.
 
-    Args:
-        keywords: Job title or skills (e.g., "python developer", "react", "devops")
-        location: City name (e.g., "Bangalore", "Mumbai", "Remote")
-        experience: Years of experience (e.g., 5)
-        limit: Max jobs to return (default 20)
+    Navigates to the search page and intercepts the structured JSON response
+    that Naukri's frontend receives from its search API.
 
-    Returns list of jobs with title, company, salary, location, URL.
+    Args:
+        keywords: Job title or skills (e.g., "python developer", "react")
+        location: City name (e.g., "Bangalore", "Mumbai", "Remote")
+        experience: Years of experience filter (e.g., 5)
+        limit: Max jobs to return (default 20, max 50)
+
+    Returns list of jobs with id, title, company, salary, location, URL.
     """
     async with browser._lock:
-        # Naukri uses SEO-friendly URLs: /keyword-jobs-in-location
-        slug = keywords.lower().replace(" ", "-").replace(".", "-")
-        if location:
-            loc_slug = location.lower().replace(" ", "-")
-            url = f"{NAUKRI_BASE}/{slug}-jobs-in-{loc_slug}"
-        else:
-            url = f"{NAUKRI_BASE}/{slug}-jobs"
-        if experience is not None:
-            url += f"?experience={experience}"
+        try:
+            # Build Naukri search URL (SEO-friendly format)
+            slug = keywords.lower().replace(" ", "-").replace(".", "-")
+            if location:
+                loc_slug = location.lower().replace(" ", "-")
+                page_url = f"{NAUKRI_BASE}/{slug}-jobs-in-{loc_slug}"
+            else:
+                page_url = f"{NAUKRI_BASE}/{slug}-jobs"
+            if experience is not None:
+                page_url += f"?experience={experience}"
 
-        await browser.goto(url)
-        await asyncio.sleep(4)
+            # Intercept the search API response that Naukri's frontend makes
+            captured = {}
 
-        # Extract job cards — confirmed selectors from DOM inspection
-        cards = await browser.page.query_selector_all("div.srp-jobtuple-wrapper")
+            async def on_response(response):
+                if "/jobapi/v3/search" in response.url and response.status == 200:
+                    try:
+                        captured["data"] = await response.json()
+                    except Exception:
+                        pass
 
-        jobs = []
-        for card in cards[:limit]:
+            browser.page.on("response", on_response)
             try:
-                title_el = await card.query_selector("a.title")
-                company_el = await card.query_selector("a.comp-name")
-                salary_el = await card.query_selector("span.sal-wrap span.expwdth, span.ni-job-tuple-icon-srp-rupee")
-                location_el = await card.query_selector("span.locWdth")
-                exp_el = await card.query_selector("span.expwdth")
-                job_id = await card.get_attribute("data-job-id")
+                await browser.goto(page_url)
+                await asyncio.sleep(4)
+            finally:
+                browser.page.remove_listener("response", on_response)
 
-                title = (await title_el.text_content()).strip() if title_el else None
-                href = await title_el.get_attribute("href") if title_el else None
+            data = captured.get("data")
+            if not data:
+                return {"status": "error", "message": "Search API response not captured. Page may not have loaded correctly."}
+
+            # Parse structured JSON from the intercepted response
+            jobs = []
+            for job in data.get("jobDetails", [])[:limit]:
+                salary = job.get("salaryDetail", {})
+                sal_min = salary.get("minimumSalary", 0)
+                sal_max = salary.get("maximumSalary", 0)
+                sal_label = salary.get("label", "")
+                salary_str = sal_label if sal_label else (
+                    f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+                )
+
+                placeholders = job.get("placeholders", [])
+                loc_label = None
+                for ph in placeholders:
+                    if ph.get("type") == "location":
+                        loc_label = ph.get("label")
+                        break
+                if not loc_label and placeholders:
+                    loc_label = placeholders[0].get("label")
 
                 jobs.append({
-                    "job_id": job_id,
-                    "title": title,
-                    "company": (await company_el.text_content()).strip() if company_el else None,
-                    "salary": (await salary_el.text_content()).strip() if salary_el else None,
-                    "location": (await location_el.text_content()).strip() if location_el else None,
-                    "experience": (await exp_el.text_content()).strip() if exp_el else None,
-                    "url": href if href and href.startswith("http") else f"{NAUKRI_BASE}{href}" if href else None,
+                    "job_id": job.get("jobId"),
+                    "title": job.get("title"),
+                    "company": job.get("companyName"),
+                    "salary": salary_str,
+                    "location": loc_label,
+                    "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
+                    "is_applied": job.get("isApplied", False),
+                    "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
                 })
-            except Exception:
-                continue
 
-        return {
-            "status": "success",
-            "keywords": keywords,
-            "location": location,
-            "count": len(jobs),
-            "jobs": jobs,
-        }
+            return {
+                "status": "success",
+                "keywords": keywords,
+                "location": location,
+                "total_found": data.get("noOfJobs"),
+                "count": len(jobs),
+                "jobs": jobs,
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}"}
 
 
 # ============================================================================
-# Tool 4: Get Job Details
+# Tool 4: Get Job Details (REST API)
 # ============================================================================
+
+
+def _extract_job_id(job_url_or_id: str) -> str:
+    """Extract numeric job ID from URL or pass through if already an ID."""
+    if job_url_or_id.isdigit():
+        return job_url_or_id
+    # URL pattern: ...-<jobId> at the end
+    match = re.search(r'(\d{10,})', job_url_or_id)
+    return match.group(1) if match else job_url_or_id
 
 
 @mcp.tool()
 async def naukri_get_job(job_url: str) -> dict:
     """Get full details for a specific Naukri job.
 
-    Args:
-        job_url: Full Naukri job URL (from search results)
+    Navigates to the job page and intercepts the structured JSON response
+    that Naukri's frontend receives from its job details API.
 
-    Returns job title, company, full description, requirements, and whether you can apply.
+    Args:
+        job_url: Naukri job URL or job ID (numeric)
+
+    Returns title, company, description, skills, salary, match score,
+    and whether you can apply.
     """
     async with browser._lock:
-        await browser.goto(job_url)
-        await asyncio.sleep(3)
+        try:
+            # Build URL if just an ID was passed
+            if job_url.isdigit():
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
+            elif not job_url.startswith("http"):
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
+            else:
+                page_url = job_url
 
-        # Extract all job details via JS — more reliable than individual queries
-        # because Naukri uses CSS-module hashed classes (e.g. styles_jhc__exp__k_giM)
-        data = await browser.page.evaluate("""() => {
-            const txt = (sel) => {
-                const el = document.querySelector(sel);
-                return el ? el.textContent.trim() : null;
-            };
+            job_id = _extract_job_id(job_url)
 
-            // Company name is in a div that also contains rating/reviews children
-            // Extract just the first text node to get clean company name
-            const compDiv = document.querySelector('[class*="jd-header-comp-name"]');
-            let company = null;
-            if (compDiv) {
-                // Try anchor first, then first text node
-                const a = compDiv.querySelector('a');
-                if (a) {
-                    company = a.textContent.trim();
-                } else {
-                    // Walk child nodes for first text
-                    for (const node of compDiv.childNodes) {
-                        if (node.nodeType === 3 && node.textContent.trim()) {
-                            company = node.textContent.trim();
-                            break;
-                        }
-                    }
-                    // Fallback: full text minus rating pattern
-                    if (!company) {
-                        company = compDiv.textContent.trim().replace(/\\d+\\.\\d+\\d+ Reviews?$/, '').trim();
-                    }
-                }
-            }
+            # Intercept job details + match score API responses
+            captured = {}
 
-            // Description: get inner text (preserves line breaks)
-            const descEl = document.querySelector('section[class*="job-desc-container"], [class*="job-desc"], [class*="JDC"]');
-            const description = descEl ? descEl.innerText.trim() : null;
+            async def on_response(response):
+                try:
+                    if f"/jobapi/v4/job/{job_id}" in response.url and response.status == 200:
+                        captured["details"] = await response.json()
+                    elif f"/job/{job_id}/matchscore" in response.url and response.status == 200:
+                        captured["score"] = await response.json()
+                except Exception:
+                    pass
 
-            // Skills
-            const skills = Array.from(
-                document.querySelectorAll('[class*="chip"], [class*="tag-li"], .key-skill a')
-            ).map(s => s.textContent.trim()).filter(Boolean);
+            browser.page.on("response", on_response)
+            try:
+                await browser.goto(page_url)
+                await asyncio.sleep(4)
+            finally:
+                browser.page.remove_listener("response", on_response)
 
-            // Apply state
-            const alreadyApplied = !!document.querySelector('#already-applied');
-            const expired = !!document.querySelector('[class*="alert-message-text"]');
-            const external = !!document.querySelector('#company-site-button');
-            const applyBtn = !!document.querySelector('button[class*="apply-button"]');
+            details_data = captured.get("details")
+            if not details_data:
+                return {"status": "error", "message": "Job details API response not captured. Page may not have loaded."}
+
+            job = details_data.get("jobDetails", details_data)
+
+            salary = job.get("salaryDetail", {})
+            sal_label = salary.get("label", "")
+            sal_min = salary.get("minimumSalary", 0)
+            sal_max = salary.get("maximumSalary", 0)
+            salary_str = sal_label if sal_label else (
+                f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+            )
+
+            company = job.get("companyDetail", {})
+            is_applied = job.get("isApplied", False)
+            external = bool(job.get("applyRedirectUrl"))
+
+            match_score = None
+            score_data = captured.get("score")
+            if score_data:
+                match_score = score_data.get("Keyskills")
 
             return {
-                title: txt('h1'),
-                company,
-                salary: txt('[class*="jhc__salary"]'),
-                experience: txt('[class*="jhc__exp"]:not([class*="container"])'),
-                location: txt('[class*="jhc__location"]'),
-                description,
-                skills,
-                already_applied: alreadyApplied,
-                expired,
-                external_apply: external,
-                can_apply: applyBtn && !alreadyApplied && !expired && !external,
-            };
-        }""")
-
-        data["status"] = "success"
-        data["url"] = job_url
-        return data
+                "status": "success",
+                "job_id": job_id,
+                "title": job.get("title"),
+                "company": company.get("name"),
+                "salary": salary_str,
+                "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
+                "location": job.get("cityName") or job.get("citySuburb"),
+                "description": job.get("description", ""),
+                "skills": [s.get("label", s) if isinstance(s, dict) else s for s in job.get("keySkills", [])],
+                "match_score": match_score,
+                "is_applied": is_applied,
+                "external_apply": external,
+                "can_apply": not is_applied and not external,
+                "vacancies": job.get("vacany"),
+                "apply_count": job.get("applyCount"),
+                "url": page_url,
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}"}
 
 
 # ============================================================================
-# Tool 5: Apply to Job
+# Tool 5: Apply to Job (REST API — two-phase)
 # ============================================================================
 
 
 @mcp.tool()
 async def naukri_apply(
-    job_url: str,
-    resume_path: Optional[str] = None,
+    job_id: str,
     answers: Optional[dict] = None,
 ) -> dict:
-    """Apply to a Naukri job. Handles the full chatbot-style application flow.
+    """Apply to a Naukri job via API. Two-phase flow:
+
+    Phase 1 (no answers): Sends apply request. If the job has screening questions,
+    returns them with options. If no questions, applies instantly.
+
+    Phase 2 (with answers): Provide answers dict keyed by question text or question ID.
+    Submits answers and completes application.
 
     Args:
-        job_url: Full Naukri job URL
-        resume_path: Path to resume PDF file (optional — uses profile resume if not provided)
-        answers: Dict of screening question answers, e.g.:
-                 {"notice_period": "30 days", "current_ctc": "25 LPA",
-                  "years_of_experience": "5", "willing_to_relocate": "Yes"}
-                 If a question isn't in answers, it's returned as pending.
+        job_id: Naukri job ID (numeric string, from search results or get_job)
+        answers: Dict of answers for screening questions. Keys can be:
+                 - Question ID (from phase 1 response): {"12345": "5"}
+                 - Question text substring: {"current ctc": "16", "notice period": "30"}
+                 For radio/list/checkbox: value is the option text to select.
+                 For text box: value is the string to enter.
 
     Returns:
-        - {status: "applied"} on success
-        - {status: "needs_input", pending_questions: [...]} if unanswered questions remain
-        - {status: "already_applied"} if already applied
-        - {status: "error", message: "..."} on failure
+        - {status: "applied"} — success
+        - {status: "needs_input", questions: [...]} — answer the questions and call again
+        - {status: "already_applied"} — already applied
+        - {status: "error", message: "..."} — failure
     """
     if answers is None:
         answers = {}
 
-    async with browser._lock:
-        await browser.goto(job_url)
-        await asyncio.sleep(2)
+    job_id = _extract_job_id(job_id)
 
-        # Pre-flight checks
-        if await browser.exists("#already-applied"):
-            return {"status": "already_applied", "url": job_url}
+    try:
+        # Load answer cache
+        cache = _load_cache()
 
-        if await browser.exists(".styles_alert-message-text"):
-            return {"status": "error", "message": "Job has expired"}
-
-        if await browser.exists("#company-site-button"):
-            return {"status": "error", "message": "External application — redirects to company site"}
-
-        # Click Apply — confirmed selector: button.styles_apply-button__*
-        apply_clicked = False
-        for selector in [
-            "button[class*='apply-button']",
-            "button:has-text('Apply')",
-            "#apply-button",
-        ]:
-            try:
-                el = await browser.page.query_selector(selector)
-                if el:
-                    await el.click()
-                    apply_clicked = True
-                    break
-            except Exception:
-                continue
-
-        if not apply_clicked:
-            # Try XPath fallback
-            try:
-                el = await browser.page.locator("xpath=//*[contains(text(),'Apply')]").first.element_handle()
-                if el:
-                    await el.click()
-                    apply_clicked = True
-            except Exception:
-                pass
-
-        if not apply_clicked:
-            return {"status": "error", "message": "Apply button not found"}
-
-        await asyncio.sleep(2)
-
-        # Check for instant success (some jobs apply with one click)
-        success = await _check_success()
-        if success:
-            return {"status": "applied", "url": job_url, "questions_answered": []}
-
-        # Handle resume upload if prompted
-        if resume_path:
-            file_input = await browser.page.query_selector("input[type='file']")
-            if file_input:
-                await file_input.set_input_files(resume_path)
-                await asyncio.sleep(1)
-
-        # Handle chatbot screening questions
-        questions_answered = []
-        pending_questions = []
-        max_rounds = 15  # Safety limit
-
-        for _ in range(max_rounds):
-            # Check success after each round
-            success = await _check_success()
-            if success:
-                return {
-                    "status": "applied",
-                    "url": job_url,
-                    "questions_answered": questions_answered,
-                }
-
-            # Try to find and answer a question
-            answered = await _answer_question(answers, questions_answered, pending_questions)
-
-            if not answered:
-                # No more questions found
-                break
-
-            await asyncio.sleep(1.5)
-
-        # Final success check
-        success = await _check_success()
-        if success:
-            return {
-                "status": "applied",
-                "url": job_url,
-                "questions_answered": questions_answered,
-            }
-
-        if pending_questions:
-            return {
-                "status": "needs_input",
-                "url": job_url,
-                "pending_questions": pending_questions,
-                "questions_answered": questions_answered,
-                "message": "Some screening questions need your input. Provide answers dict and call again.",
-            }
-
-        return {
-            "status": "uncertain",
-            "url": job_url,
-            "questions_answered": questions_answered,
-            "message": "Could not confirm application success. Check Naukri dashboard.",
+        # Build apply body
+        body = {
+            "strJobsarr": [job_id],
+            **APPLY_TRAILER,
         }
 
+        # If we have answers, build applyData
+        if answers:
+            apply_answers = _build_apply_answers(job_id, answers, cache)
+            if apply_answers:
+                body["applyData"] = {job_id: {"answers": apply_answers}}
 
-async def _check_success() -> bool:
-    """Check if application was submitted successfully."""
-    # Check DOM elements for success indicators
-    for selector in [
-        ".apply-message",
-        ".apply-status-header.green",
-        "#already-applied",
-        "text=successfully applied",
-        "text=Application Submitted",
-    ]:
-        try:
-            el = await browser.page.query_selector(selector)
-            if el:
-                return True
-        except Exception:
-            continue
+        # POST to apply endpoint
+        data = await api_post(
+            "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+            body,
+        )
 
-    # Check chatbot messages for "Thank you" / completion signals
-    try:
-        chat_items = await browser.page.query_selector_all("ul[id^='chatList_'] li")
-        if chat_items:
-            last = chat_items[-1]
-            text = (await last.text_content()).strip().lower()
-            if any(phrase in text for phrase in [
-                "thank you", "successfully", "application submitted",
-                "applied successfully", "all the best",
-            ]):
-                return True
-    except Exception:
-        pass
+        # Parse response
+        jobs = data.get("jobs", [])
+        if not jobs:
+            # Might mean already applied
+            msg = data.get("message", "")
+            if "already" in msg.lower():
+                return {"status": "already_applied", "job_id": job_id}
+            return {"status": "error", "message": msg or "Unexpected response from apply API", "raw": data}
 
-    return False
+        job_result = jobs[0]
+        status_code = job_result.get("status")
+        questionnaire = job_result.get("questionnaire", [])
 
+        if status_code == 200:
+            # Applied successfully — cache any answered questions
+            if questionnaire and answers:
+                _cache_answers(questionnaire, answers, cache)
+                _save_cache(cache)
+            return {
+                "status": "applied",
+                "job_id": job_id,
+                "message": "Successfully applied!",
+                "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
+            }
 
-async def _answer_question(answers: dict, answered: list, pending: list) -> bool:
-    """Try to answer one screening question. Returns True if a question was handled."""
+        if questionnaire:
+            # Questions returned — try to auto-answer from cache
+            pending = []
+            auto_answers = {}
 
-    # --- Radio button questions ---
-    radios = await browser.page.query_selector_all(".ssrc__radio-btn-container")
-    if radios:
-        # Find the question text
-        question_text = await _get_current_question()
-        if not question_text:
-            return False
+            for q in questionnaire:
+                qid = str(q.get("questionId", ""))
+                q_name = q.get("questionName", "")
+                q_type = q.get("questionType", "")
+                options = q.get("answerOption", {})
+                cache_k = _cache_key(q_name, options)
 
-        # Find matching answer
-        answer = _match_answer(question_text, answers)
+                # Check cache first
+                cached = cache.get(cache_k)
+                if cached:
+                    auto_answers[qid] = cached["answer"]
+                    continue
 
-        if answer:
-            # Click the matching radio option
-            for radio in radios:
-                label = await radio.query_selector("label")
-                if label:
-                    label_text = (await label.text_content()).strip()
-                    if label_text.lower() == answer.lower() or answer.lower() in label_text.lower():
-                        inp = await radio.query_selector("input")
-                        if inp:
-                            await browser.page.evaluate("el => el.click()", inp)
-                            answered.append({"question": question_text, "answer": label_text})
-                            await _click_save()
-                            return True
+                # Check if answer was provided by user
+                user_answer = _find_user_answer(qid, q_name, answers)
+                if user_answer is not None:
+                    formatted = _format_answer(user_answer, q_type, options)
+                    auto_answers[qid] = formatted
+                    # Cache it
+                    cache[cache_k] = {
+                        "questionType": q_type,
+                        "questionName": q_name,
+                        "answer": formatted,
+                    }
+                    continue
 
-            # No matching label — click first option as fallback? No, add to pending.
-            options = []
-            for radio in radios:
-                label = await radio.query_selector("label")
-                if label:
-                    options.append((await label.text_content()).strip())
-            pending.append({"question": question_text, "type": "radio", "options": options})
-            return False
-        else:
-            options = []
-            for radio in radios:
-                label = await radio.query_selector("label")
-                if label:
-                    options.append((await label.text_content()).strip())
-            pending.append({"question": question_text, "type": "radio", "options": options})
-            return False
+                # Not in cache or answers — return to user
+                pending.append({
+                    "question_id": qid,
+                    "question": q_name,
+                    "type": q_type,
+                    "options": options,
+                })
 
-    # --- Text input questions ---
-    text_area = await browser.page.query_selector(".textArea, textarea[class*='textArea']")
-    if text_area:
-        question_text = await _get_current_question()
-        if not question_text:
-            return False
+            # If we resolved all questions, re-apply with answers
+            if not pending and auto_answers:
+                _save_cache(cache)
+                body["applyData"] = {job_id: {"answers": auto_answers}}
+                data2 = await api_post(
+                    "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+                    body,
+                )
+                jobs2 = data2.get("jobs", [])
+                if jobs2 and jobs2[0].get("status") == 200:
+                    return {
+                        "status": "applied",
+                        "job_id": job_id,
+                        "message": "Applied with cached/auto answers!",
+                        "questions_answered": len(auto_answers),
+                        "daily_applied": data2.get("quotaDetails", {}).get("dailyApplied"),
+                    }
 
-        answer = _match_answer(question_text, answers)
-        if answer:
-            await text_area.click()
-            await text_area.fill(answer)
-            answered.append({"question": question_text, "answer": answer})
-            await _click_save()
-            return True
-        else:
-            pending.append({"question": question_text, "type": "text"})
-            return False
+            if pending:
+                _save_cache(cache)
+                return {
+                    "status": "needs_input",
+                    "job_id": job_id,
+                    "questions": pending,
+                    "auto_answered": len(auto_answers),
+                    "message": f"{len(pending)} question(s) need your input. Provide answers and call again.",
+                }
 
-    return False
+        return {
+            "status": "error",
+            "job_id": job_id,
+            "message": f"Apply returned status {status_code}",
+            "raw": job_result,
+        }
 
-
-async def _get_current_question() -> Optional[str]:
-    """Extract the current screening question text from the chatbot."""
-    for selector in [
-        "ul[id^='chatList_'] li.botItem:last-child span",
-        "ul[id^='chatList_'] li:last-child div span",
-        ".chatbot-question",
-        ".bot-msg:last-child",
-    ]:
-        el = await browser.page.query_selector(selector)
-        if el:
-            text = (await el.text_content()).strip()
-            if text and len(text) > 3:
-                # Skip success/completion messages — not actual questions
-                lower = text.lower()
-                if any(p in lower for p in [
-                    "thank you", "successfully", "application submitted",
-                    "all the best", "good luck",
-                ]):
-                    return None
-                return text
-    return None
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e!r}"}
 
 
-def _match_answer(question: str, answers: dict) -> Optional[str]:
-    """Fuzzy match a question to the answers dict."""
-    q = question.lower()
+def _find_user_answer(qid: str, q_name: str, answers: dict) -> Optional[str]:
+    """Find a user-provided answer by question ID or fuzzy text match."""
+    # Exact ID match
+    if qid in answers:
+        return str(answers[qid])
+
+    # Fuzzy text match on question name
+    q_lower = q_name.lower()
     for key, value in answers.items():
         k = key.lower().replace("_", " ")
-        if k in q or q in k:
+        if k in q_lower or q_lower in k:
             return str(value)
-        # Partial word matching
-        key_words = k.split()
-        if all(w in q for w in key_words):
+        if all(w in q_lower for w in k.split()):
             return str(value)
     return None
 
 
-async def _click_save():
-    """Click the Save/Next button after answering a question."""
-    for selector in [
-        "button:has-text('Save')",
-        "button:has-text('Next')",
-        "button:has-text('Submit')",
-        "div.chatbot-action button",
-    ]:
-        try:
-            el = await browser.page.query_selector(selector)
-            if el:
-                await el.click()
-                return
-        except Exception:
-            continue
+def _format_answer(answer: str, q_type: str, options: dict) -> any:
+    """Format answer for the Naukri API based on question type."""
+    if q_type == "Text Box":
+        return answer
 
-    # XPath fallback (from JobSailor)
-    try:
-        el = await browser.page.locator("xpath=/html/body/div[2]/div/div[1]/div[3]/div/div").element_handle()
-        if el:
-            await el.click()
-    except Exception:
-        pass
+    # For Radio/List/Check — answer must be wrapped in a list
+    # Try to match answer to an option value
+    option_values = list(options.values())
+    for opt in option_values:
+        if answer.lower() == opt.lower() or answer.lower() in opt.lower():
+            return [opt] if q_type != "Check Box" else [opt]
+
+    # If answer is a number, try to match option key
+    if answer in options:
+        return [options[answer]]
+
+    # Fallback: wrap in list as-is
+    return [answer] if q_type != "Text Box" else answer
+
+
+def _build_apply_answers(job_id: str, answers: dict, cache: dict) -> dict:
+    """Build answers dict from user-provided answers (for direct submission)."""
+    result = {}
+    for key, value in answers.items():
+        # If key looks like a question ID (numeric), use directly
+        if str(key).isdigit():
+            result[str(key)] = value if isinstance(value, list) else str(value)
+    return result
+
+
+def _cache_answers(questionnaire: list, answers: dict, cache: dict):
+    """Cache successfully answered questions."""
+    for q in questionnaire:
+        qid = str(q.get("questionId", ""))
+        q_name = q.get("questionName", "")
+        q_type = q.get("questionType", "")
+        options = q.get("answerOption", {})
+
+        answer = _find_user_answer(qid, q_name, answers)
+        if answer:
+            cache_k = _cache_key(q_name, options)
+            if cache_k not in cache:
+                cache[cache_k] = {
+                    "questionType": q_type,
+                    "questionName": q_name,
+                    "answer": _format_answer(answer, q_type, options),
+                }
 
 
 # ============================================================================
-# Tool 6: Refresh Profile
+# Tool 6: Refresh Profile (Playwright — needs browser interaction)
 # ============================================================================
 
 
@@ -731,8 +805,8 @@ async def _click_save():
 async def naukri_refresh_profile() -> dict:
     """Refresh Naukri profile to boost visibility (daily trick).
 
-    Navigates to profile, clicks edit on Resume Headline, saves without changes.
-    This triggers Naukri's 'recently active' signal — recruiters see you first.
+    Opens Resume Headline editor and saves without changes.
+    Triggers Naukri's 'recently active' signal — recruiters see you first.
     """
     async with browser._lock:
         await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
@@ -741,22 +815,15 @@ async def naukri_refresh_profile() -> dict:
         if "/nlogin" in browser.page.url:
             return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-        # Naukri uses icon-font spans with text "editOneTheme" as edit buttons.
-        # Find the one near "Resume headline" section heading, or fall back to any edit icon.
         edit_clicked = await browser.page.evaluate("""() => {
-            // Find all edit icons — they're leaf elements with text "editOneTheme"
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
             );
             if (editIcons.length === 0) return null;
-
-            // Try to find the one in/near "Resume headline" section
             for (const icon of editIcons) {
                 const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
                 if (section) { icon.click(); return 'headline_edit'; }
             }
-
-            // Try to find one near text "Resume headline"
             for (const icon of editIcons) {
                 const parent = icon.closest('div, section');
                 if (parent && parent.textContent.includes('Resume headline')) {
@@ -764,8 +831,6 @@ async def naukri_refresh_profile() -> dict:
                     return 'headline_parent';
                 }
             }
-
-            // Fall back to first edit icon (name/title section is fine too)
             editIcons[0].click();
             return 'first_edit';
         }""")
@@ -775,9 +840,7 @@ async def naukri_refresh_profile() -> dict:
 
         await asyncio.sleep(2)
 
-        # Click Save via JS — target the modal's Save button specifically
         save_result = await browser.page.evaluate("""() => {
-            // Priority 1: Save button inside the open modal/dialog overlay
             const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
             if (modal) {
                 const btn = Array.from(modal.querySelectorAll('button')).find(
@@ -785,46 +848,31 @@ async def naukri_refresh_profile() -> dict:
                 );
                 if (btn) { btn.click(); return 'modal_save'; }
             }
-
-            // Priority 2: Button with exact text "Save" (not "Save photo" etc.)
             const exactSave = Array.from(document.querySelectorAll('button')).find(
                 b => b.textContent.trim() === 'Save' && b.offsetParent !== null
             );
             if (exactSave) { exactSave.click(); return 'exact_save'; }
-
-            // Priority 3: Any visible button with text "Save"
-            const anySave = Array.from(document.querySelectorAll('button')).find(
-                b => b.textContent.trim().toLowerCase() === 'save'
-            );
-            if (anySave) { anySave.click(); return 'any_save'; }
-
             return null;
         }""")
 
         if not save_result:
-            return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save button not found. Profile may still be refreshed."}
+            return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
 
         await asyncio.sleep(2)
-        return {
-            "status": "refreshed",
-            "method": edit_clicked,
-            "save": save_result,
-            "message": "Profile updated. You now appear as 'recently active' to recruiters.",
-        }
+        return {"status": "refreshed", "method": edit_clicked, "save": save_result, "message": "Profile refreshed. You appear as 'recently active'."}
 
 
 # ============================================================================
-# Tool 7: Debug — page snapshot for selector calibration
+# Tool 7: Debug (Playwright)
 # ============================================================================
 
 
 @mcp.tool()
 async def naukri_debug(action: str = "snapshot") -> dict:
-    """Debug tool: capture current page state for selector calibration.
+    """Debug tool: capture current page state for troubleshooting.
 
     Args:
-        action: "snapshot" — returns page URL, title, and DOM structure of key elements
-                "screenshot" — saves screenshot to tools/naukri/debug.png
+        action: "snapshot" — DOM structure | "screenshot" — saves debug.png
     """
     async with browser._lock:
         url = browser.page.url
@@ -835,22 +883,12 @@ async def naukri_debug(action: str = "snapshot") -> dict:
             await browser.page.screenshot(path=path, full_page=False)
             return {"status": "ok", "url": url, "title": title, "screenshot": path}
 
-        # Snapshot: extract DOM structure for selector calibration
         structure = await browser.page.evaluate("""() => {
-            // Get all elements with useful class/id patterns
             const selectors = [
-                // Job cards
-                '[class*="tuple"]', '[class*="jobCard"]', '[class*="job-card"]',
-                '[class*="srp-"]', '[data-job-id]', 'article',
-                // Job details
+                '[class*="tuple"]', '[class*="jobCard"]', '[data-job-id]',
                 '[class*="title"]', '[class*="comp"]', '[class*="salary"]',
-                '[class*="location"]', '[class*="experience"]',
-                // Apply
-                '[class*="apply"]', 'button',
-                // Login
-                '[class*="google"]', '[class*="social"]',
+                '[class*="location"]', '[class*="apply"]', 'button',
             ];
-
             const results = {};
             for (const sel of selectors) {
                 try {
@@ -861,7 +899,6 @@ async def naukri_debug(action: str = "snapshot") -> dict:
                             id: el.id || null,
                             class: el.className ? el.className.toString().slice(0, 100) : null,
                             text: el.textContent ? el.textContent.trim().slice(0, 80) : null,
-                            children: el.children.length,
                         }));
                     }
                 } catch(e) {}
@@ -873,9 +910,81 @@ async def naukri_debug(action: str = "snapshot") -> dict:
 
 
 # ============================================================================
+# Tool 8: Get Profile (REST API)
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_profile() -> dict:
+    """Get your full Naukri profile via API.
+
+    Returns skills (with experience years), employment history, education,
+    current CTC, expected CTC, notice period, location — everything needed
+    for Claude to auto-answer screening questions intelligently.
+    """
+    try:
+        data = await api_get(
+            "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+            {"expand_level": "4"},
+        )
+
+        profile = data.get("profile", [{}])[0]
+        additional = data.get("profileAdditional", {})
+
+        skills = []
+        for s in data.get("itskills", []):
+            exp_time = s.get("experienceTime", {})
+            skills.append({
+                "skill": s.get("skill"),
+                "experience_years": exp_time.get("year", 0),
+                "experience_months": exp_time.get("month", 0),
+            })
+
+        employment = []
+        for emp in data.get("employments", []):
+            employment.append({
+                "designation": emp.get("designation"),
+                "organization": emp.get("organization"),
+                "start_date": emp.get("startDate"),
+                "end_date": emp.get("endDate") or "Present",
+            })
+
+        education = []
+        for edu in data.get("educations", []):
+            education.append({
+                "degree": edu.get("course", {}).get("value"),
+                "specialization": edu.get("specialisation", {}).get("value"),
+                "institute": edu.get("institute"),
+                "year": edu.get("yearOfCompletion"),
+            })
+
+        exp = profile.get("experience", {})
+
+        return {
+            "status": "success",
+            "name": profile.get("name"),
+            "current_ctc": profile.get("absoluteCtc"),
+            "expected_ctc": profile.get("absoluteExpectedCtc"),
+            "notice_period": profile.get("noticePeriod", {}).get("value"),
+            "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
+            "current_location": profile.get("city", {}).get("value"),
+            "gender": "Male" if profile.get("gender") == "M" else "Female",
+            "key_skills": profile.get("keySkills"),
+            "skills_with_experience": skills,
+            "employment": employment,
+            "education": education,
+            "profile_id": additional.get("profileId"),
+        }
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
+
+
+# ============================================================================
 # Server Startup
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Starting Naukri MCP Server (7 tools, embedded Playwright)")
+    logger.info("Starting Naukri MCP Server v2 (8 tools, hybrid Playwright + REST API)")
     mcp.run()
