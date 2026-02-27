@@ -1,0 +1,17 @@
+# Browser profile (cookies, session data)
+chrome-profile/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Debug artifacts
+debug.png
+
+# Answer cache (contains personal data)
+questions.json
+
+# OS
+.DS_Store
+Thumbs.db
