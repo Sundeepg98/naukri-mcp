@@ -152,6 +152,22 @@ class NaukriBrowser:
         el = await self.page.query_selector(selector)
         return (await el.text_content()).strip() if el else None
 
+    async def get_profile_name(self) -> str:
+        """Get profile name via profile API (same path as naukri_get_profile)."""
+        try:
+            data = await api_get(
+                "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+                {"expand_level": "4"},
+            )
+            profiles = data.get("profile") or []
+            name = profiles[0].get("name") if profiles and isinstance(profiles[0], dict) else None
+            if name:
+                logger.info("Profile name from API: %s", name)
+                return name
+        except Exception as e:
+            logger.warning("Profile name API failed: %s: %s", type(e).__name__, e)
+        return "unknown"
+
     async def exists(self, selector: str) -> bool:
         return await self.page.query_selector(selector) is not None
 
@@ -267,9 +283,10 @@ async def naukri_login(
         await asyncio.sleep(2)
 
         if "/nlogin" not in browser.page.url:
+            # Already logged in
             token = await browser._extract_token()
-            name = await browser.text(".nI-gNb-sb__main-text")
-            return {"status": "already_logged_in", "profile_name": name or "unknown", "has_token": bool(token)}
+            name = await browser.get_profile_name()
+            return {"status": "already_logged_in", "profile_name": name, "has_token": bool(token)}
 
         if method == "google":
             google_clicked = False
@@ -294,8 +311,8 @@ async def naukri_login(
 
             if "/nlogin" not in browser.page.url and "accounts.google" not in browser.page.url:
                 token = await browser._extract_token()
-                name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown", "has_token": bool(token)}
+                name = await browser.get_profile_name()
+                return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": bool(token)}
 
             if "accounts.google" in browser.page.url:
                 return {"status": "waiting_for_user", "message": "Google account picker is open. Select your account, then call naukri_login() again."}
@@ -303,8 +320,8 @@ async def naukri_login(
             await asyncio.sleep(3)
             if "/nlogin" not in browser.page.url:
                 token = await browser._extract_token()
-                name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "google", "profile_name": name or "unknown", "has_token": bool(token)}
+                name = await browser.get_profile_name()
+                return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": bool(token)}
 
             return {"status": "error", "message": "Google login did not complete. Check the browser."}
 
@@ -326,8 +343,8 @@ async def naukri_login(
 
             if "/nlogin" not in browser.page.url:
                 token = await browser._extract_token()
-                name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "method": "email", "profile_name": name or "unknown", "has_token": bool(token)}
+                name = await browser.get_profile_name()
+                return {"status": "logged_in", "method": "email", "profile_name": name, "has_token": bool(token)}
 
             error = await browser.text(".err-message, .error-msg, [class*='error']")
             return {"status": "error", "message": error or "Login failed — check credentials"}
@@ -353,8 +370,8 @@ async def naukri_verify_otp(otp: str) -> dict:
 
             if "/nlogin" not in browser.page.url:
                 token = await browser._extract_token()
-                name = await browser.text(".nI-gNb-sb__main-text")
-                return {"status": "logged_in", "profile_name": name or "unknown", "has_token": bool(token)}
+                name = await browser.get_profile_name()
+                return {"status": "logged_in", "profile_name": name, "has_token": bool(token)}
 
             error = await browser.text(".err-message, .error-msg")
             return {"status": "error", "message": error or "OTP verification failed"}
@@ -888,13 +905,18 @@ async def naukri_refresh_profile() -> dict:
 
 
 @mcp.tool()
-async def naukri_debug(action: str = "snapshot") -> dict:
+async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> dict:
     """Debug tool: capture current page state for troubleshooting.
 
     Args:
-        action: "snapshot" — DOM structure | "screenshot" — saves debug.png
+        action: "snapshot" — DOM structure | "screenshot" — saves debug.png |
+                "scan" — deep scan for specific elements (chatbot, neo, agent, iframe)
+        url: Optional URL to navigate to before performing the action
     """
     async with browser._lock:
+        if url:
+            await browser.goto(url)
+            await asyncio.sleep(3)
         url = browser.page.url
         title = await browser.page.title()
 
@@ -902,6 +924,167 @@ async def naukri_debug(action: str = "snapshot") -> dict:
             path = str(Path(__file__).parent / "debug.png")
             await browser.page.screenshot(path=path, full_page=False)
             return {"status": "ok", "url": url, "title": title, "screenshot": path}
+
+        if action == "scan":
+            # Deep scan for chatbot, neo, agent, iframe, widget elements
+            scan = await browser.page.evaluate("""() => {
+                const keywords = ['neo', 'chat', 'bot', 'agent', 'widget', 'assist', 'copilot'];
+                const results = { iframes: [], matching_elements: [], floating_buttons: [] };
+
+                // Check iframes
+                document.querySelectorAll('iframe').forEach(f => {
+                    results.iframes.push({
+                        src: f.src || f.getAttribute('data-src') || '',
+                        id: f.id || null,
+                        class: f.className || null,
+                    });
+                });
+
+                // Scan all elements for keyword matches in class/id/data attributes
+                document.querySelectorAll('*').forEach(el => {
+                    const attrs = (el.className || '') + ' ' + (el.id || '') +
+                        ' ' + Array.from(el.attributes).map(a => a.name + '=' + a.value).join(' ');
+                    const lower = attrs.toLowerCase();
+                    for (const kw of keywords) {
+                        if (lower.includes(kw)) {
+                            results.matching_elements.push({
+                                tag: el.tagName.toLowerCase(),
+                                id: el.id || null,
+                                class: (el.className || '').toString().slice(0, 120),
+                                text: (el.textContent || '').trim().slice(0, 80),
+                                attr_match: kw,
+                            });
+                            break;
+                        }
+                    }
+                });
+
+                // Fixed/absolute positioned elements (floating buttons/widgets)
+                document.querySelectorAll('*').forEach(el => {
+                    const style = window.getComputedStyle(el);
+                    if ((style.position === 'fixed' || style.position === 'sticky') &&
+                        el.offsetWidth > 20 && el.offsetHeight > 20 &&
+                        el.tagName !== 'NAV' && el.tagName !== 'HEADER') {
+                        results.floating_buttons.push({
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            class: (el.className || '').toString().slice(0, 120),
+                            text: (el.textContent || '').trim().slice(0, 80),
+                            rect: el.getBoundingClientRect(),
+                        });
+                    }
+                });
+
+                // Deduplicate matching elements (keep first 20)
+                results.matching_elements = results.matching_elements.slice(0, 20);
+                results.floating_buttons = results.floating_buttons.slice(0, 10);
+                return results;
+            }""")
+            return {"status": "ok", "url": url, "title": title, "scan": scan}
+
+        if action == "deepscan":
+            # Scroll to bottom to trigger lazy loads, then wait
+            await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(5)
+            await browser.page.evaluate("window.scrollTo(0, 0)")
+            await asyncio.sleep(2)
+
+            result = await browser.page.evaluate("""() => {
+                const out = {
+                    high_zindex: [],
+                    shadow_hosts: [],
+                    chat_scripts: [],
+                    bottom_right: [],
+                    all_iframes: [],
+                    custom_elements: [],
+                };
+
+                // ALL elements with z-index > 999 (chatbots use very high z-index)
+                document.querySelectorAll('*').forEach(el => {
+                    const z = parseInt(window.getComputedStyle(el).zIndex);
+                    if (z > 999) {
+                        out.high_zindex.push({
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            class: (el.className || '').toString().slice(0, 150),
+                            z_index: z,
+                            visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+                            text: (el.textContent || '').trim().slice(0, 100),
+                        });
+                    }
+                });
+
+                // Shadow DOM hosts
+                document.querySelectorAll('*').forEach(el => {
+                    if (el.shadowRoot) {
+                        const inner = el.shadowRoot.innerHTML || '';
+                        out.shadow_hosts.push({
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            class: (el.className || '').toString().slice(0, 100),
+                            inner_length: inner.length,
+                            inner_preview: inner.slice(0, 200),
+                        });
+                    }
+                });
+
+                // Script tags with chat/bot/neo/widget/agent in src
+                document.querySelectorAll('script[src]').forEach(s => {
+                    const src = s.src.toLowerCase();
+                    if (/chat|bot|neo|widget|agent|assist|helpdesk|intercom|crisp|drift|freshchat|zendesk|tawk/.test(src)) {
+                        out.chat_scripts.push(s.src);
+                    }
+                });
+
+                // ALL elements in bottom-right quadrant with fixed/absolute position
+                document.querySelectorAll('*').forEach(el => {
+                    const style = window.getComputedStyle(el);
+                    if (style.position === 'fixed' || style.position === 'absolute') {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.right > window.innerWidth - 200 && rect.bottom > window.innerHeight - 200 &&
+                            el.offsetWidth > 10 && el.offsetHeight > 10) {
+                            out.bottom_right.push({
+                                tag: el.tagName.toLowerCase(),
+                                id: el.id || null,
+                                class: (el.className || '').toString().slice(0, 150),
+                                rect: {x: Math.round(rect.x), y: Math.round(rect.y),
+                                       w: Math.round(rect.width), h: Math.round(rect.height)},
+                                text: (el.textContent || '').trim().slice(0, 80),
+                            });
+                        }
+                    }
+                });
+
+                // All iframes (including dynamically created)
+                document.querySelectorAll('iframe').forEach(f => {
+                    out.all_iframes.push({
+                        src: f.src || f.getAttribute('data-src') || '(empty)',
+                        id: f.id || null,
+                        class: f.className || null,
+                        visible: f.offsetWidth > 0 && f.offsetHeight > 0,
+                        rect: f.getBoundingClientRect(),
+                    });
+                });
+
+                // Custom HTML elements (web components)
+                document.querySelectorAll('*').forEach(el => {
+                    if (el.tagName.includes('-')) {
+                        out.custom_elements.push({
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            class: (el.className || '').toString().slice(0, 100),
+                            visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+                        });
+                    }
+                });
+
+                // Deduplicate
+                out.high_zindex = out.high_zindex.slice(0, 15);
+                out.bottom_right = out.bottom_right.slice(0, 10);
+                out.custom_elements = [...new Map(out.custom_elements.map(e => [e.tag, e])).values()].slice(0, 10);
+                return out;
+            }""")
+            return {"status": "ok", "url": url, "title": title, "deepscan": result}
 
         structure = await browser.page.evaluate("""() => {
             const selectors = [
