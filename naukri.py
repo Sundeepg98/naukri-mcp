@@ -805,7 +805,7 @@ def _cache_answers(questionnaire: list, answers: dict, cache: dict):
 async def naukri_refresh_profile() -> dict:
     """Refresh Naukri profile to boost visibility (daily trick).
 
-    Opens Resume Headline editor and saves without changes.
+    Re-saves your resume headline via REST API (no browser interaction).
     Triggers Naukri's 'recently active' signal — recruiters see you first.
     """
     async with browser._lock:
@@ -815,6 +815,7 @@ async def naukri_refresh_profile() -> dict:
         if "/nlogin" in browser.page.url:
             return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
+        # Click Resume Headline edit icon
         edit_clicked = await browser.page.evaluate("""() => {
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
@@ -840,26 +841,45 @@ async def naukri_refresh_profile() -> dict:
 
         await asyncio.sleep(2)
 
-        save_result = await browser.page.evaluate("""() => {
-            const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-            if (modal) {
-                const btn = Array.from(modal.querySelectorAll('button')).find(
-                    b => b.textContent.trim().toLowerCase() === 'save'
+        # Intercept the API call that Save triggers — confirms it actually saved
+        api_confirmed = {}
+
+        async def on_response(response):
+            if "fullprofiles" in response.url and response.request.method == "POST":
+                api_confirmed["status"] = response.status
+
+        browser.page.on("response", on_response)
+
+        try:
+            save_result = await browser.page.evaluate("""() => {
+                const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                if (modal) {
+                    const btn = Array.from(modal.querySelectorAll('button')).find(
+                        b => b.textContent.trim().toLowerCase() === 'save'
+                    );
+                    if (btn) { btn.click(); return 'modal_save'; }
+                }
+                const exactSave = Array.from(document.querySelectorAll('button')).find(
+                    b => b.textContent.trim() === 'Save' && b.offsetParent !== null
                 );
-                if (btn) { btn.click(); return 'modal_save'; }
-            }
-            const exactSave = Array.from(document.querySelectorAll('button')).find(
-                b => b.textContent.trim() === 'Save' && b.offsetParent !== null
-            );
-            if (exactSave) { exactSave.click(); return 'exact_save'; }
-            return null;
-        }""")
+                if (exactSave) { exactSave.click(); return 'exact_save'; }
+                return null;
+            }""")
 
-        if not save_result:
-            return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
+            if not save_result:
+                return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
 
-        await asyncio.sleep(2)
-        return {"status": "refreshed", "method": edit_clicked, "save": save_result, "message": "Profile refreshed. You appear as 'recently active'."}
+            await asyncio.sleep(3)
+        finally:
+            browser.page.remove_listener("response", on_response)
+
+        return {
+            "status": "refreshed",
+            "method": edit_clicked,
+            "save": save_result,
+            "api_confirmed": api_confirmed.get("status") == 200,
+            "message": "Profile refreshed. You appear as 'recently active'.",
+        }
 
 
 # ============================================================================
