@@ -121,3 +121,13 @@ N360_CONFIG_API = "/n360-services/v1/config-n360-pro"
 MOCK_INTERVIEW_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/topics"
 MOCK_INTERVIEW_HISTORY_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/previousInterview"
 MOCK_INTERVIEW_ROLE_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/role"
+
+# Resume & Photo
+RESUME_DOWNLOAD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/resume"
+PHOTO_API = "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self/photo"
+
+# Single Alert Detail
+ALERT_DETAIL_API = "/alertapi/v2/user/cja"  # GET (append /{alertId})
+
+# Early Access / Pre-posted Roles
+EARLY_ACCESS_API = "/jobapi/v1/search/pseudojobs"

@@ -4,7 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, JOB_ALERT_API, JOB_ALERTS_LIST_API
+from naukri_server.config import logger, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
 
 
 @mcp.tool()
@@ -108,3 +108,48 @@ async def naukri_create_job_alert(
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to create job alert: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_get_alert_detail(alert_id: str) -> dict:
+    """Get details of a specific job alert by its ID.
+
+    Use naukri_get_job_alerts first to get alert IDs.
+
+    Args:
+        alert_id: The alert ID (from naukri_get_job_alerts results)
+
+    Returns:
+        - {status: "success", alert: {alert_id, name, keywords, location, experience, ...}}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
+        alerts = data.get("list", [data] if isinstance(data, dict) else data)
+        if not alerts:
+            return {"status": "error", "message": f"Alert {alert_id} not found"}
+
+        a = alerts[0] if isinstance(alerts, list) else alerts
+        if not isinstance(a, dict):
+            return {"status": "error", "message": f"Unexpected response for alert {alert_id}"}
+
+        return {
+            "status": "success",
+            "alert": {
+                "alert_id": a.get("alertId", alert_id),
+                "name": a.get("name", ""),
+                "keywords": a.get("keywords", ""),
+                "location": a.get("location", ""),
+                "experience": a.get("experience"),
+                "min_ctc": a.get("minCTC"),
+                "max_ctc": a.get("maxCTC"),
+                "alert_type": a.get("alertType", ""),
+                "function_area_id": a.get("functionAreaId"),
+                "role_id": a.get("roleId"),
+                "industry_type_id": a.get("industryTypeId"),
+            },
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get alert detail: {type(e).__name__}: {e}"}
