@@ -4,7 +4,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, logger
+from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, logger
 
 
 # ============================================================================
@@ -37,7 +37,7 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
     # Strategy 1: REST API (fast, no browser interaction)
     try:
         profile_data = await api_get(
-            "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+            PROFILE_API,
             {"expand_level": "4"},
         )
         profiles = profile_data.get("profile", [])
@@ -46,7 +46,7 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
             if headline:
                 for version in ("v0", "v2"):
                     try:
-                        endpoint = f"/cloudgateway-mynaukri/resman-aggregator-services/{version}/users/self/fullprofiles"
+                        endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
                         await api_post(endpoint, {"resumeHeadline": headline})
                         return {
                             "status": "refreshed",
@@ -151,7 +151,7 @@ async def naukri_get_profile() -> dict:
     """
     try:
         data = await api_get(
-            "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+            PROFILE_API,
             {"expand_level": "4"},
         )
 
@@ -245,3 +245,63 @@ async def naukri_get_dashboard() -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}"}
+
+
+# ============================================================================
+# Tool: Update Profile (REST API — partial update)
+# ============================================================================
+
+UPDATABLE_FIELDS = {
+    "resumeHeadline", "keySkills", "summary", "noticePeriod",
+    "expectedCtc", "locationPrefId", "experience", "currentCtc",
+    "absoluteCtc", "absoluteExpectedCtc", "name", "gender",
+    "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
+}
+
+
+@mcp.tool()
+async def naukri_update_profile(fields: dict) -> dict:
+    """Update your Naukri profile fields via API (partial update).
+
+    Sends only the fields you specify — everything else stays unchanged.
+    Use naukri_get_profile first to see current values.
+
+    Args:
+        fields: Dict of fields to update. Supported keys:
+            - resumeHeadline: str — your profile headline
+            - keySkills: str — comma-separated skills
+            - summary: str — profile summary / about me
+            - noticePeriod: dict — {"id": "1", "value": "15 Days or less"}
+            - expectedCtc: str — e.g. "20" (in lakhs)
+            - currentCtc: str — e.g. "16" (in lakhs)
+            - experience: dict — {"year": 8, "month": 0}
+            - locationPrefId: list — location preference IDs
+            - name: str — full name
+            - gender: str — "M" or "F"
+
+    Returns:
+        - {status: "updated", updated_fields: [...], response: {...}}
+        - {status: "error", message}
+    """
+    if not fields:
+        return {"status": "error", "message": "No fields provided. Pass at least one field to update."}
+
+    unknown = set(fields.keys()) - UPDATABLE_FIELDS
+    if unknown:
+        return {
+            "status": "error",
+            "message": f"Unknown fields: {', '.join(sorted(unknown))}. "
+                       f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
+        }
+
+    try:
+        result = await api_post(FULLPROFILES_API, fields)
+        return {
+            "status": "updated",
+            "updated_fields": list(fields.keys()),
+            "response": result,
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}

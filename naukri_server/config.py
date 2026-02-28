@@ -97,3 +97,11 @@ REPORT_FRAUD_API = "/servicegateway-apply/fraud-detection/1.0/jobseeker/report" 
 COMPANY_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/users/self/companygroups-follow-status"  # GET
 MAIL_VERIFICATION_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/mail-verification"  # GET
 FILE_VALIDATION_API = "https://filevalidation.naukri.com/file"  # POST (resume upload validation)
+
+# Profile editing & settings
+PROFILE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self"
+FULLPROFILES_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/fullprofiles"
+FORMATTED_SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/self/formattedsettings"
+SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/self/settings"
+BLOCKED_COMPANIES_API = "/servicegateway-mynaukri/settings-services/v0/user/self/blockedCompanies"
+COMPANY_SEARCH_API = "/companyapi/v1/search"
