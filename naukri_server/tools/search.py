@@ -2,9 +2,9 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser
-from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API
+from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API
 
 
 @mcp.tool()
@@ -184,3 +184,38 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get recommendations: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
+    """Get jobs similar to a given job posting on Naukri.com.
+
+    Args:
+        job_id: The Naukri job ID to find similar jobs for
+        limit: Max jobs to return (default 10)
+
+    Returns:
+        - {status: "success", job_id, source: "similar", total_found, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(SIMILAR_JOBS_API + job_id, params={
+            "noOfResults": str(limit),
+            "searchType": "sim",
+        })
+        # Similar jobs uses simJobDetails with content + collaborative arrays
+        sim = data.get("simJobDetails", {})
+        job_details = sim.get("content", []) + sim.get("collaborative", [])
+        jobs = _parse_job_list(job_details, limit)
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "source": "similar",
+            "total_found": data.get("noOfJobs"),
+            "count": len(jobs),
+            "jobs": jobs,
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get similar jobs: {type(e).__name__}: {e}"}

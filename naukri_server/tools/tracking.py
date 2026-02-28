@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.config import logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API
+from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.config import (
+    logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
+    SAVE_JOB_API, UNSAVE_JOB_API,
+)
 
 # Data files live alongside questions.json in the naukri/ directory
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
@@ -190,6 +193,43 @@ async def naukri_get_saved_jobs(limit: int = 50) -> dict:
         "count": min(len(saved), limit),
         "saved_jobs": saved[:limit],
     }
+
+
+@mcp.tool()
+async def naukri_unsave_job(job_id: str) -> dict:
+    """Unsave/unbookmark a previously saved job, both locally and on Naukri.
+
+    Args:
+        job_id: Naukri job ID to unsave
+
+    Returns:
+        - {status: "unsaved", job_id} if it was found and removed locally
+        - {status: "not_found", job_id} if it wasn't in local saved_jobs.json
+          (Naukri remote unsave is still attempted either way)
+        - {status: "error", message} on failure
+    """
+    try:
+        # Always attempt the remote unsave regardless of local state
+        try:
+            await api_post(UNSAVE_JOB_API + job_id, body={})
+        except Exception as e:
+            logger.warning("Failed to unsave job on Naukri: %s", e)
+
+        # Remove from local saved_jobs.json
+        async with _saved_jobs_lock:
+            saved = _load_json(SAVED_JOBS_FILE)
+            original_len = len(saved)
+            saved = [j for j in saved if j.get("job_id") != job_id]
+            if len(saved) < original_len:
+                _save_json(SAVED_JOBS_FILE, saved)
+                return {"status": "unsaved", "job_id": job_id}
+            else:
+                return {"status": "not_found", "job_id": job_id}
+
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to unsave job: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
