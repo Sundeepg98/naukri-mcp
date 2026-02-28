@@ -5,6 +5,7 @@ from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, logger
+from naukri_server.validation import validate_profile
 
 
 # ============================================================================
@@ -187,7 +188,7 @@ async def naukri_get_profile() -> dict:
 
         exp = profile.get("experience", {})
 
-        return {
+        result = {
             "status": "success",
             "name": profile.get("name"),
             "current_ctc": profile.get("absoluteCtc"),
@@ -202,6 +203,10 @@ async def naukri_get_profile() -> dict:
             "education": education,
             "profile_id": additional.get("profileId"),
         }
+        warnings = validate_profile(result)
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:

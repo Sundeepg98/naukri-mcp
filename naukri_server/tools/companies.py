@@ -8,6 +8,7 @@ from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API
 from naukri_server.tools.search import _parse_job_list
+from naukri_server.validation import validate_company_list, validate_job_list
 
 _COMPANY_HEADERS = {"appid": "103"}
 
@@ -71,7 +72,7 @@ async def naukri_search_companies(
         groups = data.get("groupDetails", [])
         companies = [_parse_company(g) for g in groups]
 
-        return {
+        result = {
             "status": "success",
             "keyword": keyword,
             "page": page,
@@ -79,6 +80,10 @@ async def naukri_search_companies(
             "count": len(companies),
             "companies": companies,
         }
+        warnings = validate_company_list(companies, data.get("noOfGroups"))
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:
@@ -140,7 +145,7 @@ async def naukri_get_company_jobs(
             job_details = data.get("jobDetails", [])
             jobs = _parse_job_list(job_details, limit)
 
-            return {
+            result = {
                 "status": "success",
                 "group_id": group_id,
                 "page": page_no,
@@ -148,6 +153,10 @@ async def naukri_get_company_jobs(
                 "count": len(jobs),
                 "jobs": jobs,
             }
+            warnings = validate_job_list(jobs, data.get("noOfJobs"), "company_jobs")
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except Exception as e:
             return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}"}
 

@@ -5,6 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, logger
+from naukri_server.validation import validate_job_detail
 
 
 # ============================================================================
@@ -99,7 +100,7 @@ async def naukri_get_job(job_url: str) -> dict:
             if score_data:
                 match_score = score_data.get("Keyskills")
 
-            return {
+            result = {
                 "status": "success",
                 "job_id": job_id,
                 "title": job.get("title"),
@@ -121,5 +122,9 @@ async def naukri_get_job(job_url: str) -> dict:
                 "hr_email": job.get("contactEmail"),
                 "url": page_url,
             }
+            warnings = validate_job_detail(result)
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except Exception as e:
             return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}"}

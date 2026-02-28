@@ -5,6 +5,7 @@ import logging
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
+from naukri_server.validation import validate_salary_data, validate_review_data
 
 logger = logging.getLogger(__name__)
 
@@ -131,29 +132,81 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
                     "message": "pageProps is empty — the company slug may be invalid or the page didn't load correctly.",
                 }
 
-            # Extract company info
-            company_data = page_props.get("companyData", {}) or page_props.get("company", {}) or {}
+            # Extract company info — check multiple possible keys
+            company_data = (
+                page_props.get("companyData", {})
+                or page_props.get("companyMetaData", {})
+                or page_props.get("companyInfo", {})
+                or page_props.get("company", {})
+                or {}
+            )
             company_name = (
                 company_data.get("CompanyName")
                 or company_data.get("companyName")
                 or company_data.get("name")
+                or page_props.get("companyName")
                 or company_slug
             )
 
-            # Extract salary overview / aggregate data
-            salary_overview = page_props.get("salaryOverview", {}) or page_props.get("overview", {}) or {}
-            avg_salary = (
-                salary_overview.get("avgSalary")
-                or salary_overview.get("averageSalary")
-                or salary_overview.get("medianSalary")
-            )
-            min_salary = salary_overview.get("minSalary") or salary_overview.get("lowSalary")
-            max_salary = salary_overview.get("maxSalary") or salary_overview.get("highSalary")
-            total_salaries = salary_overview.get("totalSalaries") or salary_overview.get("salaryCount")
+            # New structure (2026): salaryData.data.summaryData + latestSalaries.latestSalaries
+            # Old structure: flat keys like salaryOverview, salaries, experienceWiseSalary
+            salary_container = page_props.get("salaryData") or {}
+            salary_data = salary_container.get("data", {}) if isinstance(salary_container, dict) else {}
+            summary = salary_data.get("summaryData", {}) or {}
+            insights = salary_data.get("profileInsights", {}) or {}
 
-            # Extract individual salary entries (list of designations with salary ranges)
+            # Extract salary overview — try new nested structure first, then old flat keys
+            avg_salary = (
+                summary.get("totalSalaryAverage")
+                or insights.get("averageCtc")
+                or page_props.get("salaryOverview", {}).get("avgSalary")
+                or page_props.get("salaryOverview", {}).get("averageSalary")
+            )
+            # Convert string values to float if needed
+            if isinstance(avg_salary, str):
+                try:
+                    avg_salary = round(float(avg_salary))
+                except (ValueError, TypeError):
+                    pass
+            min_salary = (
+                summary.get("minCtc")
+                or insights.get("minCtc")
+                or page_props.get("salaryOverview", {}).get("minSalary")
+            )
+            if isinstance(min_salary, str):
+                try:
+                    min_salary = round(float(min_salary))
+                except (ValueError, TypeError):
+                    pass
+            max_salary = (
+                summary.get("maxCtc")
+                or insights.get("maxCtc")
+                or page_props.get("salaryOverview", {}).get("maxSalary")
+            )
+            if isinstance(max_salary, str):
+                try:
+                    max_salary = round(float(max_salary))
+                except (ValueError, TypeError):
+                    pass
+            total_salaries = (
+                summary.get("totalSalaryDataPoints")
+                or page_props.get("salaryOverview", {}).get("totalSalaries")
+            )
+            if isinstance(total_salaries, str):
+                try:
+                    total_salaries = int(total_salaries)
+                except (ValueError, TypeError):
+                    pass
+
+            # Extract percentiles if available (new structure)
+            percentiles = summary.get("percentiles")
+
+            # Extract individual salary entries — latestSalaries is {latestSalaries: [...]}
+            latest_container = page_props.get("latestSalaries") or {}
             raw_salaries = (
-                page_props.get("salaries")
+                (latest_container.get("latestSalaries") if isinstance(latest_container, dict) else None)
+                or (latest_container if isinstance(latest_container, list) else None)
+                or page_props.get("salaries")
                 or page_props.get("salaryList")
                 or page_props.get("designationSalaries")
                 or []
@@ -165,23 +218,24 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
                         continue
                     salaries.append({
                         "designation": (
-                            entry.get("Designation")
+                            entry.get("jobProfileName")
+                            or entry.get("Designation")
                             or entry.get("designation")
                             or entry.get("title")
-                            or entry.get("name")
                         ),
-                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary"),
-                        "min_salary": entry.get("minSalary") or entry.get("lowSalary"),
-                        "max_salary": entry.get("maxSalary") or entry.get("highSalary"),
-                        "salary_count": entry.get("salaryCount") or entry.get("count"),
+                        "ctc": entry.get("ctc"),
+                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary") or entry.get("ctc"),
                         "experience": entry.get("experience") or entry.get("avgExperience"),
+                        "experience_unit": entry.get("experienceUnit"),
+                        "reported": entry.get("timeElapse") or entry.get("timeStamp"),
                     })
 
-            # Extract experience-wise breakdown if available
+            # Extract experience-wise breakdown — new: salaryData.data.experienceLevels
             exp_breakdown_raw = (
-                page_props.get("experienceWiseSalary")
+                salary_data.get("experienceLevels")
+                or salary_data.get("bucketedExperienceLevels")
+                or page_props.get("experienceWiseSalary")
                 or page_props.get("experienceBreakdown")
-                or page_props.get("salaryByExperience")
                 or []
             )
             experience_breakdown = []
@@ -189,16 +243,20 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
                 for entry in exp_breakdown_raw:
                     if not isinstance(entry, dict):
                         continue
+                    # Build experience range from minExp/maxExp if no label
+                    exp_range = (
+                        entry.get("experienceRange")
+                        or entry.get("bucketLabel")
+                        or entry.get("label")
+                    )
+                    if not exp_range and entry.get("minExp") is not None and entry.get("maxExp") is not None:
+                        exp_range = f"{entry['minExp']}-{entry['maxExp']} years"
                     experience_breakdown.append({
-                        "experience_range": (
-                            entry.get("experienceRange")
-                            or entry.get("experience")
-                            or entry.get("label")
-                        ),
-                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary"),
-                        "min_salary": entry.get("minSalary") or entry.get("lowSalary"),
-                        "max_salary": entry.get("maxSalary") or entry.get("highSalary"),
-                        "count": entry.get("count") or entry.get("salaryCount"),
+                        "experience_range": exp_range,
+                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary") or entry.get("avgCtc"),
+                        "min_salary": entry.get("minSalary") or entry.get("lowSalary") or entry.get("minCtc"),
+                        "max_salary": entry.get("maxSalary") or entry.get("highSalary") or entry.get("maxCtc"),
+                        "count": entry.get("count") or entry.get("salaryCount") or entry.get("dataPoints"),
                     })
 
             result = {
@@ -215,13 +273,23 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
             if designation:
                 result["designation"] = designation
 
+            if percentiles:
+                result["percentiles"] = percentiles
+
+            if summary.get("avgExp") is not None:
+                result["avg_experience"] = summary["avgExp"]
+                result["experience_range"] = f"{summary.get('minExp', '?')}-{summary.get('maxExp', '?')} years"
+
             if experience_breakdown:
                 result["experience_breakdown"] = experience_breakdown
 
-            # Include raw pageProps keys for debugging if salary data seems sparse
+            # Include pageProps keys for debugging if salary data seems sparse
             if not salaries and not avg_salary:
                 result["_debug_page_props_keys"] = list(page_props.keys())
 
+            warnings = validate_salary_data(result)
+            if warnings:
+                result["warnings"] = warnings
             return result
 
         except Exception as e:
@@ -368,6 +436,9 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             if review_summary:
                 result["review_summary"] = review_summary
 
+            warnings = validate_review_data(result)
+            if warnings:
+                result["warnings"] = warnings
             return result
 
         except Exception as e:

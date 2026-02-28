@@ -68,10 +68,33 @@ class TokenManager:
             return self._token
 
     async def ensure_token(self) -> str:
-        """Get token, attempting extraction if cache is empty."""
+        """Get token, attempting extraction if cache is empty.
+
+        If extraction from cached cookies fails, navigates to a Naukri page
+        to trigger JWT renewal (the session cookie may still be valid even
+        when the short-lived nauk_at JWT has expired). Uses _refresh_lock to
+        prevent parallel navigation races.
+        """
         if self._token:
             return self._token
         await self.extract()
+        if self._token:
+            return self._token
+        # JWT missing/expired — try navigating to trigger server-side renewal
+        # Lock prevents multiple parallel callers from navigating simultaneously
+        async with self._refresh_lock:
+            # Double-check after acquiring lock — another caller may have renewed
+            if self._token:
+                return self._token
+            if self._context:
+                try:
+                    pages = self._context.pages
+                    page = pages[0] if pages else await self._context.new_page()
+                    await page.goto(f"{NAUKRI_BASE}/mnjuser/homepage",
+                                    wait_until="domcontentloaded", timeout=15000)
+                    await self.extract()
+                except Exception as e:
+                    logger.debug("Token renewal navigation failed: %s", e)
         if not self._token:
             raise ValueError("Not logged in — call naukri_login first")
         return self._token

@@ -5,6 +5,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API, logger
+from naukri_server.validation import validate_job_list
 
 
 @mcp.tool()
@@ -77,7 +78,7 @@ async def naukri_search_jobs(
 
             jobs = _parse_job_list(data.get("jobDetails", []), limit)
 
-            return {
+            result = {
                 "status": "success",
                 "keywords": keywords,
                 "location": location,
@@ -86,6 +87,10 @@ async def naukri_search_jobs(
                 "count": len(jobs),
                 "jobs": jobs,
             }
+            warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except Exception as e:
             return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}"}
 
@@ -142,13 +147,17 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
         data = await api_post(RECOMMENDED_JOBS_API, body={})
         job_details = data.get("jobDetails", [])
         jobs = _parse_job_list(job_details, limit)
-        return {
+        result = {
             "status": "success",
             "source": "recommendations",
             "total_found": data.get("noOfJobs"),
             "count": len(jobs),
             "jobs": jobs,
         }
+        warnings = validate_job_list(jobs, data.get("noOfJobs"), "recommendations")
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:
@@ -176,7 +185,7 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
         sim = data.get("simJobDetails", {})
         job_details = sim.get("content", []) + sim.get("collaborative", [])
         jobs = _parse_job_list(job_details, limit)
-        return {
+        result = {
             "status": "success",
             "job_id": job_id,
             "source": "similar",
@@ -184,6 +193,10 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
             "count": len(jobs),
             "jobs": jobs,
         }
+        warnings = validate_job_list(jobs, data.get("noOfJobs"), "similar_jobs")
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:
