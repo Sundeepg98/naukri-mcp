@@ -1,10 +1,13 @@
-"""Job alert tools — list, create, and manage saved search alerts on Naukri."""
+"""Job alert tools — list, create, delete, and manage saved search alerts on Naukri."""
 
+import asyncio
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
+from naukri_server.browser import browser
+from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
 
 
 @mcp.tool()
@@ -153,3 +156,192 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get alert detail: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_delete_job_alert(alert_name: str) -> dict:
+    """Delete a job alert by name. Uses browser automation since no REST API exists.
+
+    Naukri has no REST DELETE endpoint for alerts (Akamai CDN returns 501).
+    This tool navigates to the legacy alert management page, finds the alert
+    by name, and submits the delete confirmation form.
+
+    Args:
+        alert_name: The name of the alert to delete (case-insensitive partial match)
+
+    Returns:
+        - {status: "success", alert_name, message}
+        - {status: "error", message}
+    """
+    async with browser._lock:
+        try:
+            # Step 1: Navigate to the legacy alert management page
+            await browser.goto(f"{NAUKRI_BASE}/alert/manage")
+            await asyncio.sleep(3)
+
+            # Check if logged in
+            if "/nlogin" in browser.page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+
+            # Step 2: Scrape alert rows — extract alert names and their delete link hrefs
+            alerts_data = await browser.page.evaluate("""() => {
+                const results = [];
+                // Look for links that contain '/alert/delete' in href
+                const deleteLinks = document.querySelectorAll('a[href*="/alert/delete"]');
+                for (const link of deleteLinks) {
+                    // Walk up to find the row/container that has the alert name
+                    const row = link.closest('tr') || link.closest('div') || link.parentElement;
+                    if (!row) continue;
+
+                    // The alert name is typically in the row text (excluding the link text)
+                    const rowText = row.textContent || '';
+                    const href = link.getAttribute('href') || '';
+                    results.push({
+                        name: rowText.trim(),
+                        href: href
+                    });
+                }
+
+                // Fallback: also look for table rows with alert info
+                if (results.length === 0) {
+                    const rows = document.querySelectorAll('table tr, .alert-row, [class*="alert"]');
+                    for (const row of rows) {
+                        const link = row.querySelector('a[href*="delete"]');
+                        if (link) {
+                            results.push({
+                                name: row.textContent.trim(),
+                                href: link.getAttribute('href') || ''
+                            });
+                        }
+                    }
+                }
+
+                return results;
+            }""")
+
+            if not alerts_data:
+                # Maybe the page structure is different — check if there are any alerts at all
+                page_text = await browser.page.evaluate("() => document.body.innerText")
+                logger.warning("No alert delete links found. Page text: %s", page_text[:500])
+                return {
+                    "status": "error",
+                    "message": "No alerts found on the manage page. The page may have no alerts, "
+                               "or the page structure may have changed.",
+                }
+
+            # Step 3: Match the user's alert_name (case-insensitive partial match)
+            alert_name_lower = alert_name.lower()
+            matched = None
+            for alert in alerts_data:
+                if alert_name_lower in alert.get("name", "").lower():
+                    matched = alert
+                    break
+
+            if not matched:
+                available = [a.get("name", "")[:80] for a in alerts_data]
+                return {
+                    "status": "error",
+                    "message": f"No alert matching '{alert_name}' found. "
+                               f"Available alerts: {available}",
+                }
+
+            # Step 4: Extract the aId from the delete link URL
+            delete_href = matched["href"]
+            if not delete_href:
+                return {"status": "error", "message": "Delete link found but href is empty."}
+
+            # Parse aId from the URL (e.g., /alert/delete?aId=<96-hex-chars>)
+            parsed = urlparse(delete_href)
+            query_params = parse_qs(parsed.query)
+            aid_values = query_params.get("aId", [])
+            if not aid_values:
+                return {
+                    "status": "error",
+                    "message": f"Could not extract aId from delete link: {delete_href}",
+                }
+            a_id = aid_values[0]
+
+            logger.info("Deleting alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
+
+            # Step 5: Navigate to the delete confirmation page
+            delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
+            await browser.goto(delete_url)
+            await asyncio.sleep(2)
+
+            # Step 6: Submit the delete confirmation via fetch POST
+            delete_result = await browser.page.evaluate("""(params) => {
+                const { deleteUrl, aId } = params;
+                return fetch(deleteUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: 'confirm=1&aId=' + encodeURIComponent(aId),
+                    credentials: 'include'
+                }).then(resp => ({
+                    ok: resp.ok,
+                    status: resp.status,
+                    redirected: resp.redirected,
+                    url: resp.url
+                })).catch(err => ({
+                    ok: false,
+                    status: 0,
+                    error: err.message
+                }));
+            }""", {"deleteUrl": f"/alert/delete?aId={a_id}", "aId": a_id})
+
+            if not delete_result:
+                return {"status": "error", "message": "Delete fetch returned no result."}
+
+            if delete_result.get("error"):
+                return {
+                    "status": "error",
+                    "message": f"Delete request failed: {delete_result['error']}",
+                }
+
+            # Also try clicking the submit button as a fallback if fetch didn't work cleanly
+            if not delete_result.get("ok"):
+                logger.info("Fetch POST returned status %s, trying button click fallback...",
+                            delete_result.get("status"))
+                button_clicked = await browser.page.evaluate("""() => {
+                    // Look for confirm/submit/delete buttons
+                    const buttons = Array.from(document.querySelectorAll(
+                        'input[type="submit"], button[type="submit"], button, input[value*="Delete"], input[value*="Confirm"]'
+                    ));
+                    for (const btn of buttons) {
+                        const text = (btn.textContent || btn.value || '').toLowerCase();
+                        if (text.includes('delete') || text.includes('confirm') || text.includes('yes')) {
+                            btn.click();
+                            return text;
+                        }
+                    }
+                    // Try submitting the form directly
+                    const form = document.querySelector('form');
+                    if (form) { form.submit(); return 'form_submit'; }
+                    return null;
+                }""")
+
+                if button_clicked:
+                    logger.info("Clicked button/form: %s", button_clicked)
+                    await asyncio.sleep(2)
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Delete POST returned status {delete_result.get('status')} "
+                                   f"and no confirm button found on page.",
+                    }
+
+            matched_name = matched.get("name", alert_name)[:80]
+            logger.info("Alert '%s' deleted successfully.", matched_name)
+            return {
+                "status": "success",
+                "alert_name": matched_name,
+                "message": f"Job alert matching '{alert_name}' has been deleted.",
+            }
+
+        except Exception as e:
+            logger.error("Failed to delete job alert: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to delete job alert: {type(e).__name__}: {e}",
+            }

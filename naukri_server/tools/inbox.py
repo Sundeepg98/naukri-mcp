@@ -15,24 +15,47 @@ def _strip_html(html: str) -> str:
 
 
 @mcp.tool()
-async def naukri_get_inbox(limit: int = 20, unread_only: bool = False) -> dict:
+async def naukri_get_inbox(
+    limit: int = 20,
+    unread_only: bool = False,
+    mail_type: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
     """List recruiter messages and invitations from your Naukri inbox.
+
+    Supports filtering by mail type — pass mail_type="powerNvite" to see only
+    paid NVite invitations from recruiters.  Leave empty for all messages.
 
     Args:
         limit: Max messages to return (default 20)
         unread_only: If True, only return unread messages
+        mail_type: Filter by message type (e.g. "powerNvite" for NVites only, "" for all)
+        page: Page number for pagination (default 1)
+        page_size: Number of items per page (default 20)
 
     Returns:
-        - {status: "success", total, unread, count, messages: [{message_id, subject, sender, date, is_read, type, preview, vcard_id, unique_id}]}
+        - {status: "success", total, unread, count, total_power_nvite, unread_power_nvite,
+           messages: [{message_id, subject, sender, date, is_read, type, preview,
+                       vcard_id, unique_id, power_nvite, is_relevant, is_applied,
+                       applied_date, job_details, company_details}]}
         - {status: "error", message}
     """
     try:
-        data = await api_post(INBOX_API, body={"pageNo": 1, "pageSize": 20})
+        body = {
+            "pageSize": page_size,
+            "pageNo": page,
+            "mailType": mail_type,
+            "isUnRead": False,
+        }
+        data = await api_post(INBOX_API, body=body)
 
         resp = data.get("successResponse") or data
         inbox_list = resp.get("inbox", [])
         total = resp.get("total", len(inbox_list))
         unread_count = resp.get("unread", 0)
+        total_power_nvite = resp.get("totalPowerNvite", 0)
+        unread_power_nvite = resp.get("unreadPowerNvite", 0)
 
         messages = []
         for msg in inbox_list:
@@ -51,6 +74,35 @@ async def naukri_get_inbox(limit: int = 20, unread_only: bool = False) -> dict:
             elif isinstance(sender_raw, str):
                 sender_name = sender_raw
 
+            # Extract job details from NVite messages
+            job_raw = msg.get("jobDetails") or {}
+            job_details = None
+            if job_raw:
+                job_exp = job_raw.get("jobExperience") or {}
+                job_ctc = job_raw.get("jobCtc") or {}
+                apply_url = job_raw.get("applyUrlData") or {}
+                job_details = {
+                    "job_title": job_raw.get("jobTitle", ""),
+                    "experience_min": job_exp.get("min"),
+                    "experience_max": job_exp.get("max"),
+                    "ctc_min": job_ctc.get("min"),
+                    "ctc_max": job_ctc.get("max"),
+                    "location": job_raw.get("jobLocation", ""),
+                    "work_mode": job_raw.get("workMode", ""),
+                    "key_skills": job_raw.get("jobKeySkills", ""),
+                    "nvite_job_id": apply_url.get("jobId", ""),
+                }
+
+            # Extract company details
+            company_raw = msg.get("companyDetails") or {}
+            company_details = None
+            if company_raw:
+                company_details = {
+                    "company_name": company_raw.get("companyName", ""),
+                    "ambition_box_rating": company_raw.get("ambitionBoxRating"),
+                    "ambition_box_reviews": company_raw.get("ambitionBoxReviews"),
+                }
+
             messages.append({
                 "message_id": msg.get("messageId") or msg.get("id"),
                 "subject": msg.get("subject") or msg.get("title", ""),
@@ -61,6 +113,12 @@ async def naukri_get_inbox(limit: int = 20, unread_only: bool = False) -> dict:
                 "preview": msg.get("preview") or msg.get("snippet", ""),
                 "vcard_id": vcard_id,
                 "unique_id": msg.get("uniqueId") or msg.get("uid", ""),
+                "power_nvite": bool(msg.get("powerNvite", 0)),
+                "is_relevant": bool(msg.get("isRelevant", 0)),
+                "is_applied": bool(msg.get("isApplied", False)),
+                "applied_date": msg.get("appliedDate", ""),
+                "job_details": job_details,
+                "company_details": company_details,
             })
 
             if len(messages) >= limit:
@@ -70,6 +128,8 @@ async def naukri_get_inbox(limit: int = 20, unread_only: bool = False) -> dict:
             "status": "success",
             "total": total,
             "unread": unread_count,
+            "total_power_nvite": total_power_nvite,
+            "unread_power_nvite": unread_power_nvite,
             "count": len(messages),
             "messages": messages,
         }
