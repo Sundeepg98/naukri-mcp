@@ -1,10 +1,12 @@
 """Company tools — search companies, browse company jobs, follow/unfollow."""
 
+import asyncio
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API
+from naukri_server.browser import browser
+from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API
 from naukri_server.tools.search import _parse_job_list
 
 _COMPANY_HEADERS = {"appid": "103"}
@@ -12,20 +14,27 @@ _COMPANY_HEADERS = {"appid": "103"}
 
 def _parse_company(group: dict) -> dict:
     """Parse a company from the search response."""
-    ab = group.get("ambitionBoxData", {})
-    if not isinstance(ab, dict):
-        ab = {}
+    tags = group.get("groupTags", {})
+    if not isinstance(tags, dict):
+        tags = {}
+    logo = group.get("groupLogo", {})
     return {
         "group_id": group.get("groupId"),
-        "name": group.get("title") or group.get("name"),
-        "type": group.get("type"),
-        "industry": group.get("industry"),
-        "size": group.get("employeeCount") or group.get("size"),
-        "rating": ab.get("AggregateRating") or group.get("rating"),
-        "review_count": ab.get("ReviewsCount") or group.get("reviewCount"),
-        "logo_url": group.get("logoPath") or group.get("logo"),
-        "tagline": group.get("tagline"),
+        "name": group.get("groupName"),
+        "type": _first(tags.get("businessSize")),
+        "industry": _first(tags.get("primaryIndustry")),
+        "size": _first(tags.get("employeesCount")),
+        "ownership": _first(tags.get("ownershipType")),
+        "rating": group.get("rating"),
+        "review_count": group.get("reviewsCount"),
+        "logo_url": logo.get("desktop") if isinstance(logo, dict) else None,
+        "jobs_url": group.get("groupJobsURL"),
     }
+
+
+def _first(lst):
+    """Return first element of list or None."""
+    return lst[0] if isinstance(lst, list) and lst else None
 
 
 @mcp.tool()
@@ -42,7 +51,7 @@ async def naukri_search_companies(
         limit: Max results per page (default 20)
 
     Returns:
-        - {status: "success", keyword, page, total_found, count, companies: [{group_id, name, type, industry, size, rating, review_count, logo_url, tagline}]}
+        - {status: "success", keyword, page, total_found, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
         - {status: "error", message}
     """
     try:
@@ -95,32 +104,51 @@ async def naukri_get_company_jobs(
         - {status: "success", group_id, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(
-            SEARCH_API,
-            params={
-                "groupId": group_id,
-                "searchType": "groupidsearch",
-                "pageNo": str(page),
-                "noOfResults": str(limit),
-            },
-        )
+    async with browser._lock:
+        try:
+            # Navigate to company jobs page and intercept the search API response
+            page_url = f"{NAUKRI_BASE}/jobs-in-{group_id}?groupId={group_id}&searchType=groupidsearch"
+            if page > 1:
+                page_url += f"&pageNo={page}"
 
-        job_details = data.get("jobDetails", [])
-        jobs = _parse_job_list(job_details, limit)
+            captured = {}
+            response_event = asyncio.Event()
 
-        return {
-            "status": "success",
-            "group_id": group_id,
-            "page": page,
-            "total_found": data.get("noOfJobs"),
-            "count": len(jobs),
-            "jobs": jobs,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}"}
+            async def on_response(response):
+                if "/jobapi/v3/search" in response.url and response.status == 200:
+                    try:
+                        captured["data"] = await response.json()
+                    except Exception:
+                        pass
+                    response_event.set()
+
+            browser.page.on("response", on_response)
+            try:
+                await browser.goto(page_url)
+                try:
+                    await asyncio.wait_for(response_event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    pass
+            finally:
+                browser.page.remove_listener("response", on_response)
+
+            data = captured.get("data")
+            if not data:
+                return {"status": "error", "message": "Search API response not captured for company jobs."}
+
+            job_details = data.get("jobDetails", [])
+            jobs = _parse_job_list(job_details, limit)
+
+            return {
+                "status": "success",
+                "group_id": group_id,
+                "page": page,
+                "total_found": data.get("noOfJobs"),
+                "count": len(jobs),
+                "jobs": jobs,
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}"}
 
 
 @mcp.tool()
