@@ -68,3 +68,7 @@ MESSAGE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/inbox/users/
 
 # Recommended jobs
 RECOMMENDED_JOBS_API = "/jobapi/v2/search/recom-jobs"
+
+# Dashboard & analytics
+DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
+MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"

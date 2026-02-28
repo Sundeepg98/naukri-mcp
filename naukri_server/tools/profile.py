@@ -3,8 +3,8 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser
-from naukri_server.api import api_get, api_post
-from naukri_server.config import NAUKRI_BASE, logger
+from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, logger
 
 
 # ============================================================================
@@ -206,3 +206,42 @@ async def naukri_get_profile() -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
+
+
+# ============================================================================
+# Tool: Get Dashboard (REST API)
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_dashboard() -> dict:
+    """Get your Naukri dashboard summary via API.
+
+    Returns profile views, recruiter activity, CTC, experience,
+    recruiter invites, and unread mail counts — a quick health check
+    of your Naukri presence.
+
+    Returns:
+        - {status: "success", profile_views, recruiter_activity_date, ctc_lpa, experience_years, unread_invites, total_invites, unread_relevant_mail, has_inbox, total_matches}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(DASHBOARD_API)
+        db = data.get("dashBoard", {})
+
+        return {
+            "status": "success",
+            "profile_views": db.get("profileViewCount"),
+            "recruiter_activity_date": db.get("recruiterActionsLatestDate"),
+            "ctc_lpa": db.get("rawCtc"),
+            "experience_years": db.get("rawTotalExperience"),
+            "unread_invites": db.get("unreadPowerNvite"),
+            "total_invites": db.get("totalPowerNvite"),
+            "unread_relevant_mail": db.get("unreadMostRelevantMail"),
+            "has_inbox": db.get("hasInboxFlag") == "Y",
+            "total_matches": db.get("mrt"),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}"}

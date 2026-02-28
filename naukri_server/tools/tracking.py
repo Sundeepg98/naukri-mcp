@@ -9,7 +9,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.config import logger, APPLICATION_STATUS_API
+from naukri_server.config import logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API
 
 # Data files live alongside questions.json in the naukri/ directory
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
@@ -237,3 +237,35 @@ async def naukri_get_application_status(job_id: str) -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get application status: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_get_match_analytics(days: int = 7) -> dict:
+    """Get match-score analytics for recent job applications — overall match distribution and per-field breakdowns.
+
+    Args:
+        days: Number of days of application history to analyze (default 7)
+
+    Returns:
+        - {status: "success", days, total_applies, complete_match, high_match, medium_match,
+           low_match, field_breakdown, user_details}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
+
+        return {
+            "status": "success",
+            "days": days,
+            "total_applies": data.get("totalApplies"),
+            "complete_match": data.get("completeMatch"),
+            "high_match": data.get("highMatch"),
+            "medium_match": data.get("mediumMatch"),
+            "low_match": data.get("lowMatch"),
+            "field_breakdown": data.get("relevantFieldMatch"),
+            "user_details": data.get("userDetails"),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get match analytics: {type(e).__name__}: {e}"}
