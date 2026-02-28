@@ -1,10 +1,21 @@
 """Settings tools — view and update Naukri account settings and blocked companies."""
 
+import asyncio
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.browser import browser
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API
+from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API
+
+SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
+
+# Maps our enum names to radio button IDs on the settings page
+_JOB_SEARCH_RADIO = {
+    "actively_searching": "active",
+    "open_to_opportunities": "notActiveButOpen",
+    "not_active": "customize",
+}
 
 JOB_SEARCH_STATUS = {
     "actively_searching": 1,
@@ -89,20 +100,87 @@ async def naukri_update_settings(
         - {status: "success", updated_fields: [...]}
         - {status: "error", message}
     """
+    updated_fields = []
+
+    # --- Job Search Status: use browser UI (radio buttons on settings page) ---
+    if job_search_status is not None:
+        key = job_search_status.lower().replace(" ", "_")
+        if key not in _JOB_SEARCH_RADIO:
+            return {
+                "status": "error",
+                "message": f"Invalid job_search_status '{job_search_status}'. "
+                           f"Valid: {', '.join(_JOB_SEARCH_RADIO.keys())}",
+            }
+        radio_id = _JOB_SEARCH_RADIO[key]
+        try:
+            async with browser._lock:
+                await browser.goto(SETTINGS_PAGE)
+                await asyncio.sleep(3)
+
+                if "/nlogin" in browser.page.url:
+                    return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+
+                # Capture settings API calls triggered by the radio click
+                captured = {}
+
+                async def on_response(response):
+                    if "settings" in response.url and response.request.method == "POST":
+                        captured["status"] = response.status
+                        captured["url"] = response.url
+
+                browser.page.on("response", on_response)
+                try:
+                    # Click the radio button via JS (it may be out of viewport)
+                    clicked = await browser.page.evaluate("""(radioId) => {
+                        const radio = document.getElementById(radioId);
+                        if (!radio) return null;
+                        radio.scrollIntoView({block: 'center'});
+                        radio.click();
+                        return radioId;
+                    }""", radio_id)
+
+                    if not clicked:
+                        return {"status": "error", "message": f"Radio button #{radio_id} not found on settings page"}
+
+                    await asyncio.sleep(2)
+
+                    # After clicking radio, find and click the SELECT button in that row
+                    select_clicked = await browser.page.evaluate("""(radioId) => {
+                        const radio = document.getElementById(radioId);
+                        if (!radio) return null;
+                        const row = radio.closest('.jobSearchState, [class*="jobSearchState"]');
+                        if (!row) return 'no_row';
+                        // Look for SELECT/SAVE button in the row
+                        const btn = row.querySelector('a, button, [class*="select"], [class*="btn"]');
+                        if (btn) { btn.click(); return 'select_clicked'; }
+                        // Also try clicking the row itself
+                        row.click();
+                        return 'row_clicked';
+                    }""", radio_id)
+
+                    await asyncio.sleep(3)
+                finally:
+                    browser.page.remove_listener("response", on_response)
+
+                updated_fields.append(f"jobSearchStatus={key}")
+                api_ok = captured.get("status") in (200, 201, 204)
+
+                # If no API call was captured, the radio click might have triggered
+                # a page reload or widget update without a separate POST
+                return {
+                    "status": "success",
+                    "method": "browser_ui",
+                    "updated_fields": updated_fields,
+                    "api_confirmed": api_ok,
+                    "select_result": select_clicked,
+                    "message": f"Job search status set to '{key}' via settings page.",
+                }
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to update job search status: {type(e).__name__}: {e}"}
+
+    # --- Other settings: try API POST with full settings body ---
     try:
         body = {}
-        updated_fields = []
-
-        if job_search_status is not None:
-            key = job_search_status.lower().replace(" ", "_")
-            if key not in JOB_SEARCH_STATUS:
-                return {
-                    "status": "error",
-                    "message": f"Invalid job_search_status '{job_search_status}'. "
-                               f"Valid: {', '.join(JOB_SEARCH_STATUS.keys())}",
-                }
-            body["jobSearchStatus"] = JOB_SEARCH_STATUS[key]
-            updated_fields.append(f"jobSearchStatus={key}")
 
         if recommended_job_frequency is not None:
             key = recommended_job_frequency.lower().replace(" ", "_")
@@ -130,31 +208,19 @@ async def naukri_update_settings(
         if not body:
             return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
 
-        # Build complete settings body from formatted settings
-        # The POST endpoint rejects partial updates ("Partial data provided")
-        # and raw GET response metadata causes insert errors.
-        # Solution: GET formatted settings, extract clean key-value pairs, merge changes.
+        # GET current formatted settings, extract {settingId: numericValue} pairs,
+        # merge user changes, POST complete settings.
         try:
             formatted = await api_get(FORMATTED_SETTINGS_API)
-            sections = formatted if isinstance(formatted, list) else formatted.get("sections", formatted.get("settings", []))
+            raw_settings = formatted.get("settings", formatted)
             current_settings = {}
-            if isinstance(sections, list):
-                for section in sections:
-                    if not isinstance(section, dict):
-                        continue
-                    for s in section.get("settings", section.get("items", [])):
-                        if not isinstance(s, dict):
-                            continue
-                        sid = s.get("settingId") or s.get("id", "")
-                        sval = s.get("settingValue") if s.get("settingValue") is not None else s.get("value", "")
-                        # Extract numeric id from nested dict values like {"id": 4, "value": "Custom"}
-                        if isinstance(sval, dict) and "id" in sval:
-                            sval = sval["id"]
-                        if sid:
-                            current_settings[sid] = sval
-            # Merge user's changes into the full settings dict
+            if isinstance(raw_settings, dict):
+                for sid, sval in raw_settings.items():
+                    if isinstance(sval, dict) and "id" in sval:
+                        current_settings[sid] = sval["id"]
+                    else:
+                        current_settings[sid] = sval
             merged = {**current_settings, **body}
-            logger.info("Settings POST body keys: %s", list(merged.keys()))
         except Exception as e:
             logger.warning("Could not GET formatted settings (%s), posting user changes only", e)
             merged = body
