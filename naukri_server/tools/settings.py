@@ -130,15 +130,29 @@ async def naukri_update_settings(
         if not body:
             return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
 
-        # GET current settings, merge changes, POST full object
+        # Build complete settings body from formatted settings
+        # The POST endpoint rejects partial updates ("Partial data provided")
+        # and raw GET response metadata causes insert errors.
+        # Solution: GET formatted settings, extract clean key-value pairs, merge changes.
         try:
-            current = await api_get(SETTINGS_API)
-            if isinstance(current, dict):
-                merged = {**current, **body}
-            else:
-                merged = body
-        except Exception:
-            logger.warning("Could not GET current settings, posting partial update")
+            formatted = await api_get(FORMATTED_SETTINGS_API)
+            sections = formatted if isinstance(formatted, list) else formatted.get("sections", formatted.get("settings", []))
+            current_settings = {}
+            if isinstance(sections, list):
+                for section in sections:
+                    if not isinstance(section, dict):
+                        continue
+                    for s in section.get("settings", section.get("items", [])):
+                        if not isinstance(s, dict):
+                            continue
+                        sid = s.get("settingId") or s.get("id", "")
+                        sval = s.get("settingValue") if s.get("settingValue") is not None else s.get("value", "")
+                        if sid:
+                            current_settings[sid] = sval
+            # Merge user's changes into the full settings dict
+            merged = {**current_settings, **body}
+        except Exception as e:
+            logger.warning("Could not GET formatted settings (%s), posting user changes only", e)
             merged = body
 
         await api_post(SETTINGS_API, merged)

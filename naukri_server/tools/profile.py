@@ -294,77 +294,166 @@ async def naukri_update_profile(fields: dict) -> dict:
                        f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
         }
 
-    # Strategy 1: Playwright context.request.post() — shares browser cookies,
-    # sets proper origin/referer automatically. No page.evaluate needed.
-    import json as _json
+    # The fullprofiles endpoint rejects all external API calls (405 from CDN).
+    # Only the React app's own XHR works. Use the browser UI approach:
+    # navigate to profile → click edit → modify form fields → click save.
     async with browser._lock:
         try:
-            response = await browser.context.request.post(
-                NAUKRI_BASE + FULLPROFILES_API,
-                data=fields,
-                headers={
-                    'appid': '105',
-                    'clientid': 'd3skt0p',
-                    'content-type': 'application/json',
-                    'systemid': 'Naukri',
-                    'gid': 'LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE',
-                    'x-requested-with': 'XMLHttpRequest',
-                },
-            )
-            if response.ok:
-                body = {}
-                try:
-                    body = await response.json()
-                except Exception:
-                    pass
-                return {
-                    "status": "updated",
-                    "updated_fields": list(fields.keys()),
-                    "response": body,
-                }
-            else:
-                text = await response.text()
-                raise RuntimeError(f"context.request returned HTTP {response.status}: {text[:300]}")
-        except Exception as e:
-            logger.warning("Strategy 1 (context.request.post) failed: %s — trying browser fetch", e)
-
-        # Strategy 2: Navigate to profile page first so fetch runs in the
-        # correct origin with session cookies, then use page.evaluate + fetch.
-        try:
             await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
-            result = await browser.page.evaluate("""async ({endpoint, fields}) => {
-                const resp = await fetch(endpoint, {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {
-                        'accept': 'application/json',
-                        'appid': '105',
-                        'clientid': 'd3skt0p',
-                        'content-type': 'application/json',
-                        'systemid': 'Naukri',
-                        'gid': 'LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE',
-                        'x-requested-with': 'XMLHttpRequest',
-                    },
-                    body: JSON.stringify(fields),
-                });
-                const text = await resp.text();
-                return {status: resp.status, ok: resp.ok, body: text};
-            }""", {"endpoint": NAUKRI_BASE + FULLPROFILES_API, "fields": fields})
+            if "/nlogin" in browser.page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-            if result.get("ok"):
-                body = {}
-                try:
-                    body = _json.loads(result.get("body", "{}"))
-                except Exception:
-                    pass
-                return {
-                    "status": "updated",
-                    "updated_fields": list(fields.keys()),
-                    "response": body,
-                }
-            else:
-                return {"status": "error", "message": f"HTTP {result.get('status')}: {result.get('body', '')[:300]}"}
+            # Track which fields were updated via UI
+            ui_updated = []
+            api_confirmed = {}
+
+            async def on_response(response):
+                if "fullprofiles" in response.url and response.request.method == "POST":
+                    api_confirmed["status"] = response.status
+
+            browser.page.on("response", on_response)
+
+            try:
+                # --- Resume Headline ---
+                if "resumeHeadline" in fields:
+                    edit_clicked = await browser.page.evaluate("""() => {
+                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+                        );
+                        if (editIcons.length === 0) return null;
+                        for (const icon of editIcons) {
+                            const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
+                            if (section) { icon.click(); return 'headline_edit'; }
+                        }
+                        for (const icon of editIcons) {
+                            const parent = icon.closest('div, section');
+                            if (parent && parent.textContent.includes('Resume headline')) {
+                                icon.click();
+                                return 'headline_parent';
+                            }
+                        }
+                        editIcons[0].click();
+                        return 'first_edit';
+                    }""")
+
+                    if not edit_clicked:
+                        return {"status": "error", "message": "Could not find edit button for resume headline"}
+
+                    await asyncio.sleep(2)
+
+                    # Find textarea in the modal and fill with new headline
+                    textarea = await browser.page.query_selector(
+                        '[class*="modal"] textarea, [class*="dialog"] textarea, '
+                        '[role="dialog"] textarea, textarea[class*="headline"], '
+                        'textarea'
+                    )
+                    if textarea:
+                        await textarea.click()
+                        await textarea.fill("")
+                        await textarea.fill(fields["resumeHeadline"])
+                        await asyncio.sleep(0.5)
+                        ui_updated.append("resumeHeadline")
+                    else:
+                        return {"status": "error", "message": "Edit modal opened but textarea not found"}
+
+                    # Click save
+                    save_result = await browser.page.evaluate("""() => {
+                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                        if (modal) {
+                            const btn = Array.from(modal.querySelectorAll('button')).find(
+                                b => b.textContent.trim().toLowerCase() === 'save'
+                            );
+                            if (btn) { btn.click(); return 'modal_save'; }
+                        }
+                        const exactSave = Array.from(document.querySelectorAll('button')).find(
+                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+                        );
+                        if (exactSave) { exactSave.click(); return 'exact_save'; }
+                        return null;
+                    }""")
+
+                    if not save_result:
+                        return {"status": "error", "message": "Edit modal opened but Save button not found"}
+
+                    await asyncio.sleep(3)
+
+                # --- Key Skills ---
+                elif "keySkills" in fields:
+                    # Navigate to key skills section and click edit
+                    edit_clicked = await browser.page.evaluate("""() => {
+                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+                        );
+                        for (const icon of editIcons) {
+                            const parent = icon.closest('div, section');
+                            if (parent && parent.textContent.includes('Key skills')) {
+                                icon.click();
+                                return 'skills_edit';
+                            }
+                        }
+                        return null;
+                    }""")
+
+                    if not edit_clicked:
+                        return {"status": "error", "message": "Could not find edit button for key skills"}
+
+                    await asyncio.sleep(2)
+
+                    # Find the skills input and update
+                    skills_input = await browser.page.query_selector(
+                        '[class*="modal"] input[type="text"], [class*="dialog"] input, '
+                        '[role="dialog"] input[type="text"], input[class*="skill"]'
+                    )
+                    if skills_input:
+                        await skills_input.click()
+                        await skills_input.fill("")
+                        await skills_input.fill(fields["keySkills"])
+                        await asyncio.sleep(0.5)
+                        ui_updated.append("keySkills")
+                    else:
+                        return {"status": "error", "message": "Skills edit opened but input not found"}
+
+                    # Click save
+                    save_result = await browser.page.evaluate("""() => {
+                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                        if (modal) {
+                            const btn = Array.from(modal.querySelectorAll('button')).find(
+                                b => b.textContent.trim().toLowerCase() === 'save'
+                            );
+                            if (btn) { btn.click(); return 'modal_save'; }
+                        }
+                        const exactSave = Array.from(document.querySelectorAll('button')).find(
+                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+                        );
+                        if (exactSave) { exactSave.click(); return 'exact_save'; }
+                        return null;
+                    }""")
+
+                    if not save_result:
+                        return {"status": "error", "message": "Skills edit opened but Save button not found"}
+
+                    await asyncio.sleep(3)
+
+                else:
+                    # For other fields, no browser UI support yet
+                    unsupported = [k for k in fields.keys() if k not in ("resumeHeadline", "keySkills")]
+                    return {
+                        "status": "error",
+                        "message": f"Browser UI update not yet supported for: {', '.join(unsupported)}. "
+                                   f"Currently supported: resumeHeadline, keySkills",
+                    }
+
+            finally:
+                browser.page.remove_listener("response", on_response)
+
+            return {
+                "status": "updated",
+                "method": "browser_ui",
+                "updated_fields": ui_updated,
+                "api_confirmed": api_confirmed.get("status") == 200,
+                "message": f"Profile updated via browser UI. Fields: {', '.join(ui_updated)}",
+            }
         except Exception as e:
             return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}
