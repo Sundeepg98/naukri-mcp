@@ -48,7 +48,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
     """
     async with browser._lock:
         # fetch_api and click_discover use url differently — skip goto for them
-        if url and action not in ("fetch_api", "fetch_widget", "post_api", "click_discover"):
+        if url and action not in ("fetch_api", "fetch_widget", "post_api", "delete_api", "put_api", "click_discover"):
             await browser.goto(url)
             await asyncio.sleep(3)
         current_url = browser.page.url
@@ -134,6 +134,86 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                 }
             }""", [api_url, post_body])
             return {"status": "ok", "post_result": result}
+
+        if action == "delete_api":
+            # DELETE fetch from browser context
+            # url parameter is the API path to DELETE
+            # Optional body: "API_PATH|JSON_BODY" (like post_api)
+            parts = (url or "").split("|", 1)
+            api_url = parts[0] if parts else ""
+            del_body = parts[1] if len(parts) > 1 else None
+            if not api_url.startswith("http"):
+                api_url = f"https://www.naukri.com{api_url}"
+            result = await browser.page.evaluate("""async ([apiUrl, delBody]) => {
+                try {
+                    const opts = {
+                        method: 'DELETE',
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json',
+                            'appid': '121',
+                            'clientid': 'd3skt0p',
+                            'content-type': 'application/json',
+                            'systemid': 'Naukri',
+                            'x-requested-with': 'XMLHttpRequest',
+                        },
+                    };
+                    if (delBody) opts.body = delBody;
+                    const resp = await fetch(apiUrl, opts);
+                    const text = await resp.text();
+                    let body = null;
+                    try { body = JSON.parse(text); } catch(e) { body = text.slice(0, 5000); }
+                    return {
+                        status: resp.status,
+                        url: resp.url,
+                        ok: resp.ok,
+                        headers: Object.fromEntries(resp.headers.entries()),
+                        body: body,
+                    };
+                } catch(e) {
+                    return {error: e.message};
+                }
+            }""", [api_url, del_body])
+            return {"status": "ok", "delete_result": result}
+
+        if action == "put_api":
+            # PUT fetch from browser context with custom body
+            # url format: "API_PATH|JSON_BODY"
+            parts = (url or "").split("|", 1)
+            api_url = parts[0] if parts else ""
+            put_body = parts[1] if len(parts) > 1 else "{}"
+            if not api_url.startswith("http"):
+                api_url = f"https://www.naukri.com{api_url}"
+            result = await browser.page.evaluate("""async ([apiUrl, putBody]) => {
+                try {
+                    const resp = await fetch(apiUrl, {
+                        method: 'PUT',
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json',
+                            'appid': '121',
+                            'clientid': 'd3skt0p',
+                            'content-type': 'application/json',
+                            'systemid': 'Naukri',
+                            'x-requested-with': 'XMLHttpRequest',
+                        },
+                        body: putBody,
+                    });
+                    const text = await resp.text();
+                    let body = null;
+                    try { body = JSON.parse(text); } catch(e) { body = text.slice(0, 5000); }
+                    return {
+                        status: resp.status,
+                        url: resp.url,
+                        ok: resp.ok,
+                        headers: Object.fromEntries(resp.headers.entries()),
+                        body: body,
+                    };
+                } catch(e) {
+                    return {error: e.message};
+                }
+            }""", [api_url, put_body])
+            return {"status": "ok", "put_result": result}
 
         if action == "fetch_widget":
             # Like fetch_api but uses widget headers (appid:109, systemid:109)
