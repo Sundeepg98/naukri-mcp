@@ -97,7 +97,6 @@ SIMILAR_JOBS_API = "/jobapi/v2/search/simjobs/"  # GET (append job_id)
 APPLY_WORKFLOW_API = "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply"  # POST
 REPORT_FRAUD_API = "/servicegateway-apply/fraud-detection/1.0/jobseeker/report"  # POST
 COMPANY_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/users/self/companygroups-follow-status"  # GET
-MAIL_VERIFICATION_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/mail-verification"  # GET
 FILE_VALIDATION_API = "https://filevalidation.naukri.com/file"  # POST (resume upload validation)
 
 # Profile editing & settings

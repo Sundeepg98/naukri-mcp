@@ -2,7 +2,7 @@
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NOTIFICATION_COUNT_API, REPORT_FRAUD_API, MAIL_VERIFICATION_API
+from naukri_server.config import NOTIFICATION_COUNT_API, REPORT_FRAUD_API, PROFILE_API
 
 
 @mcp.tool()
@@ -62,12 +62,16 @@ async def naukri_check_email_verification() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_get(MAIL_VERIFICATION_API)
+        # The /mail-verification endpoint returns 405. Email/mobile verification
+        # status is available in the profile API's user object instead.
+        data = await api_get(PROFILE_API, params={"expand_level": "1"})
+        user = data.get("user", {})
         return {
             "status": "success",
-            "is_verified": data.get("isVerified", data.get("verified", None)),
-            "email": data.get("email", data.get("emailId", "")),
-            "data": {k: v for k, v in data.items() if k not in ("isVerified", "verified", "email", "emailId")},
+            "is_email_verified": user.get("isEmailVerified", None),
+            "is_mobile_verified": user.get("isMobileVerified", None),
+            "email": user.get("email", user.get("username", "")),
+            "mobile": user.get("mobile", ""),
         }
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}

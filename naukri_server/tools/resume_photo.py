@@ -61,14 +61,16 @@ async def naukri_get_photo_info() -> dict:
         if not isinstance(photo_info, dict):
             photo_info = {}
 
-        photo_url = photo_info.get("photoUrl", photo_info.get("url", ""))
-        has_photo = bool(photo_url)
+        photo_url = photo_info.get("photoURL", photo_info.get("photoUrl", photo_info.get("url", "")))
+        has_photo = photo_info.get("isAvailable", bool(photo_url))
 
         return {
             "status": "success",
             "has_photo": has_photo,
             "photo_url": photo_url,
-            "photo_id": photo_info.get("photoId", photo_info.get("id", "")),
+            "format": photo_info.get("photoFormat", ""),
+            "status_label": photo_info.get("status", ""),
+            "upload_date": photo_info.get("uploadDate", ""),
             "download_api": f"{NAUKRI_BASE}{PHOTO_API}",
         }
     except NaukriAPIError as e:
