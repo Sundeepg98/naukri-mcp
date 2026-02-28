@@ -11,7 +11,7 @@ from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, logger
 from naukri_server.browser import browser
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
-SUCCESS_STATUSES = {200, 201, 202}
+SUCCESS_STATUSES = {200, 201, 202, 204}
 MAX_RETRIES = 2
 BACKOFF_BASE = 1.0
 
@@ -64,6 +64,8 @@ async def api_get(path: str, params: dict = None, _attempt: int = 0) -> dict:
         async with session.get(url, headers=headers) as resp:
             logger.info("API GET %s -> %s", path, resp.status)
             if resp.status in SUCCESS_STATUSES:
+                if resp.status == 204:
+                    return {}
                 return await resp.json()
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
@@ -96,6 +98,8 @@ async def api_post(path: str, body: dict, _attempt: int = 0) -> dict:
         async with session.post(url, headers=headers, json=body) as resp:
             logger.info("API POST %s -> %s", path, resp.status)
             if resp.status in SUCCESS_STATUSES:
+                if resp.status == 204:
+                    return {}
                 return await resp.json()
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
