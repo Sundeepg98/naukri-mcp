@@ -147,10 +147,14 @@ async def naukri_update_settings(
                             continue
                         sid = s.get("settingId") or s.get("id", "")
                         sval = s.get("settingValue") if s.get("settingValue") is not None else s.get("value", "")
+                        # Extract numeric id from nested dict values like {"id": 4, "value": "Custom"}
+                        if isinstance(sval, dict) and "id" in sval:
+                            sval = sval["id"]
                         if sid:
                             current_settings[sid] = sval
             # Merge user's changes into the full settings dict
             merged = {**current_settings, **body}
+            logger.info("Settings POST body keys: %s", list(merged.keys()))
         except Exception as e:
             logger.warning("Could not GET formatted settings (%s), posting user changes only", e)
             merged = body
