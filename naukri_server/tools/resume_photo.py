@@ -119,25 +119,28 @@ async def naukri_upload_photo(file_path: str) -> dict:
             if "/nlogin" in browser.page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-            # Try clicking on the photo area to reveal upload controls
-            photo_area = await browser.page.query_selector(
-                '#photoCropper, [class*="photoWrapper"], [class*="photo-wrapper"], '
-                '[class*="profilePhoto"], [class*="profile-photo"], .avatarEdit'
-            )
-            if photo_area:
-                await photo_area.click()
-                await asyncio.sleep(2)
-
-            # Try clicking a "Replace photo" / "Update photo" / edit button
-            edit_btn = await browser.page.query_selector(
-                'button:has-text("Replace"), button:has-text("Update photo"), '
-                'button:has-text("Edit photo"), button:has-text("Upload photo"), '
-                '[class*="photo"] button, [class*="photo"] [class*="edit"], '
-                '.avatarEdit button'
-            )
-            if edit_btn:
-                await edit_btn.click()
-                await asyncio.sleep(2)
+            # Click photo area to open upload modal (JS click to bypass visibility checks)
+            await browser.page.evaluate("""() => {
+                // Try clicking the photo/avatar area or "Add photo" link
+                const selectors = [
+                    '.photoWrap', '.photoWrap img',
+                    '[class*="photoWrapper"]', '[class*="profilePhoto"]',
+                    '.avatarEdit',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el) { el.click(); return; }
+                }
+                // Fallback: look for "Add photo" or "Replace photo" text
+                const links = Array.from(document.querySelectorAll('a, button, span, div'));
+                for (const el of links) {
+                    const text = el.textContent.trim().toLowerCase();
+                    if (text === 'add photo' || text === 'replace photo' || text === 'upload photo') {
+                        el.click(); return;
+                    }
+                }
+            }""")
+            await asyncio.sleep(3)
 
             # Set the file on the hidden file input
             file_input = await browser.page.query_selector('#fileUpload')
