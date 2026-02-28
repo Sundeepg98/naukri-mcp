@@ -130,7 +130,18 @@ async def naukri_update_settings(
         if not body:
             return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
 
-        await api_post(SETTINGS_API, body)
+        # GET current settings, merge changes, POST full object
+        try:
+            current = await api_get(SETTINGS_API)
+            if isinstance(current, dict):
+                merged = {**current, **body}
+            else:
+                merged = body
+        except Exception:
+            logger.warning("Could not GET current settings, posting partial update")
+            merged = body
+
+        await api_post(SETTINGS_API, merged)
         return {
             "status": "success",
             "updated_fields": updated_fields,

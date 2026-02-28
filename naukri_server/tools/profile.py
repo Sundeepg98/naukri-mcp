@@ -294,15 +294,50 @@ async def naukri_update_profile(fields: dict) -> dict:
                        f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
         }
 
-    # The fullprofiles endpoint blocks aiohttp requests (405) but works from
-    # browser context with proper Naukri app headers. Use page.evaluate + fetch.
+    # Strategy 1: Playwright context.request.post() — shares browser cookies,
+    # sets proper origin/referer automatically. No page.evaluate needed.
     import json as _json
     async with browser._lock:
         try:
-            token = await browser.ensure_token()
-            result = await browser.page.evaluate("""async ({endpoint, fields, token}) => {
+            response = await browser.context.request.post(
+                NAUKRI_BASE + FULLPROFILES_API,
+                data=fields,
+                headers={
+                    'appid': '105',
+                    'clientid': 'd3skt0p',
+                    'content-type': 'application/json',
+                    'systemid': 'Naukri',
+                    'gid': 'LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE',
+                    'x-requested-with': 'XMLHttpRequest',
+                },
+            )
+            if response.ok:
+                body = {}
+                try:
+                    body = await response.json()
+                except Exception:
+                    pass
+                return {
+                    "status": "updated",
+                    "updated_fields": list(fields.keys()),
+                    "response": body,
+                }
+            else:
+                text = await response.text()
+                raise RuntimeError(f"context.request returned HTTP {response.status}: {text[:300]}")
+        except Exception as e:
+            logger.warning("Strategy 1 (context.request.post) failed: %s — trying browser fetch", e)
+
+        # Strategy 2: Navigate to profile page first so fetch runs in the
+        # correct origin with session cookies, then use page.evaluate + fetch.
+        try:
+            await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+            await asyncio.sleep(2)
+
+            result = await browser.page.evaluate("""async ({endpoint, fields}) => {
                 const resp = await fetch(endpoint, {
                     method: 'POST',
+                    credentials: 'include',
                     headers: {
                         'accept': 'application/json',
                         'appid': '105',
@@ -311,13 +346,12 @@ async def naukri_update_profile(fields: dict) -> dict:
                         'systemid': 'Naukri',
                         'gid': 'LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE',
                         'x-requested-with': 'XMLHttpRequest',
-                        'Authorization': 'Bearer ' + token,
                     },
                     body: JSON.stringify(fields),
                 });
                 const text = await resp.text();
                 return {status: resp.status, ok: resp.ok, body: text};
-            }""", {"endpoint": NAUKRI_BASE + FULLPROFILES_API, "fields": fields, "token": token})
+            }""", {"endpoint": NAUKRI_BASE + FULLPROFILES_API, "fields": fields})
 
             if result.get("ok"):
                 body = {}
