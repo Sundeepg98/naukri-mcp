@@ -49,21 +49,30 @@ async def naukri_get_job(job_url: str) -> dict:
             # Intercept job details + match score API responses
             captured = {}
 
-            async def on_response(response):
+            response_event = asyncio.Event()
+
+            async def on_response_with_event(response):
                 try:
                     if f"/jobapi/v4/job/{job_id}" in response.url and response.status == 200:
                         captured["details"] = await response.json()
+                        response_event.set()
                     elif f"/job/{job_id}/matchscore" in response.url and response.status == 200:
                         captured["score"] = await response.json()
                 except Exception:
                     pass
 
-            browser.page.on("response", on_response)
+            browser.page.on("response", on_response_with_event)
             try:
                 await browser.goto(page_url)
-                await asyncio.sleep(4)
+                try:
+                    await asyncio.wait_for(response_event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    pass
+                # Give a moment for match score to arrive too
+                if "score" not in captured:
+                    await asyncio.sleep(1)
             finally:
-                browser.page.remove_listener("response", on_response)
+                browser.page.remove_listener("response", on_response_with_event)
 
             details_data = captured.get("details")
             if not details_data:
@@ -80,6 +89,7 @@ async def naukri_get_job(job_url: str) -> dict:
             )
 
             company = job.get("companyDetail", {})
+            ambition = job.get("ambitionBoxData", {})
             is_applied = job.get("isApplied", False)
             external = bool(job.get("applyRedirectUrl"))
 
@@ -93,6 +103,8 @@ async def naukri_get_job(job_url: str) -> dict:
                 "job_id": job_id,
                 "title": job.get("title"),
                 "company": company.get("name"),
+                "company_rating": ambition.get("AggregateRating") or ambition.get("Rating"),
+                "company_reviews_count": ambition.get("ReviewsCount"),
                 "salary": salary_str,
                 "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
                 "location": job.get("cityName") or job.get("citySuburb"),
@@ -104,6 +116,8 @@ async def naukri_get_job(job_url: str) -> dict:
                 "can_apply": not is_applied and not external,
                 "vacancies": job.get("vacany"),
                 "apply_count": job.get("applyCount"),
+                "hr_name": job.get("contactPerson") or job.get("createdBy"),
+                "hr_email": job.get("contactEmail"),
                 "url": page_url,
             }
         except Exception as e:

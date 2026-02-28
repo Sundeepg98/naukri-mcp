@@ -52,6 +52,15 @@ class NaukriBrowser:
         self.token = None
         return None
 
+    async def refresh_token(self) -> Optional[str]:
+        """Re-extract token from cookies after page reload."""
+        try:
+            await self.page.reload(timeout=NAV_TIMEOUT)
+            await self._extract_token()
+            return self.token
+        except Exception:
+            return await self._extract_token()
+
     async def ensure_token(self) -> str:
         """Get fresh token, raising if not logged in."""
         await self._extract_token()

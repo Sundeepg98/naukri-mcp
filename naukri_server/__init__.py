@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server v2 — package entry point."""
+"""Naukri.com Job Automation MCP Server v3 (13 tools) — package entry point."""
 
 from contextlib import asynccontextmanager
 
@@ -19,4 +19,4 @@ async def lifespan(server):
 mcp = FastMCP("naukri", lifespan=lifespan)
 
 # Import tool modules to register @mcp.tool() decorators
-from naukri_server.tools import auth, search, jobs, apply, profile, debug  # noqa: E402, F401
+from naukri_server.tools import auth, search, jobs, apply, profile, debug, tracking, upload  # noqa: E402, F401

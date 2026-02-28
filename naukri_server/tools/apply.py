@@ -7,6 +7,7 @@ from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER
 from naukri_server.tools.jobs import _extract_job_id
+from naukri_server.tools.tracking import record_application
 
 
 # ============================================================================
@@ -59,6 +60,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
                     cache = _load_cache()
                     _cache_answers(questionnaire, answers, cache)
                     _save_cache(cache)
+            await record_application(job_id, status="applied")
             return {
                 "status": "applied",
                 "job_id": job_id,
@@ -69,42 +71,47 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
             pending = []
             auto_answers = {}
 
+            # Single lock for the whole cache read-modify-write cycle
             async with _cache_lock:
                 cache = _load_cache()
 
-            for q in questionnaire:
-                qid = str(q.get("questionId", ""))
-                q_name = q.get("questionName", "")
-                q_type = q.get("questionType", "")
-                options = q.get("answerOption", {})
-                cache_k = _cache_key(q_name, options)
+                for q in questionnaire:
+                    qid = str(q.get("questionId", ""))
+                    q_name = q.get("questionName", "")
+                    q_type = q.get("questionType", "")
+                    options = q.get("answerOption", {})
+                    cache_k = _cache_key(q_name, options)
 
-                cached = cache.get(cache_k)
-                if cached:
-                    auto_answers[qid] = cached["answer"]
-                    continue
+                    cached = cache.get(cache_k)
+                    if cached:
+                        auto_answers[qid] = cached["answer"]
+                        continue
 
-                user_answer = _find_user_answer(qid, q_name, answers)
-                if user_answer is not None:
-                    formatted = _format_answer(user_answer, q_type, options)
-                    auto_answers[qid] = formatted
-                    cache[cache_k] = {
-                        "questionType": q_type,
-                        "questionName": q_name,
-                        "answer": formatted,
-                    }
-                    continue
+                    user_answer = _find_user_answer(qid, q_name, answers)
+                    if user_answer is not None:
+                        formatted = _format_answer(user_answer, q_type, options)
+                        auto_answers[qid] = formatted
+                        cache[cache_k] = {
+                            "questionType": q_type,
+                            "questionName": q_name,
+                            "answer": formatted,
+                        }
+                        continue
 
-                pending.append({
-                    "question_id": qid,
-                    "question": q_name,
-                    "type": q_type,
-                    "options": options,
-                })
+                    pending.append({
+                        "question_id": qid,
+                        "question": q_name,
+                        "type": q_type,
+                        "options": options,
+                    })
 
-            if not pending and auto_answers:
-                async with _cache_lock:
+                if not pending and auto_answers:
                     _save_cache(cache)
+                elif pending:
+                    _save_cache(cache)
+
+            # Network calls OUTSIDE the lock
+            if not pending and auto_answers:
                 body["applyData"] = {job_id: {"answers": auto_answers}}
                 data2 = await api_post(
                     "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
@@ -112,6 +119,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
                 )
                 jobs2 = data2.get("jobs", [])
                 if jobs2 and jobs2[0].get("status") == 200:
+                    await record_application(job_id, status="applied")
                     return {
                         "status": "applied",
                         "job_id": job_id,
@@ -120,8 +128,6 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
                     }
 
             if pending:
-                async with _cache_lock:
-                    _save_cache(cache)
                 return {
                     "status": "needs_input",
                     "job_id": job_id,
@@ -305,19 +311,25 @@ def _format_answer(answer: str, q_type: str, options: dict) -> any:
     if q_type == "Text Box":
         return answer
 
-    # For Radio/List/Check — answer must be wrapped in a list
-    # Try to match answer to an option value
     option_values = list(options.values())
-    for opt in option_values:
-        if answer.lower() == opt.lower() or answer.lower() in opt.lower():
-            return [opt] if q_type != "Check Box" else [opt]
 
-    # If answer is a number, try to match option key
+    # Priority 1: Exact case-insensitive match
+    for opt in option_values:
+        if answer.lower() == opt.lower():
+            return [opt]
+
+    # Priority 2: Key-based match (answer is option dict key)
     if answer in options:
         return [options[answer]]
 
+    # Priority 3: Word-boundary regex match (prevents "java" matching "javascript")
+    import re
+    for opt in option_values:
+        if re.search(r'\b' + re.escape(answer.lower()) + r'\b', opt.lower()):
+            return [opt]
+
     # Fallback: wrap in list as-is
-    return [answer] if q_type != "Text Box" else answer
+    return [answer]
 
 
 def _build_apply_answers(job_id: str, answers: dict, cache: dict) -> dict:

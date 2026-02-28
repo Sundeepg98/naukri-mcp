@@ -12,6 +12,7 @@ async def naukri_search_jobs(
     location: Optional[str] = None,
     experience: Optional[int] = None,
     limit: int = 20,
+    page: int = 1,
 ) -> dict:
     """Search for jobs on Naukri.com.
 
@@ -23,6 +24,7 @@ async def naukri_search_jobs(
         location: City name (e.g., "Bangalore", "Mumbai", "Remote")
         experience: Years of experience filter (e.g., 5)
         limit: Max jobs to return (default 20, max 50)
+        page: Page number for pagination (default 1)
 
     Returns list of jobs with id, title, company, salary, location, URL.
     """
@@ -35,11 +37,17 @@ async def naukri_search_jobs(
                 page_url = f"{NAUKRI_BASE}/{slug}-jobs-in-{loc_slug}"
             else:
                 page_url = f"{NAUKRI_BASE}/{slug}-jobs"
+            params = []
             if experience is not None:
-                page_url += f"?experience={experience}"
+                params.append(f"experience={experience}")
+            if page > 1:
+                params.append(f"pageNo={page}")
+            if params:
+                page_url += "?" + "&".join(params)
 
             # Intercept the search API response that Naukri's frontend makes
             captured = {}
+            response_event = asyncio.Event()
 
             async def on_response(response):
                 if "/jobapi/v3/search" in response.url and response.status == 200:
@@ -47,11 +55,15 @@ async def naukri_search_jobs(
                         captured["data"] = await response.json()
                     except Exception:
                         pass
+                    response_event.set()
 
             browser.page.on("response", on_response)
             try:
                 await browser.goto(page_url)
-                await asyncio.sleep(4)
+                try:
+                    await asyncio.wait_for(response_event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    pass  # Fall through to check captured data
             finally:
                 browser.page.remove_listener("response", on_response)
 
@@ -87,6 +99,9 @@ async def naukri_search_jobs(
                     "location": loc_label,
                     "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
                     "is_applied": job.get("isApplied", False),
+                    "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
+                    "job_age": job.get("jobAge"),
+                    "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
                     "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
                 })
 
@@ -94,6 +109,7 @@ async def naukri_search_jobs(
                 "status": "success",
                 "keywords": keywords,
                 "location": location,
+                "page": page,
                 "total_found": data.get("noOfJobs"),
                 "count": len(jobs),
                 "jobs": jobs,

@@ -12,6 +12,13 @@ debug.png
 # Answer cache (contains personal data)
 questions.json
 
+# Application tracking data
+applications.json
+saved_jobs.json
+
+# Optional config overrides
+naukri_config.json
+
 # OS
 .DS_Store
 Thumbs.db

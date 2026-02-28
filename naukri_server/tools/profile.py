@@ -3,8 +3,8 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser
-from naukri_server.api import api_get
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.api import api_get, api_post
+from naukri_server.config import NAUKRI_BASE, logger
 
 
 # ============================================================================
@@ -13,12 +13,46 @@ from naukri_server.config import NAUKRI_BASE
 
 
 @mcp.tool()
-async def naukri_refresh_profile() -> dict:
+async def naukri_refresh_profile(randomize: bool = False) -> dict:
     """Refresh Naukri profile to boost visibility (daily trick).
 
-    Re-saves your resume headline via REST API (no browser interaction).
-    Triggers Naukri's 'recently active' signal — recruiters see you first.
+    Re-saves your resume headline via REST API to trigger Naukri's
+    'recently active' signal — recruiters see you first.
+
+    Args:
+        randomize: If True, wait a random 0-300 seconds before refreshing
+                   (useful for scheduled/cron-based calls to look natural)
     """
+    if randomize:
+        import random
+        delay = random.randint(0, 300)
+        logger.info("Randomized delay: %d seconds", delay)
+        await asyncio.sleep(delay)
+
+    # Strategy 1: REST API (fast, no browser interaction)
+    try:
+        profile_data = await api_get(
+            "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+            {"expand_level": "4"},
+        )
+        profiles = profile_data.get("profile", [])
+        if profiles and isinstance(profiles[0], dict):
+            headline = profiles[0].get("resumeHeadline", "")
+            if headline:
+                await api_post(
+                    "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/fullprofiles",
+                    {"resumeHeadline": headline},
+                )
+                return {
+                    "status": "refreshed",
+                    "method": "rest_api",
+                    "headline_length": len(headline),
+                    "message": "Profile refreshed via REST API. You appear as 'recently active'.",
+                }
+    except Exception as e:
+        logger.warning("REST refresh failed, falling back to browser: %s", e)
+
+    # Strategy 2: Browser fallback (original approach)
     async with browser._lock:
         await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
         await asyncio.sleep(3)
@@ -26,7 +60,6 @@ async def naukri_refresh_profile() -> dict:
         if "/nlogin" in browser.page.url:
             return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-        # Click Resume Headline edit icon
         edit_clicked = await browser.page.evaluate("""() => {
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
@@ -52,7 +85,6 @@ async def naukri_refresh_profile() -> dict:
 
         await asyncio.sleep(2)
 
-        # Intercept the API call that Save triggers — confirms it actually saved
         api_confirmed = {}
 
         async def on_response(response):
@@ -86,10 +118,10 @@ async def naukri_refresh_profile() -> dict:
 
         return {
             "status": "refreshed",
-            "method": edit_clicked,
+            "method": f"browser_{edit_clicked}",
             "save": save_result,
             "api_confirmed": api_confirmed.get("status") == 200,
-            "message": "Profile refreshed. You appear as 'recently active'.",
+            "message": "Profile refreshed via browser. You appear as 'recently active'.",
         }
 
 
