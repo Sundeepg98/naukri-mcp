@@ -105,3 +105,20 @@ FORMATTED_SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/sel
 SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/self/settings"
 BLOCKED_COMPANIES_API = "/servicegateway-mynaukri/settings-services/v0/user/self/blockedCompanies"
 COMPANY_SEARCH_API = "/companyapi/v1/search"
+
+# Profile Performance & Recruiter Analytics
+SEARCH_IMPRESSIONS_API = "/cloudgateway-apply/profile-performance/v0/jobseeker/self/search-impressions"
+RECRUITER_ACTIVITY_API = "/cloudgateway-nc-js/nc-services/v0/template/ni-jobseeker-activity-svc-tmpl_v0"
+ACTIVITY_LEVEL_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/activityLevel"
+
+# Login Status
+LOGIN_STATUS_API = "/central-login-services/v0/credentials/login-status"
+
+# Naukri 360 / Subscription & Services
+N360_CONFIG_API = "/n360-services/v1/config-n360-pro"
+MOCK_INTERVIEW_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/topics"
+MOCK_INTERVIEW_HISTORY_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/previousInterview"
+MOCK_INTERVIEW_ROLE_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/role"
+
+# Job Alerts List (needs appid:109 auth)
+JOB_ALERTS_LIST_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/jobalerts"
