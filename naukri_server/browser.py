@@ -264,17 +264,24 @@ class NaukriBrowser:
         if self.token_manager._token:
             try:
                 from naukri_server.api import api_get
-                await api_get(
-                    "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
-                    {"expand_level": "1"},
+                await asyncio.wait_for(
+                    api_get(
+                        "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+                        {"expand_level": "1"},
+                    ),
+                    timeout=5,
                 )
                 logger.info("Session validated — token is active")
+            except asyncio.TimeoutError:
+                logger.warning("Session validation timed out — will validate lazily on first tool call")
             except Exception as e:
                 logger.warning("Token found but invalid: %s. Call naukri_login.", e)
                 self.token_manager.invalidate()
                 self.token = None
 
     async def stop(self):
+        from naukri_server.api import close_session
+        await close_session()
         if self.page_pool:
             await self.page_pool.close_all()
         if self.context:

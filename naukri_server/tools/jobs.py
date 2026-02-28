@@ -14,20 +14,24 @@ from naukri_server.validation import validate_job_detail
 
 
 def _extract_job_id(job_url_or_id: str) -> str:
-    """Extract numeric job ID from URL or pass through if already an ID."""
+    """Extract numeric job ID from URL or pass through if already an ID.
+
+    Raises ValueError if no valid numeric job ID can be extracted.
+    """
     if job_url_or_id.isdigit():
         return job_url_or_id
     # URL pattern: ...-<jobId> at the end
     match = re.search(r'(\d{6,})', job_url_or_id)
-    return match.group(1) if match else job_url_or_id
+    if match:
+        return match.group(1)
+    raise ValueError(f"Invalid job ID or URL: {job_url_or_id}")
 
 
 @mcp.tool()
 async def naukri_get_job(job_url: str) -> dict:
-    """Get full details for a specific Naukri job.
+    """Get full details for a specific Naukri job — description, skills, salary, match score, apply status.
 
-    Navigates to the job page and intercepts the structured JSON response
-    that Naukri's frontend receives from its job details API.
+    Requires: a job URL or numeric job_id from search results.
 
     Args:
         job_url: Naukri job URL or job ID (numeric)
@@ -69,7 +73,7 @@ async def naukri_get_job(job_url: str) -> dict:
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
-                    pass
+                    logger.warning("Job details response capture timed out after 10s for job: %s", job_id)
                 # Give a moment for match score to arrive too
                 if "score" not in captured:
                     await asyncio.sleep(1)

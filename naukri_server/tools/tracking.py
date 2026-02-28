@@ -75,7 +75,10 @@ async def naukri_get_applications(
     date_to: Optional[str] = None,
     limit: int = 50,
 ) -> dict:
-    """Get tracked job applications with filtering and summary stats.
+    """List your tracked job applications with filtering and summary stats.
+
+    Lists applications from local tracking. For detailed status of ONE specific
+    application, use naukri_get_application_status instead.
 
     Args:
         status: Filter by status ("applied", "needs_input", "already_applied", "error")
@@ -236,6 +239,9 @@ async def naukri_unsave_job(job_id: str) -> dict:
 async def naukri_get_application_status(job_id: str) -> dict:
     """Get detailed status for a specific job application — recruiter activity, applicant count, match score, timeline.
 
+    For listing all applications, use naukri_get_applications instead.
+    Requires: a job_id from naukri_get_applications or naukri_apply results.
+
     Args:
         job_id: Naukri job ID (e.g. "270226007446")
 
@@ -309,3 +315,26 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get match analytics: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_export_applications() -> dict:
+    """Export all tracked job applications as structured JSON.
+
+    Combines local tracking data into a single export. Useful for
+    spreadsheet import, backup, or analysis.
+
+    Returns:
+        - {status: "success", total, exported_at, applications: [...all...]}
+    """
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    apps.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
+
+    return {
+        "status": "success",
+        "total": len(apps),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "applications": apps,
+    }

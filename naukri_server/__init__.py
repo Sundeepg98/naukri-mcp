@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server v5 (58 tools) — package entry point."""
+"""Naukri.com Job Automation MCP Server v5 (61 tools) — package entry point."""
 
 from contextlib import asynccontextmanager
 

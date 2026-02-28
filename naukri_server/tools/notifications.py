@@ -53,7 +53,7 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
 async def naukri_mark_notification_read(notification_id: str, created_at: str) -> dict:
     """Mark a notification as read in your Naukri notification center.
 
-    Use naukri_get_notifications first to get the notification id and date.
+    Requires: notification_id and created_at from naukri_get_notifications results.
 
     Args:
         notification_id: Notification ID to mark as read
@@ -76,3 +76,47 @@ async def naukri_mark_notification_read(notification_id: str, created_at: str) -
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to mark notification read: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_mark_all_notifications_read() -> dict:
+    """Mark all unread notifications as read in your Naukri notification center.
+
+    Fetches all notifications, filters unread ones, and marks each as read.
+
+    Returns:
+        - {status: "success", marked_count, already_read}
+        - {status: "error", message}
+    """
+    try:
+        result = await naukri_get_notifications(limit=50)
+        if result.get("status") != "success":
+            return result
+
+        notifications = result.get("notifications", [])
+        unread = [n for n in notifications if not n.get("is_read")]
+
+        if not unread:
+            return {
+                "status": "success",
+                "marked_count": 0,
+                "already_read": len(notifications),
+            }
+
+        marked = 0
+        errors = []
+        for n in unread:
+            mark_result = await naukri_mark_notification_read(n["id"], n["date"])
+            if mark_result.get("status") == "success":
+                marked += 1
+            else:
+                errors.append({"id": n["id"], "error": mark_result.get("message")})
+
+        return {
+            "status": "success",
+            "marked_count": marked,
+            "already_read": len(notifications) - len(unread),
+            "errors": errors if errors else None,
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to mark all notifications read: {type(e).__name__}: {e}"}

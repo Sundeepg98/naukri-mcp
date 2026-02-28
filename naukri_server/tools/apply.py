@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
-from naukri_server.config import APPLY_TRAILER
+from naukri_server.config import APPLY_TRAILER, logger
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application
 
@@ -170,7 +170,7 @@ async def naukri_apply(
     job_id: str,
     answers: Optional[dict] = None,
 ) -> dict:
-    """Apply to a Naukri job via API. Two-phase flow:
+    """Apply to a single Naukri job. Two-phase flow:
 
     Phase 1 (no answers): Sends apply request. If the job has screening questions,
     returns them with options. If no questions, applies instantly.
@@ -178,8 +178,10 @@ async def naukri_apply(
     Phase 2 (with answers): Provide answers dict keyed by question text or question ID.
     Submits answers and completes application.
 
+    Requires: a job_id from naukri_search_jobs or naukri_get_job results.
+
     Args:
-        job_id: Naukri job ID (numeric string, from search results or get_job)
+        job_id: Naukri job ID (numeric string)
         answers: Dict of answers for screening questions. Keys can be:
                  - Question ID (from phase 1 response): {"12345": "5"}
                  - Question text substring: {"current ctc": "16", "notice period": "30"}
@@ -190,7 +192,7 @@ async def naukri_apply(
         - {status: "applied"} — success
         - {status: "needs_input", questions: [...]} — answer the questions and call again
         - {status: "already_applied"} — already applied
-        - {status: "error", message: "..."} — failure
+        - {status: "error", message} — failure
     """
     return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 
@@ -203,11 +205,13 @@ async def naukri_batch_apply(
     limit: int = 5,
     answers: Optional[dict] = None,
 ) -> dict:
-    """Search and apply to multiple jobs in parallel. Like Naukri Pro's auto-apply.
+    """Search and apply to multiple jobs in parallel.
 
     Searches for jobs, filters out already-applied ones, then applies to all
     remaining jobs concurrently. Screening questions are auto-answered from
     the cache or the provided answers dict.
+
+    For applying to a single specific job, use naukri_apply instead.
 
     Args:
         keywords: Job title or skills (e.g., "python developer", "react node.js")
@@ -218,14 +222,15 @@ async def naukri_batch_apply(
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
 
     Returns:
-        - {status: "completed", searched, filtered, applied, already_applied, needs_input, errors, pending_questions: [...], results: [{job_id, title, company, salary, location, status, ...}]}
-        - {status: "error", message}
+        - {status: "success"/"partial_success"/"error", searched, filtered, applied, already_applied, needs_input, errors, pending_questions: [...], results: [...]}
     """
     from naukri_server.tools.search import naukri_search_jobs
 
     if answers is None:
         answers = {}
     limit = min(limit, 20)
+    if limit <= 0:
+        return {"status": "error", "message": "limit must be a positive number"}
 
     # Step 1: Search
     search_result = await naukri_search_jobs(keywords, location, experience, limit)
@@ -240,18 +245,34 @@ async def naukri_batch_apply(
     to_apply = [j for j in all_jobs if not j.get("is_applied")]
     if not to_apply:
         return {
-            "status": "completed",
+            "status": "success",
             "message": f"All {len(all_jobs)} jobs already applied to",
             "searched": len(all_jobs),
             "filtered": 0,
         }
 
     # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
-    apply_tasks = [_apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
+    # Create tasks so we can cancel them on timeout
+    tasks = [asyncio.create_task(_apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
                                   tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
-                                                  "url": j.get("url"), "source": "batch"})
-                   for j in to_apply]
-    results = await asyncio.gather(*apply_tasks, return_exceptions=True)
+                                                  "url": j.get("url"), "source": "batch"}))
+             for j in to_apply]
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        logger.warning("Batch apply timed out after 120s")
+        results = []
+        for task in tasks:
+            try:
+                results.append(task.result() if task.done() else TimeoutError("Cancelled due to batch timeout"))
+            except (asyncio.CancelledError, Exception) as e:
+                results.append(e)
 
     # Step 4: Collect results
     applied = 0
@@ -307,8 +328,20 @@ async def naukri_batch_apply(
 
         per_job.append(entry)
 
+    # Determine final status based on outcomes
+    if applied > 0 and errors == 0 and needs_input == 0:
+        final_status = "success"
+    elif applied > 0 and (errors > 0 or needs_input > 0):
+        final_status = "partial_success"
+    elif applied == 0 and errors > 0:
+        final_status = "error"
+    elif applied == 0 and needs_input > 0 and errors == 0:
+        final_status = "partial_success"
+    else:
+        final_status = "success"
+
     return {
-        "status": "completed",
+        "status": final_status,
         "searched": len(all_jobs),
         "filtered": len(to_apply),
         "applied": applied,

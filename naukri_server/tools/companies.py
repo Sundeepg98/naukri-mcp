@@ -6,7 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API
+from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.search import _parse_job_list
 from naukri_server.validation import validate_company_list, validate_job_list
 
@@ -44,7 +44,7 @@ async def naukri_search_companies(
     page: int = 1,
     limit: int = 20,
 ) -> dict:
-    """Search for companies on Naukri.com.
+    """Search for companies on Naukri.com by name or industry.
 
     Args:
         keyword: Company name or industry keyword (e.g., "Google", "fintech")
@@ -52,7 +52,7 @@ async def naukri_search_companies(
         limit: Max results per page (default 20)
 
     Returns:
-        - {status: "success", keyword, page, total_found, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
+        - {status: "success", keyword, page, total, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
         - {status: "error", message}
     """
     try:
@@ -76,7 +76,7 @@ async def naukri_search_companies(
             "status": "success",
             "keyword": keyword,
             "page": page,
-            "total_found": data.get("noOfGroups"),
+            "total": data.get("noOfGroups"),
             "count": len(companies),
             "companies": companies,
         }
@@ -98,7 +98,7 @@ async def naukri_get_company_jobs(
 ) -> dict:
     """Get job listings from a specific company on Naukri.com.
 
-    Use naukri_search_companies first to get the group_id.
+    Requires: group_id from naukri_search_companies results.
 
     Args:
         group_id: Company group ID (from naukri_search_companies results)
@@ -106,7 +106,7 @@ async def naukri_get_company_jobs(
         limit: Max jobs to return (default 20, max 50)
 
     Returns:
-        - {status: "success", group_id, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
+        - {status: "success", group_id, page, total, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
     page_no = page  # save before shadowing by page_pool
@@ -124,8 +124,8 @@ async def naukri_get_company_jobs(
                 if "/jobapi/v3/search" in response.url and response.status == 200:
                     try:
                         captured["data"] = await response.json()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to parse company jobs response: %s", e)
                     response_event.set()
 
             page.on("response", on_response)
@@ -134,7 +134,7 @@ async def naukri_get_company_jobs(
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
-                    pass
+                    logger.warning("Company jobs response capture timed out after 10s for group: %s", group_id)
             finally:
                 page.remove_listener("response", on_response)
 
@@ -149,7 +149,7 @@ async def naukri_get_company_jobs(
                 "status": "success",
                 "group_id": group_id,
                 "page": page_no,
-                "total_found": data.get("noOfJobs"),
+                "total": data.get("noOfJobs"),
                 "count": len(jobs),
                 "jobs": jobs,
             }
@@ -168,7 +168,7 @@ async def naukri_follow_company(
 ) -> dict:
     """Check follow status, follow, or unfollow a company on Naukri.com.
 
-    Use naukri_search_companies first to get the group_id.
+    Requires: group_id from naukri_search_companies results.
 
     Args:
         group_id: Company group ID (from naukri_search_companies results)
@@ -216,3 +216,42 @@ async def naukri_follow_company(
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Company follow failed: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_get_company_follow_status(company_ids: list[str]) -> dict:
+    """Check follow status for multiple companies at once.
+
+    Requires: group_ids from naukri_search_companies results.
+
+    Args:
+        company_ids: List of company group IDs to check
+
+    Returns:
+        - {status: "success", followed: [...ids...], not_followed: [...ids...]}
+        - {status: "error", message}
+    """
+    try:
+        query = ",".join(company_ids)
+        data = await api_get(
+            COMPANY_FOLLOW_STATUS_API,
+            params={"query": query},
+        )
+        followed_raw = data.get("followedGroups", [])
+        followed_ids = set()
+        for g in followed_raw:
+            gid = str(g.get("id", g) if isinstance(g, dict) else g)
+            followed_ids.add(gid)
+
+        followed = [cid for cid in company_ids if cid in followed_ids]
+        not_followed = [cid for cid in company_ids if cid not in followed_ids]
+
+        return {
+            "status": "success",
+            "followed": followed,
+            "not_followed": not_followed,
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to check follow status: {type(e).__name__}: {e}"}

@@ -220,8 +220,8 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                     captured_responses.append({"url": response.url, "body": body})
                     if url_pattern and url_pattern in response.url:
                         response_event.set()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to parse response from %s: %s", response.url, e)
 
         page.on("response", on_response)
         try:
@@ -515,17 +515,13 @@ async def naukri_sync_applications(
     """Sync applied jobs from Naukri.com into local tracking.
 
     Pulls your application history from Naukri's backend and merges
-    with local applications.json. Preserves local-only fields (pending_questions,
-    tracking_extra, source, etc.). New jobs from Naukri are added with
-    source="naukri_sync".
+    with local applications.json. Preserves local-only fields. New jobs
+    from Naukri are added with source="naukri_sync".
 
-    Tries three strategies in order:
-    1. Direct REST API (if endpoint configured)
-    2. Browser JSON intercept (if URL pattern known)
-    3. HTML scraping of server-rendered applied-jobs page
+    For just viewing local applications, use naukri_get_applications instead.
 
     Args:
-        force_browser: If True, skip REST API and use browser/scrape strategies.
+        force_browser: If True, skip REST API and use browser strategies.
 
     Returns:
         - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, applications: [...first 20...]}
@@ -600,10 +596,9 @@ async def naukri_sync_saved_jobs(
 ) -> dict:
     """Sync saved/bookmarked jobs from Naukri.com into local tracking.
 
-    Pulls your saved jobs from Naukri's backend and merges with local
-    saved_jobs.json. Jobs saved locally but not on Naukri are preserved.
+    Pulls your saved jobs from Naukri and merges with local saved_jobs.json.
 
-    Tries direct REST API first, falls back to browser interception.
+    For just viewing local saved jobs, use naukri_get_saved_jobs instead.
 
     Args:
         force_browser: If True, skip REST API and use browser interception.

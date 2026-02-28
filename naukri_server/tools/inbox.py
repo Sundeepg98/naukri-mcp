@@ -24,6 +24,8 @@ async def naukri_get_inbox(
 ) -> dict:
     """List recruiter messages and invitations from your Naukri inbox.
 
+    For reading a specific message, use naukri_read_message.
+
     Supports filtering by mail type — pass mail_type="powerNvite" to see only
     paid NVite invitations from recruiters.  Leave empty for all messages.
 
@@ -141,9 +143,9 @@ async def naukri_get_inbox(
 
 @mcp.tool()
 async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
-    """Read the full content of a recruiter message from your Naukri inbox.
+    """Read a specific message from your Naukri inbox.
 
-    Use naukri_get_inbox first to get the message_id, vcard_id, and unique_id.
+    Requires: message_id, folder, and recipient_id from naukri_get_inbox results.
 
     Args:
         message_id: Message ID from inbox listing

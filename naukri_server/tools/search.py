@@ -16,10 +16,10 @@ async def naukri_search_jobs(
     limit: int = 20,
     page: int = 1,
 ) -> dict:
-    """Search for jobs on Naukri.com.
+    """Search for jobs on Naukri.com by keywords, location, and experience.
 
-    Navigates to the search page and intercepts the structured JSON response
-    that Naukri's frontend receives from its search API.
+    Search by keywords/location. For personalized suggestions based on your profile,
+    use naukri_get_recommendations instead.
 
     Args:
         keywords: Job title or skills (e.g., "python developer", "react")
@@ -29,7 +29,7 @@ async def naukri_search_jobs(
         page: Page number for pagination (default 1)
 
     Returns:
-        - {status: "success", keywords, location, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
+        - {status: "success", keywords, location, page, total, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
     page_no = page  # save before shadowing by page_pool
@@ -68,7 +68,7 @@ async def naukri_search_jobs(
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
-                    pass  # Fall through to check captured data
+                    logger.warning("Search response capture timed out after 10s for: %s", page_url)
             finally:
                 page.remove_listener("response", on_response)
 
@@ -83,7 +83,7 @@ async def naukri_search_jobs(
                 "keywords": keywords,
                 "location": location,
                 "page": page_no,
-                "total_found": data.get("noOfJobs"),
+                "total": data.get("noOfJobs"),
                 "count": len(jobs),
                 "jobs": jobs,
             }
@@ -136,11 +136,14 @@ def _parse_job_list(job_details: list, limit: int) -> list:
 async def naukri_get_recommendations(limit: int = 20) -> dict:
     """Get personalized job recommendations from Naukri's algorithm based on your profile.
 
+    AI-recommended jobs based on your profile, skills, and activity.
+    For keyword-based search, use naukri_search_jobs instead.
+
     Args:
         limit: Max jobs to return (default 20, max 50)
 
     Returns:
-        - {status: "success", source: "recommendations", total_found, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "success", source: "recommendations", total, count, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
     try:
@@ -150,7 +153,7 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
         result = {
             "status": "success",
             "source": "recommendations",
-            "total_found": data.get("noOfJobs"),
+            "total": data.get("noOfJobs"),
             "count": len(jobs),
             "jobs": jobs,
         }
@@ -168,12 +171,14 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
 async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
     """Get jobs similar to a given job posting on Naukri.com.
 
+    Requires: a job_id from naukri_search_jobs or naukri_get_job results.
+
     Args:
         job_id: The Naukri job ID to find similar jobs for
         limit: Max jobs to return (default 10)
 
     Returns:
-        - {status: "success", job_id, source: "similar", total_found, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "success", job_id, source: "similar", total, count, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
     try:
@@ -189,7 +194,7 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
             "status": "success",
             "job_id": job_id,
             "source": "similar",
-            "total_found": data.get("noOfJobs"),
+            "total": data.get("noOfJobs"),
             "count": len(jobs),
             "jobs": jobs,
         }

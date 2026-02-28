@@ -16,7 +16,7 @@ async def naukri_get_early_access_roles(page: int = 1, limit: int = 20) -> dict:
         limit: Max roles to return (default 20)
 
     Returns:
-        - {status: "success", page, total_found, count, roles: [{job_id, title, company_hint, location, experience, tags, url}]}
+        - {status: "success", page, total, count, roles: [{job_id, title, company_hint, location, experience, tags, url}]}
         - {status: "error", message}
     """
     try:
@@ -45,7 +45,7 @@ async def naukri_get_early_access_roles(page: int = 1, limit: int = 20) -> dict:
         return {
             "status": "success",
             "page": page,
-            "total_found": data.get("noOfJobs", data.get("totalJobs", len(roles))),
+            "total": data.get("noOfJobs", data.get("totalJobs", len(roles))),
             "count": len(roles),
             "roles": roles,
         }

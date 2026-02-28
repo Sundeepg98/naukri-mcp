@@ -263,29 +263,27 @@ UPDATABLE_FIELDS = {
     "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
 }
 
+BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills"}
+
 
 @mcp.tool()
 async def naukri_update_profile(fields: dict) -> dict:
-    """Update your Naukri profile fields via API (partial update).
+    """Update your Naukri profile fields via browser UI automation.
 
-    Sends only the fields you specify — everything else stays unchanged.
+    Currently only resumeHeadline and keySkills are supported via browser UI.
+    Other fields in the UPDATABLE_FIELDS set are validated but will return an
+    error saying they're not yet supported for browser UI updates.
+
     Use naukri_get_profile first to see current values.
 
     Args:
-        fields: Dict of fields to update. Supported keys:
+        fields: Dict of fields to update. Currently supported:
             - resumeHeadline: str — your profile headline
             - keySkills: str — comma-separated skills
-            - summary: str — profile summary / about me
-            - noticePeriod: dict — {"id": "1", "value": "15 Days or less"}
-            - expectedCtc: str — e.g. "20" (in lakhs)
-            - currentCtc: str — e.g. "16" (in lakhs)
-            - experience: dict — {"year": 8, "month": 0}
-            - locationPrefId: list — location preference IDs
-            - name: str — full name
-            - gender: str — "M" or "F"
+            Other fields are accepted but not yet implemented for browser UI.
 
     Returns:
-        - {status: "updated", updated_fields: [...], response: {...}}
+        - {status: "updated", updated_fields: [...], method, api_confirmed, message}
         - {status: "error", message}
     """
     if not fields:
