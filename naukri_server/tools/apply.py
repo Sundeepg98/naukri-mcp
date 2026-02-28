@@ -15,7 +15,8 @@ from naukri_server.tools.tracking import record_application
 # ============================================================================
 
 
-async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
+async def _apply_single(job_id: str, answers: Optional[dict] = None,
+                         title: str = None, company: str = None) -> dict:
     """Core apply logic — POST to apply endpoint, handle questions from cache.
 
     Used by both naukri_apply (single) and naukri_batch_apply (parallel).
@@ -60,7 +61,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
                     cache = _load_cache()
                     _cache_answers(questionnaire, answers, cache)
                     _save_cache(cache)
-            await record_application(job_id, status="applied")
+            await record_application(job_id, title=title, company=company, status="applied")
             return {
                 "status": "applied",
                 "job_id": job_id,
@@ -119,7 +120,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None) -> dict:
                 )
                 jobs2 = data2.get("jobs", [])
                 if jobs2 and jobs2[0].get("status") == 200:
-                    await record_application(job_id, status="applied")
+                    await record_application(job_id, title=title, company=company, status="applied")
                     return {
                         "status": "applied",
                         "job_id": job_id,
@@ -221,7 +222,7 @@ async def naukri_batch_apply(
         }
 
     # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
-    apply_tasks = [_apply_single(j["job_id"], answers) for j in to_apply]
+    apply_tasks = [_apply_single(j["job_id"], answers, j.get("title"), j.get("company")) for j in to_apply]
     results = await asyncio.gather(*apply_tasks, return_exceptions=True)
 
     # Step 4: Collect results
@@ -249,6 +250,8 @@ async def naukri_batch_apply(
             "job_id": job_info["job_id"],
             "title": job_info.get("title"),
             "company": job_info.get("company"),
+            "salary": job_info.get("salary"),
+            "location": job_info.get("location"),
             "status": status,
         }
 
@@ -310,6 +313,9 @@ def _format_answer(answer: str, q_type: str, options: dict) -> any:
     """Format answer for the Naukri API based on question type."""
     if q_type == "Text Box":
         return answer
+
+    if not options:
+        return answer  # Treat as text when no options exist
 
     option_values = list(options.values())
 

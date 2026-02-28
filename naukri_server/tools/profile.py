@@ -39,16 +39,18 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
         if profiles and isinstance(profiles[0], dict):
             headline = profiles[0].get("resumeHeadline", "")
             if headline:
-                await api_post(
-                    "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/fullprofiles",
-                    {"resumeHeadline": headline},
-                )
-                return {
-                    "status": "refreshed",
-                    "method": "rest_api",
-                    "headline_length": len(headline),
-                    "message": "Profile refreshed via REST API. You appear as 'recently active'.",
-                }
+                for version in ("v0", "v2"):
+                    try:
+                        endpoint = f"/cloudgateway-mynaukri/resman-aggregator-services/{version}/users/self/fullprofiles"
+                        await api_post(endpoint, {"resumeHeadline": headline})
+                        return {
+                            "status": "refreshed",
+                            "method": f"rest_api_{version}",
+                            "headline_length": len(headline),
+                            "message": f"Profile refreshed via REST API ({version}). You appear as 'recently active'.",
+                        }
+                    except Exception:
+                        continue
     except Exception as e:
         logger.warning("REST refresh failed, falling back to browser: %s", e)
 

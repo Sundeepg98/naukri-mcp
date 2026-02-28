@@ -22,7 +22,11 @@ def _save_cache(cache: dict):
 
 
 def _cache_key(question_name: str, answer_option: dict) -> str:
-    return f"{question_name}_{json.dumps(answer_option, sort_keys=True)}"
+    try:
+        opts = json.dumps(answer_option, sort_keys=True)
+    except (TypeError, ValueError):
+        opts = str(sorted(answer_option.items()) if answer_option else "")
+    return f"{question_name}_{opts}"
 
 
 _cache_lock = asyncio.Lock()

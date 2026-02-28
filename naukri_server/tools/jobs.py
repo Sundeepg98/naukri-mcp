@@ -17,7 +17,7 @@ def _extract_job_id(job_url_or_id: str) -> str:
     if job_url_or_id.isdigit():
         return job_url_or_id
     # URL pattern: ...-<jobId> at the end
-    match = re.search(r'(\d{10,})', job_url_or_id)
+    match = re.search(r'(\d{6,})', job_url_or_id)
     return match.group(1) if match else job_url_or_id
 
 

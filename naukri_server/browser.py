@@ -31,6 +31,17 @@ class NaukriBrowser:
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         await self._extract_token()
         logger.info("Browser started, token: %s", "found" if self.token else "none")
+        if self.token:
+            try:
+                from naukri_server.api import api_get
+                await api_get(
+                    "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+                    {"expand_level": "1"},
+                )
+                logger.info("Session validated — token is active")
+            except Exception as e:
+                logger.warning("Token found but invalid: %s. Call naukri_login.", e)
+                self.token = None
 
     async def stop(self):
         if self.context:
@@ -47,8 +58,8 @@ class NaukriBrowser:
                 if c["name"] == "nauk_at":
                     self.token = c["value"]
                     return self.token
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Token extraction failed: %s", e)
         self.token = None
         return None
 
@@ -63,6 +74,8 @@ class NaukriBrowser:
 
     async def ensure_token(self) -> str:
         """Get fresh token, raising if not logged in."""
+        if self.token:
+            return self.token
         await self._extract_token()
         if not self.token:
             raise ValueError("Not logged in — call naukri_login first")
