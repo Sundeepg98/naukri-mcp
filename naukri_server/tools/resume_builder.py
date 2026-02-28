@@ -17,24 +17,25 @@ async def naukri_get_resume_templates() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_get(RESUME_BUILDER_CONFIG_API)
+        data = await api_get(RESUME_BUILDER_CONFIG_API, params={"source": "rmLandingPage"})
 
-        # Response may be wrapped in data envelope
+        # Response: {statusCode, message, data: {templateConfiguration: {filters, templateDetails}}}
         inner = data.get("data", data) if isinstance(data, dict) else data
-
-        # Templates are in configurations list
-        configs = inner.get("configurations", inner) if isinstance(inner, dict) else inner
+        tc = inner.get("templateConfiguration", inner) if isinstance(inner, dict) else inner
+        configs = tc.get("templateDetails", tc.get("configurations", [])) if isinstance(tc, dict) else tc
 
         templates = []
         if isinstance(configs, list):
             for t in configs:
                 if isinstance(t, dict):
                     ttype = "free" if t.get("type") == 1 else "pro"
+                    icons = t.get("icons", {})
+                    preview = icons.get("variant1", "") if isinstance(icons, dict) else ""
                     templates.append({
-                        "id": t.get("id", t.get("templateId", "")),
-                        "name": t.get("name", t.get("templateName", "")),
+                        "id": t.get("id", ""),
+                        "name": t.get("name", ""),
                         "type": ttype,
-                        "preview_url": t.get("previewImage", t.get("image", "")),
+                        "preview_url": preview,
                     })
 
         free_count = sum(1 for t in templates if t["type"] == "free")

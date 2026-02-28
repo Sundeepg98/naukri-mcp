@@ -11,14 +11,45 @@ logger = logging.getLogger(__name__)
 AMBITIONBOX_BASE = "https://www.ambitionbox.com"
 
 
-async def _extract_next_data(timeout: int = 15000) -> dict | None:
+async def _extract_next_data() -> dict | None:
     """Extract __NEXT_DATA__ JSON from the current page."""
-    # Wait a moment for SSR content to be in the DOM
     await asyncio.sleep(2)
     return await browser.page.evaluate("""
         () => {
             const el = document.getElementById('__NEXT_DATA__');
-            return el ? JSON.parse(el.textContent) : null;
+            if (el) return JSON.parse(el.textContent);
+            // Fallback: check all script tags with type application/json
+            for (const s of document.querySelectorAll('script[type="application/json"]')) {
+                try {
+                    const d = JSON.parse(s.textContent);
+                    if (d && d.props && d.props.pageProps) return d;
+                } catch(e) {}
+            }
+            return null;
+        }
+    """)
+
+
+async def _scrape_salary_table() -> list:
+    """Fallback: scrape salary data directly from the rendered DOM table."""
+    return await browser.page.evaluate("""
+        () => {
+            const rows = document.querySelectorAll('[class*="salary"] table tbody tr, [class*="SalaryCard"], [class*="salaryCard"], [data-testid*="salary"]');
+            if (!rows.length) {
+                // Try finding designation-salary pairs from the page text
+                const cards = document.querySelectorAll('[class*="designation"], [class*="cmp-salary-card"]');
+                const results = [];
+                cards.forEach(card => {
+                    const text = card.innerText.trim();
+                    if (text) results.push({raw_text: text});
+                });
+                return results;
+            }
+            const results = [];
+            rows.forEach(row => {
+                results.push({raw_text: row.innerText.trim()});
+            });
+            return results;
         }
     """)
 
@@ -50,7 +81,7 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
                 url = f"{AMBITIONBOX_BASE}/salaries/{company_slug}-salaries"
 
             logger.info("Navigating to AmbitionBox salary page: %s", url)
-            await browser.page.goto(url, wait_until="networkidle", timeout=30000)
+            await browser.goto(url, wait="networkidle")
 
             # Check for 404 / invalid page
             if "404" in (await browser.page.title() or ""):
@@ -59,10 +90,21 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
             # Extract __NEXT_DATA__
             next_data = await _extract_next_data()
             if not next_data:
+                # Fallback: scrape salary data from the rendered DOM
+                dom_salaries = await _scrape_salary_table()
+                if dom_salaries:
+                    title = await browser.page.title() or ""
+                    return {
+                        "status": "success",
+                        "company": company_slug.replace("-", " ").title(),
+                        "url": url,
+                        "source": "dom_scrape",
+                        "salaries": dom_salaries,
+                        "page_title": title,
+                    }
                 return {
                     "status": "error",
-                    "message": "Could not find __NEXT_DATA__ on the page. "
-                               "The page structure may have changed or the company slug may be invalid.",
+                    "message": "Could not extract salary data from the page.",
                 }
 
             page_props = next_data.get("props", {}).get("pageProps", {})
@@ -195,7 +237,7 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             url = f"{AMBITIONBOX_BASE}/reviews/{company_slug}-reviews?page={page}"
 
             logger.info("Navigating to AmbitionBox reviews page: %s", url)
-            await browser.page.goto(url, wait_until="networkidle", timeout=30000)
+            await browser.goto(url, wait="networkidle")
 
             # Check for 404 / invalid page
             if "404" in (await browser.page.title() or ""):
@@ -206,8 +248,7 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             if not next_data:
                 return {
                     "status": "error",
-                    "message": "Could not find __NEXT_DATA__ on the page. "
-                               "The page structure may have changed or the company slug may be invalid.",
+                    "message": "Could not extract review data from the page.",
                 }
 
             page_props = next_data.get("props", {}).get("pageProps", {})
