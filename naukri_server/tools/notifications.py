@@ -50,20 +50,24 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
 
 
 @mcp.tool()
-async def naukri_mark_notification_read(notification_id: str) -> dict:
+async def naukri_mark_notification_read(notification_id: str, created_at: str) -> dict:
     """Mark a notification as read in your Naukri notification center.
 
-    Use naukri_get_notifications first to get the notification id.
+    Use naukri_get_notifications first to get the notification id and date.
 
     Args:
         notification_id: Notification ID to mark as read
+        created_at: The notification's creation timestamp (from the 'date' field in naukri_get_notifications)
 
     Returns:
         - {status: "success", notification_id}
         - {status: "error", message}
     """
     try:
-        await api_post(NOTIFICATION_READ_API, body={"notificationId": notification_id})
+        await api_post(NOTIFICATION_READ_API, body={
+            "notificationId": notification_id,
+            "createdAt": created_at,
+        })
         return {
             "status": "success",
             "notification_id": notification_id,
