@@ -121,7 +121,7 @@ async def _push_save_to_naukri(job_id: str) -> bool:
         logger.info("SAVE_JOB_API not configured, skipping remote sync")
         return False
     try:
-        await api_post(SAVE_JOB_API, {"jobId": job_id})
+        await api_post(f"{SAVE_JOB_API}{job_id}", {})
         return True
     except Exception as e:
         logger.warning("Failed to sync save to Naukri: %s", e)
