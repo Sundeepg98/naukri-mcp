@@ -16,7 +16,8 @@ from naukri_server.tools.tracking import record_application
 
 
 async def _apply_single(job_id: str, answers: Optional[dict] = None,
-                         title: str = None, company: str = None) -> dict:
+                         title: str = None, company: str = None,
+                         tracking_extra: dict = None) -> dict:
     """Core apply logic — POST to apply endpoint, handle questions from cache.
 
     Used by both naukri_apply (single) and naukri_batch_apply (parallel).
@@ -48,7 +49,13 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
         if not jobs:
             msg = data.get("message", "")
             if "already" in msg.lower():
+                await record_application(job_id, title=title, company=company,
+                                         status="already_applied",
+                                         extra={**(tracking_extra or {})})
                 return {"status": "already_applied", "job_id": job_id}
+            await record_application(job_id, title=title, company=company,
+                                     status="error",
+                                     extra={"message": msg or "Unexpected response", **(tracking_extra or {})})
             return {"status": "error", "job_id": job_id, "message": msg or "Unexpected response"}
 
         job_result = jobs[0]
@@ -61,7 +68,8 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     cache = _load_cache()
                     _cache_answers(questionnaire, answers, cache)
                     _save_cache(cache)
-            await record_application(job_id, title=title, company=company, status="applied")
+            await record_application(job_id, title=title, company=company, status="applied",
+                                     extra={**(tracking_extra or {})})
             return {
                 "status": "applied",
                 "job_id": job_id,
@@ -120,7 +128,8 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                 )
                 jobs2 = data2.get("jobs", [])
                 if jobs2 and jobs2[0].get("status") == 200:
-                    await record_application(job_id, title=title, company=company, status="applied")
+                    await record_application(job_id, title=title, company=company, status="applied",
+                                             extra={**(tracking_extra or {})})
                     return {
                         "status": "applied",
                         "job_id": job_id,
@@ -129,6 +138,9 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     }
 
             if pending:
+                await record_application(job_id, title=title, company=company,
+                                         status="needs_input",
+                                         extra={"pending_questions": len(pending), **(tracking_extra or {})})
                 return {
                     "status": "needs_input",
                     "job_id": job_id,
@@ -136,11 +148,20 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     "auto_answered": len(auto_answers),
                 }
 
+        await record_application(job_id, title=title, company=company,
+                                 status="error",
+                                 extra={"message": f"Apply returned status {status_code}", **(tracking_extra or {})})
         return {"status": "error", "job_id": job_id, "message": f"Apply returned status {status_code}"}
 
     except ValueError as e:
+        await record_application(job_id, title=title, company=company,
+                                 status="error",
+                                 extra={"message": str(e), **(tracking_extra or {})})
         return {"status": "error", "job_id": job_id, "message": str(e)}
     except Exception as e:
+        await record_application(job_id, title=title, company=company,
+                                 status="error",
+                                 extra={"message": f"{type(e).__name__}: {e!r}", **(tracking_extra or {})})
         return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}"}
 
 
@@ -171,7 +192,7 @@ async def naukri_apply(
         - {status: "already_applied"} — already applied
         - {status: "error", message: "..."} — failure
     """
-    return await _apply_single(job_id, answers)
+    return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 
 
 @mcp.tool()
@@ -195,6 +216,10 @@ async def naukri_batch_apply(
         limit: Max jobs to apply to (default 5, max 20)
         answers: Pre-filled answers for common screening questions.
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
+
+    Returns:
+        - {status: "completed", searched, filtered, applied, already_applied, needs_input, errors, pending_questions: [...], results: [{job_id, title, company, salary, location, status, ...}]}
+        - {status: "error", message}
     """
     from naukri_server.tools.search import naukri_search_jobs
 
@@ -222,7 +247,10 @@ async def naukri_batch_apply(
         }
 
     # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
-    apply_tasks = [_apply_single(j["job_id"], answers, j.get("title"), j.get("company")) for j in to_apply]
+    apply_tasks = [_apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
+                                  tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
+                                                  "url": j.get("url"), "source": "batch"})
+                   for j in to_apply]
     results = await asyncio.gather(*apply_tasks, return_exceptions=True)
 
     # Step 4: Collect results

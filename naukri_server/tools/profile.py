@@ -22,6 +22,11 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
     Args:
         randomize: If True, wait a random 0-300 seconds before refreshing
                    (useful for scheduled/cron-based calls to look natural)
+
+    Returns:
+        - {status: "refreshed", method, message}
+        - {status: "partial", method, message}
+        - {status: "error", message}
     """
     if randomize:
         import random
@@ -137,8 +142,12 @@ async def naukri_get_profile() -> dict:
     """Get your full Naukri profile via API.
 
     Returns skills (with experience years), employment history, education,
-    current CTC, expected CTC, notice period, location — everything needed
+    current CTC, expected CTC, notice period, location -- everything needed
     for Claude to auto-answer screening questions intelligently.
+
+    Returns:
+        - {status: "success", name, current_ctc, expected_ctc, notice_period, total_experience, skills_with_experience, employment, education}
+        - {status: "error", message}
     """
     try:
         data = await api_get(

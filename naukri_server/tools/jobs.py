@@ -31,8 +31,9 @@ async def naukri_get_job(job_url: str) -> dict:
     Args:
         job_url: Naukri job URL or job ID (numeric)
 
-    Returns title, company, description, skills, salary, match score,
-    and whether you can apply.
+    Returns:
+        - {status: "success", job_id, title, company, salary, experience, location, description, skills, match_score, is_applied, can_apply, url, ...}
+        - {status: "error", message}
     """
     async with browser._lock:
         try:

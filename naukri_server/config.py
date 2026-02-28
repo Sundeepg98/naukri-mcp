@@ -5,6 +5,7 @@ Configuration constants and logging setup for Naukri MCP server.
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,9 +24,9 @@ CACHE_FILE = Path(__file__).parent.parent / "questions.json"
 NAUKRI_BASE = "https://www.naukri.com"
 
 # Timeouts (ms for Playwright, seconds for aiohttp)
-NAV_TIMEOUT = 20_000
-ELEMENT_TIMEOUT = 5_000
-API_TIMEOUT = 30  # seconds
+NAV_TIMEOUT = int(os.environ.get("NAUKRI_NAV_TIMEOUT", "20000"))
+ELEMENT_TIMEOUT = int(os.environ.get("NAUKRI_ELEMENT_TIMEOUT", "5000"))
+API_TIMEOUT = int(os.environ.get("NAUKRI_API_TIMEOUT", "30"))
 
 # API headers (from Naukri-Automation reverse engineering)
 API_HEADERS = {

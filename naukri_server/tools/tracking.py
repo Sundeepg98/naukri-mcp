@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -28,56 +29,86 @@ def _load_json(path: Path) -> list:
 
 
 def _save_json(path: Path, data: list):
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
 
 async def record_application(job_id: str, title: str = None, company: str = None,
                               status: str = "applied", extra: dict = None):
-    """Record a job application. Called from apply.py after successful apply."""
+    """Record or update a job application."""
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
-        entry = {
-            "job_id": job_id,
-            "title": title,
-            "company": company,
-            "status": status,
-            "applied_at": datetime.now(timezone.utc).isoformat(),
-            **(extra or {}),
-        }
-        # Don't duplicate
-        if not any(a.get("job_id") == job_id for a in apps):
+        now = datetime.now(timezone.utc).isoformat()
+        existing = next((a for a in apps if a.get("job_id") == job_id), None)
+        if existing:
+            existing["status"] = status
+            existing["updated_at"] = now
+            if title:
+                existing["title"] = title
+            if company:
+                existing["company"] = company
+            if extra:
+                existing.update(extra)
+        else:
+            entry = {
+                "job_id": job_id,
+                "title": title,
+                "company": company,
+                "status": status,
+                "applied_at": now,
+                **(extra or {}),
+            }
             apps.append(entry)
-            _save_json(APPLICATIONS_FILE, apps)
-            logger.info("Recorded application for job %s", job_id)
+        _save_json(APPLICATIONS_FILE, apps)
 
 
 @mcp.tool()
 async def naukri_get_applications(
     status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     limit: int = 50,
 ) -> dict:
-    """Get tracked job applications.
+    """Get tracked job applications with filtering and summary stats.
 
     Args:
-        status: Filter by status ("applied", "needs_input", "rejected", etc.)
+        status: Filter by status ("applied", "needs_input", "already_applied", "error")
+        date_from: ISO date string, include applications on/after this date (e.g. "2026-02-01")
+        date_to: ISO date string, include applications on/before this date (e.g. "2026-02-28")
         limit: Max results to return (default 50)
 
-    Returns list of tracked applications with job details and timestamps.
+    Returns:
+        - {status: "success", total, count, summary: {total_all_statuses, by_status: {...}}, applications: [...]}
     """
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
-    if status:
-        apps = [a for a in apps if a.get("status") == status]
+    if date_from:
+        apps = [a for a in apps if (a.get("applied_at") or "") >= date_from]
+    if date_to:
+        cutoff = date_to + "T23:59:59" if "T" not in date_to else date_to
+        apps = [a for a in apps if (a.get("applied_at") or "") <= cutoff]
 
-    # Most recent first
-    apps.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
+    by_status = {}
+    for a in apps:
+        s = a.get("status", "unknown")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    if status:
+        filtered = [a for a in apps if a.get("status") == status]
+    else:
+        filtered = apps
+
+    filtered.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
 
     return {
         "status": "success",
-        "total": len(apps),
-        "count": min(len(apps), limit),
-        "applications": apps[:limit],
+        "total": len(filtered),
+        "count": min(len(filtered), limit),
+        "summary": {"total_all_statuses": len(apps), "by_status": by_status},
+        "applications": filtered[:limit],
     }
 
 
@@ -91,6 +122,10 @@ async def naukri_save_job(job_id: str, title: str = None, company: str = None,
         title: Job title (optional, for display)
         company: Company name (optional, for display)
         notes: Personal notes about this job
+
+    Returns:
+        - {status: "saved", job_id, total_saved}
+        - {status: "already_saved", job_id}
     """
     async with _saved_jobs_lock:
         saved = _load_json(SAVED_JOBS_FILE)
@@ -117,6 +152,9 @@ async def naukri_get_saved_jobs(limit: int = 50) -> dict:
 
     Args:
         limit: Max results to return (default 50)
+
+    Returns:
+        - {status: "success", total, count, saved_jobs: [...]}
     """
     async with _saved_jobs_lock:
         saved = _load_json(SAVED_JOBS_FILE)

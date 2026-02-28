@@ -27,6 +27,13 @@ async def naukri_login(
         method: "google" (recommended) or "email"
         email: Naukri email (only for method="email")
         password: Naukri password (only for method="email")
+
+    Returns:
+        - {status: "logged_in", method, profile_name, has_token: true}
+        - {status: "already_logged_in", profile_name, has_token: true}
+        - {status: "waiting_for_user", message} -- Google picker still open
+        - {status: "otp_required", needs_otp: true, message}
+        - {status: "error", message}
     """
     async with browser._lock:
         await browser.goto(f"{NAUKRI_BASE}/nlogin/login")
@@ -59,27 +66,21 @@ async def naukri_login(
             if not google_clicked:
                 return {"status": "error", "message": "Google login button not found. Try method='email'."}
 
-            await asyncio.sleep(5)
+            # Wait up to 30s for Google SSO to complete
+            for _ in range(30):
+                await asyncio.sleep(1)
+                current_url = browser.page.url
+                if "/nlogin" not in current_url and "accounts.google" not in current_url:
+                    token = await browser._extract_token()
+                    if not token:
+                        return {"status": "error", "message": "Login redirect completed but token not found. Try again."}
+                    name = await browser.get_profile_name()
+                    return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
 
-            if "/nlogin" not in browser.page.url and "accounts.google" not in browser.page.url:
-                token = await browser._extract_token()
-                if not token:
-                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
-                name = await browser.get_profile_name()
-                return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
-
-            if "accounts.google" in browser.page.url:
-                return {"status": "waiting_for_user", "message": "Google account picker is open. Select your account, then call naukri_login() again."}
-
-            await asyncio.sleep(3)
-            if "/nlogin" not in browser.page.url:
-                token = await browser._extract_token()
-                if not token:
-                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
-                name = await browser.get_profile_name()
-                return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
-
-            return {"status": "error", "message": "Google login did not complete. Check the browser."}
+            current_url = browser.page.url
+            if "accounts.google" in current_url:
+                return {"status": "waiting_for_user", "message": "Google account picker is still open. Select your account in the browser, then call naukri_login() again."}
+            return {"status": "error", "message": "Google login did not complete within 30s. Check the browser."}
 
         else:
             if not email or not password:
@@ -119,6 +120,10 @@ async def naukri_verify_otp(otp: str) -> dict:
 
     Args:
         otp: 6-digit OTP from SMS/email
+
+    Returns:
+        - {status: "logged_in", profile_name, has_token: true}
+        - {status: "error", message}
     """
     async with browser._lock:
         # Validate OTP format

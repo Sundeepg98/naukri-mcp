@@ -6,6 +6,7 @@ import asyncio
 from typing import Optional
 
 from playwright.async_api import async_playwright, BrowserContext, Page
+from playwright._impl._errors import TargetClosedError
 
 from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, logger
 
@@ -81,11 +82,35 @@ class NaukriBrowser:
             raise ValueError("Not logged in — call naukri_login first")
         return self.token
 
+    async def _recover_page(self) -> None:
+        """Attempt to recover from a crashed browser page."""
+        logger.warning("Browser page appears dead, attempting recovery...")
+        try:
+            self.page = await self.context.new_page()
+            logger.info("Recovered: new page created in existing context")
+            return
+        except Exception:
+            pass
+        logger.warning("Context also dead, performing full browser restart...")
+        try:
+            await self.stop()
+        except Exception:
+            pass
+        await self.start()
+        logger.info("Full browser restart completed")
+
     async def goto(self, url: str, wait: str = "domcontentloaded") -> None:
         try:
             await self.page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
+        except TargetClosedError:
+            await self._recover_page()
+            await self.page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
         except Exception:
-            await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
+            try:
+                await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
+            except TargetClosedError:
+                await self._recover_page()
+                await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
 
     async def text(self, selector: str) -> Optional[str]:
         el = await self.page.query_selector(selector)

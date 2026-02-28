@@ -26,7 +26,9 @@ async def naukri_search_jobs(
         limit: Max jobs to return (default 20, max 50)
         page: Page number for pagination (default 1)
 
-    Returns list of jobs with id, title, company, salary, location, URL.
+    Returns:
+        - {status: "success", keywords, location, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
+        - {status: "error", message}
     """
     async with browser._lock:
         try:

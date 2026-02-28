@@ -16,9 +16,13 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
     """Debug tool: capture current page state for troubleshooting.
 
     Args:
-        action: "snapshot" — DOM structure | "screenshot" — saves debug.png |
-                "scan" — deep scan for specific elements (chatbot, neo, agent, iframe)
+        action: "snapshot" -- DOM structure | "screenshot" -- saves debug.png |
+                "scan" -- deep scan for specific elements (chatbot, neo, agent, iframe)
         url: Optional URL to navigate to before performing the action
+
+    Returns:
+        - {status: "ok", url, title, ...action-specific data...}
+        - {status: "error", message}
     """
     async with browser._lock:
         if url:

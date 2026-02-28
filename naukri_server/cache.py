@@ -4,6 +4,7 @@ Answer cache — persists across sessions.
 
 import asyncio
 import json
+import os
 
 from naukri_server.config import CACHE_FILE
 
@@ -18,7 +19,10 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict):
-    CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+    text = json.dumps(cache, indent=2, ensure_ascii=False)
+    tmp = CACHE_FILE.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(CACHE_FILE))
 
 
 def _cache_key(question_name: str, answer_option: dict) -> str:

@@ -21,6 +21,10 @@ async def naukri_upload_resume(file_path: str) -> dict:
 
     Args:
         file_path: Absolute path to the resume file
+
+    Returns:
+        - {status: "uploaded", file, message}
+        - {status: "error", message}
     """
     path = Path(file_path)
 
