@@ -282,90 +282,71 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
                 or company_slug
             )
 
-            # Extract overall rating — actual key: ratingsData
+            # Overall rating — ratingsData.overallCompanyRating (float like 3.8)
             rating_data = page_props.get("ratingsData", {}) or {}
-            overall_rating = (
-                rating_data.get("overallRating")
-                or rating_data.get("rating")
-            )
+            overall_rating = rating_data.get("overallCompanyRating")
             review_count = (
-                page_props.get("reviewCount")
-                or page_props.get("fixedReviewCount")
-                or rating_data.get("totalReviewCount")
+                page_props.get("fixedReviewCount")
+                or page_props.get("reviewCount")
             )
 
-            # Rating distribution — actual key: ratingDistribution (dict of star:count)
+            # Rating distribution — ratingDistribution is dict {"5": 281, "4": 130, ...}
             rating_dist_raw = page_props.get("ratingDistribution", {})
-            rating_distribution = None
-            if isinstance(rating_dist_raw, dict) and rating_dist_raw:
-                rating_distribution = rating_dist_raw
-            elif isinstance(rating_dist_raw, list):
-                rating_distribution = {
-                    str(entry.get("rating", entry.get("star", i + 1))): entry.get("count", entry.get("value"))
-                    for i, entry in enumerate(rating_dist_raw)
-                    if isinstance(entry, dict)
-                }
+            rating_distribution = rating_dist_raw if isinstance(rating_dist_raw, dict) and rating_dist_raw else None
 
-            # Category ratings — from ratingsData or ratingCounts
-            category_ratings_raw = page_props.get("ratingCounts", rating_data.get("categoryRatings", []))
+            # Category ratings — ratingsData has float ratings, ratingCounts has counts
+            # Use ratingsData for actual ratings (exclude overallCompanyRating)
             category_ratings = {}
-            if isinstance(category_ratings_raw, list):
-                for cat in category_ratings_raw:
-                    if not isinstance(cat, dict):
-                        continue
-                    cat_name = cat.get("name") or cat.get("category") or cat.get("label")
-                    cat_rating = cat.get("rating") or cat.get("value") or cat.get("avgRating")
-                    if cat_name:
-                        category_ratings[cat_name] = cat_rating
-            elif isinstance(category_ratings_raw, dict):
-                category_ratings = category_ratings_raw
+            _rating_key_labels = {
+                "workSatisfactionRating": "Work Satisfaction",
+                "careerGrowthRating": "Career Growth",
+                "skillDevelopmentRating": "Skill Development",
+                "workLifeRating": "Work-Life Balance",
+                "compensationBenefitsRating": "Compensation & Benefits",
+                "jobSecurityRating": "Job Security",
+                "companyCultureRating": "Company Culture",
+            }
+            for key, label in _rating_key_labels.items():
+                val = rating_data.get(key)
+                if val is not None:
+                    category_ratings[label] = val
 
-            # Individual reviews — actual keys: reviewsData, detailedReviews
-            raw_reviews = (
-                page_props.get("reviewsData")
-                or page_props.get("detailedReviews")
-                or page_props.get("reviews")
-                or []
-            )
+            # Individual reviews — reviewsData is list of review dicts
+            raw_reviews = page_props.get("reviewsData") or page_props.get("detailedReviews") or []
             reviews = []
             if isinstance(raw_reviews, list):
                 for rev in raw_reviews:
                     if not isinstance(rev, dict):
                         continue
+                    # Extract designation from nested jobProfile object
+                    job_profile = rev.get("jobProfile") or {}
+                    designation = job_profile.get("name") if isinstance(job_profile, dict) else None
+                    # Extract location from nested jobLocation object
+                    job_location = rev.get("jobLocation") or {}
+                    location = job_location.get("name") if isinstance(job_location, dict) else None
+
                     reviews.append({
-                        "title": rev.get("title") or rev.get("reviewTitle") or rev.get("heading"),
-                        "rating": rev.get("overallRating") or rev.get("rating"),
-                        "designation": (
-                            rev.get("designation")
-                            or rev.get("jobTitle")
-                            or rev.get("jobRole")
-                        ),
-                        "department": rev.get("department") or rev.get("dept"),
-                        "employment_type": (
-                            rev.get("employmentType")
-                            or rev.get("empType")
-                            or rev.get("type")
-                        ),
-                        "experience": rev.get("experience") or rev.get("tenure"),
-                        "date": (
-                            rev.get("reviewDate")
-                            or rev.get("date")
-                            or rev.get("createdAt")
-                            or rev.get("postedOn")
-                        ),
-                        "likes": rev.get("likes") or rev.get("pros") or rev.get("prosText"),
-                        "dislikes": rev.get("dislikes") or rev.get("cons") or rev.get("consText"),
-                        "is_current_employee": rev.get("isCurrentEmployee") or rev.get("isCurrent"),
-                        "helpful_count": rev.get("helpfulCount") or rev.get("upvoteCount"),
+                        "title": rev.get("reviewTitle"),
+                        "rating": rev.get("overallCompanyRating"),
+                        "designation": designation,
+                        "location": location,
+                        "department": rev.get("division"),
+                        "employment_type": rev.get("employmentType"),
+                        "work_policy": rev.get("workPolicy"),
+                        "date": rev.get("created"),
+                        "likes": rev.get("likesText"),
+                        "dislikes": rev.get("disLikesText"),
+                        "is_current_employee": rev.get("currentJob"),
+                        "verified": rev.get("verified"),
+                        "helpful_count": rev.get("helpfulCount"),
                     })
 
-            # Pagination info
-            pagination = page_props.get("pagination", {}) or {}
-            total_pages = (
-                pagination.get("totalPages")
-                or pagination.get("lastPage")
-                or page_props.get("totalPages")
-            )
+            # Pagination — detailedReviewPagination or pagination
+            pagination = page_props.get("detailedReviewPagination") or page_props.get("pagination") or {}
+            total_pages = pagination.get("totalPages") or pagination.get("lastPage")
+
+            # Review summary (AI-generated)
+            review_summary = page_props.get("reviewSummary")
 
             result = {
                 "status": "success",
@@ -384,9 +365,8 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             if rating_distribution:
                 result["rating_distribution"] = rating_distribution
 
-            # Include raw pageProps keys for debugging if review data seems sparse
-            if not reviews and not overall_rating:
-                result["_debug_page_props_keys"] = list(page_props.keys())
+            if review_summary:
+                result["review_summary"] = review_summary
 
             return result
 
