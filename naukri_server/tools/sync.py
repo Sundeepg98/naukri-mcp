@@ -24,7 +24,120 @@ _SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJob
 
 
 # ---------------------------------------------------------------------------
-# Dual-strategy fetch helpers
+# HTML scrape: adaptive JS for extracting applied jobs from server-rendered page
+# ---------------------------------------------------------------------------
+
+_SCRAPE_APPLIED_JOBS_JS = """() => {
+    // Adaptive applied-jobs page scraper — tries multiple CSS selector strategies
+
+    const STRATEGIES = [
+        { name: 'tuple',       cardSelector: '[class*="tuple"]' },
+        { name: 'jobCard',     cardSelector: '[class*="jobCard"], [class*="job-card"], [class*="JobCard"]' },
+        { name: 'data-job-id', cardSelector: '[data-job-id]' },
+        { name: 'appliedJob',  cardSelector: '[class*="applied"], [class*="application"]' },
+        { name: 'list-item',   cardSelector: '[class*="list"] > [class*="row"], [class*="list"] > li, [class*="list"] > article' },
+    ];
+
+    function extractField(card, patterns) {
+        for (const p of patterns) {
+            try {
+                const el = card.querySelector(p);
+                if (el) {
+                    const t = (el.textContent || '').trim();
+                    if (t && t.length > 0 && t.length < 500) return t;
+                }
+            } catch(e) {}
+        }
+        return null;
+    }
+
+    function extractLink(card, patterns) {
+        for (const p of patterns) {
+            try {
+                const el = card.querySelector(p);
+                if (el && el.href) return el.href;
+            } catch(e) {}
+        }
+        const anchors = card.querySelectorAll('a[href]');
+        for (const a of anchors) {
+            if (a.href && (a.href.includes('/job') || a.href.includes('jobId'))) return a.href;
+        }
+        return null;
+    }
+
+    function extractJobId(card, url) {
+        const dataId = card.getAttribute('data-job-id') || card.getAttribute('data-jobid');
+        if (dataId) return dataId;
+        if (url) { const m = url.match(/([0-9]{6,})/); if (m) return m[1]; }
+        const idEl = card.querySelector('[data-job-id], [data-jobid], [data-id]');
+        if (idEl) return idEl.getAttribute('data-job-id') || idEl.getAttribute('data-jobid') || idEl.getAttribute('data-id');
+        const h = card.outerHTML.slice(0, 500);
+        const im = h.match(/[jJ]ob[iI]d['":\\s=]+['"]*([0-9]{6,})/);
+        if (im) return im[1];
+        return null;
+    }
+
+    const TITLE = ['[class*="title"] a', '[class*="Title"] a', '[class*="desig"]', 'a[class*="title"]', 'h2 a', 'h3 a', 'h4 a', 'a:first-of-type'];
+    const COMPANY = ['[class*="comp"]', '[class*="Comp"]', '[class*="company"]', '[class*="org"]', '[class*="subTitle"]'];
+    const STATUS = ['[class*="status"]', '[class*="Status"]', '[class*="appStatus"]', '[class*="state"]', '[class*="badge"]'];
+    const DATE = ['[class*="date"]', '[class*="Date"]', '[class*="applied"]', '[class*="time"]', 'time', '[datetime]'];
+    const LOCATION = ['[class*="loc"]', '[class*="Loc"]', '[class*="location"]', '[class*="city"]'];
+    const SALARY = ['[class*="sal"]', '[class*="Sal"]', '[class*="salary"]', '[class*="ctc"]', '[class*="package"]'];
+
+    for (const strategy of STRATEGIES) {
+        let cards;
+        try { cards = document.querySelectorAll(strategy.cardSelector); } catch(e) { continue; }
+        if (cards.length === 0 || cards.length >= 200) continue;
+
+        const jobs = [];
+        for (const card of cards) {
+            const url = extractLink(card, TITLE);
+            const job_id = extractJobId(card, url);
+            const title = extractField(card, TITLE);
+            if (!title && !job_id) continue;
+            jobs.push({
+                job_id: job_id, title: title,
+                company: extractField(card, COMPANY),
+                status: extractField(card, STATUS),
+                applied_date: extractField(card, DATE),
+                location: extractField(card, LOCATION),
+                salary: extractField(card, SALARY),
+                url: url,
+            });
+        }
+        if (jobs.length > 0) {
+            const pagination = { has_next: false, current_page: 1, total_pages: null };
+            try {
+                const nextBtn = document.querySelector(
+                    'a[class*="next" i], a[class*="Next"], [class*="paginat"] a:last-child, ' +
+                    'a[aria-label*="next" i], button[class*="next" i], [class*="fright"] a'
+                );
+                if (nextBtn && !nextBtn.classList.toString().toLowerCase().includes('disabled') &&
+                    !nextBtn.hasAttribute('disabled')) pagination.has_next = true;
+                const activePage = document.querySelector('[class*="paginat"] [class*="active"], [class*="paginat"] .selected');
+                if (activePage) { const n = parseInt(activePage.textContent.trim()); if (!isNaN(n)) pagination.current_page = n; }
+                let maxPage = 0;
+                document.querySelectorAll('[class*="paginat"] a').forEach(a => {
+                    const n = parseInt(a.textContent.trim()); if (!isNaN(n) && n > maxPage) maxPage = n;
+                });
+                if (maxPage > 0) pagination.total_pages = maxPage;
+            } catch(e) {}
+            return { strategy: strategy.name, jobs: jobs, pagination: pagination, total_on_page: jobs.length };
+        }
+    }
+
+    // All strategies failed — return diagnostics
+    const diag = {};
+    for (const s of STRATEGIES) {
+        try { diag[s.name] = document.querySelectorAll(s.cardSelector).length; } catch(e) { diag[s.name] = 'error'; }
+    }
+    return { error: 'no_matching_strategy', diagnostics: diag, page_title: document.title,
+             body_length: (document.body.textContent || '').length, url: window.location.href };
+}"""
+
+
+# ---------------------------------------------------------------------------
+# Fetch helpers (REST, browser intercept, HTML scrape)
 # ---------------------------------------------------------------------------
 
 async def _fetch_via_rest(api_path: Optional[str], params: dict = None) -> Optional[dict]:
@@ -92,6 +205,59 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                        key=lambda r: len(json.dumps(r["body"], default=str)))["body"]
 
         return None
+
+
+async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional[list]:
+    """Fetch applied jobs by scraping server-rendered HTML via page.evaluate().
+
+    Navigates to the applied-jobs page, extracts job cards from the DOM
+    using adaptive CSS selectors, and handles pagination.
+
+    Returns a list of normalized job dicts, or None if scraping failed.
+    """
+    async with browser._lock:
+        all_jobs = []
+        current_page = 1
+
+        while current_page <= max_pages:
+            url = page_url if current_page == 1 else f"{page_url}?pageNo={current_page}"
+            await browser.goto(url)
+            await asyncio.sleep(2)  # let server-rendered content settle
+
+            # Detect login redirect
+            current_url = browser.page.url
+            if "login" in current_url.lower() or "nologin" in current_url.lower():
+                logger.warning("HTML scrape: redirected to login (%s)", current_url)
+                return None
+
+            result = await browser.page.evaluate(_SCRAPE_APPLIED_JOBS_JS)
+
+            if result is None or result.get("error"):
+                logger.warning("HTML scrape page %d: %s", current_page,
+                               result.get("error") if result else "null")
+                if current_page == 1:
+                    # Log diagnostics for first-page failure
+                    if result and result.get("diagnostics"):
+                        logger.info("HTML scrape diagnostics: %s", result)
+                    return None
+                break  # partial results from earlier pages
+
+            page_jobs = result.get("jobs", [])
+            if not page_jobs:
+                break
+
+            all_jobs.extend(page_jobs)
+
+            has_next = result.get("pagination", {}).get("has_next", False)
+            if not has_next:
+                break
+            current_page += 1
+
+        if not all_jobs:
+            return None
+
+        logger.info("HTML scrape: %d applied jobs across %d page(s)", len(all_jobs), current_page)
+        return all_jobs
 
 
 # ---------------------------------------------------------------------------
@@ -297,45 +463,63 @@ async def naukri_sync_applications(
     tracking_extra, source, etc.). New jobs from Naukri are added with
     source="naukri_sync".
 
-    NOTE: Naukri's applied-jobs page is server-rendered with no client-side API.
-    This tool only works if a REST API endpoint has been discovered and configured.
-    Currently returns "not_available" until an endpoint is found.
-    Applications made via naukri_apply/naukri_batch_apply are always tracked locally.
+    Tries three strategies in order:
+    1. Direct REST API (if endpoint configured)
+    2. Browser JSON intercept (if URL pattern known)
+    3. HTML scraping of server-rendered applied-jobs page
 
     Args:
-        force_browser: If True, skip REST API and use browser interception
-                       (requires a known URL pattern to avoid capturing wrong data).
+        force_browser: If True, skip REST API and use browser/scrape strategies.
 
     Returns:
         - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, applications: [...first 20...]}
-        - {status: "not_available", message} — no API endpoint discovered
         - {status: "error", message}
     """
     try:
         remote_data = None
+        remote_jobs = None
         method = "unknown"
 
+        # Strategy 1: REST API
         if not force_browser:
             remote_data = await _fetch_via_rest(APPLIED_JOBS_API)
             if remote_data is not None:
                 method = "rest_api"
 
+        # Strategy 2: Browser JSON intercept (only if URL pattern known)
         if remote_data is None and _APPLIED_JOBS_URL_PATTERN:
             remote_data = await _fetch_via_browser(
                 APPLIED_JOBS_PAGE,
                 url_pattern=_APPLIED_JOBS_URL_PATTERN,
             )
-            method = "browser_intercept"
+            if remote_data is not None:
+                method = "browser_intercept"
 
-        if remote_data is None:
+        # Strategy 3: HTML scraping (server-rendered page)
+        if remote_data is None and remote_jobs is None:
+            scraped = await _fetch_via_html_scrape(APPLIED_JOBS_PAGE)
+            if scraped is not None:
+                remote_jobs = scraped  # already normalized, skip _parse_applied_jobs
+                method = "html_scrape"
+
+        # Parse JSON strategies through the parser
+        if remote_data is not None and remote_jobs is None:
+            remote_jobs = _parse_applied_jobs(remote_data)
+
+        if remote_jobs is None:
             return {
-                "status": "not_available",
-                "message": ("No applied-jobs API endpoint discovered yet. "
-                            "Naukri's applied-jobs page is server-rendered with no client-side API. "
-                            "Applications made via naukri_apply/naukri_batch_apply are tracked locally."),
+                "status": "error",
+                "message": ("Could not fetch applied jobs. "
+                            "All strategies failed (REST, browser intercept, HTML scrape). "
+                            "You may need to log in first via naukri_login."),
             }
 
-        remote_jobs = _parse_applied_jobs(remote_data)
+        # Normalize status labels
+        for job in remote_jobs:
+            if job.get("status"):
+                job["status"] = _map_naukri_status(job["status"])
+            else:
+                job["status"] = "applied"
 
         async with _applications_lock:
             local_apps = _load_json(APPLICATIONS_FILE)
