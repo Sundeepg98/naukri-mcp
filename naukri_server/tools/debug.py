@@ -48,7 +48,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
     """
     async with browser._lock:
         # fetch_api and click_discover use url differently — skip goto for them
-        if url and action not in ("fetch_api", "click_discover"):
+        if url and action not in ("fetch_api", "fetch_widget", "post_api", "click_discover"):
             await browser.goto(url)
             await asyncio.sleep(3)
         current_url = browser.page.url
@@ -61,7 +61,8 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
 
         if action == "fetch_api":
             # Use page.evaluate(fetch()) to call API from browser context
-            # url parameter is the API path to fetch
+            # url parameter is the API path to fetch (GET)
+            # For POST: use "post_api" action instead
             api_url = url or ""
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
@@ -94,6 +95,163 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             }""", api_url)
             return {"status": "ok", "fetch_result": result}
 
+        if action == "post_api":
+            # POST fetch from browser context with custom body
+            # url format: "API_PATH|JSON_BODY"
+            # e.g. "/cloudgateway-nc-js/nc-services/v0/template/foo|{\"pageNo\":1}"
+            parts = (url or "").split("|", 1)
+            api_url = parts[0] if parts else ""
+            post_body = parts[1] if len(parts) > 1 else "{}"
+            if not api_url.startswith("http"):
+                api_url = f"https://www.naukri.com{api_url}"
+            result = await browser.page.evaluate("""async ([apiUrl, postBody]) => {
+                try {
+                    const resp = await fetch(apiUrl, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json',
+                            'appid': '121',
+                            'clientid': 'd3skt0p',
+                            'content-type': 'application/json',
+                            'systemid': 'Naukri',
+                            'x-requested-with': 'XMLHttpRequest',
+                        },
+                        body: postBody,
+                    });
+                    const text = await resp.text();
+                    let body = null;
+                    try { body = JSON.parse(text); } catch(e) { body = text.slice(0, 5000); }
+                    return {
+                        status: resp.status,
+                        url: resp.url,
+                        ok: resp.ok,
+                        headers: Object.fromEntries(resp.headers.entries()),
+                        body: body,
+                    };
+                } catch(e) {
+                    return {error: e.message};
+                }
+            }""", [api_url, post_body])
+            return {"status": "ok", "post_result": result}
+
+        if action == "fetch_widget":
+            # Like fetch_api but uses widget headers (appid:109, systemid:109)
+            api_url = url or ""
+            if not api_url.startswith("http"):
+                api_url = f"https://www.naukri.com{api_url}"
+            result = await browser.page.evaluate("""async (apiUrl) => {
+                try {
+                    const resp = await fetch(apiUrl, {
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'appid': '109',
+                            'systemid': '109',
+                            'clientid': 'd3skt0p',
+                            'x-requested-with': 'XMLHttpRequest',
+                        },
+                    });
+                    const text = await resp.text();
+                    let body = null;
+                    try { body = JSON.parse(text); } catch(e) { body = text.slice(0, 2000); }
+                    return {
+                        status: resp.status,
+                        url: resp.url,
+                        ok: resp.ok,
+                        headers: Object.fromEntries(resp.headers.entries()),
+                        body: body,
+                    };
+                } catch(e) {
+                    return {error: e.message};
+                }
+            }""", api_url)
+            return {"status": "ok", "fetch_result": result}
+
+        if action == "fetch_all_statuses":
+            # Like discover but captures ALL responses (not just 200)
+            captured_responses = []
+
+            async def on_any_response(response, _captures=captured_responses):
+                content_type = response.headers.get("content-type", "")
+                if "json" in content_type or "javascript" in content_type:
+                    try:
+                        text = await response.text()
+                        body = None
+                        try:
+                            import json as _json
+                            body = _json.loads(text)
+                        except Exception:
+                            body = text[:500]
+                        _captures.append({
+                            "url": response.url,
+                            "method": response.request.method,
+                            "status": response.status,
+                            "content_type": content_type,
+                            "request_headers": {k: v for k, v in response.request.headers.items()
+                                                if k.lower() in ("appid", "systemid", "clientid", "authorization", "content-type")},
+                            "body_preview": _truncate_body(body) if isinstance(body, (dict, list)) else str(body)[:500],
+                        })
+                    except Exception as ex:
+                        _captures.append({
+                            "url": response.url,
+                            "status": response.status,
+                            "error": str(ex),
+                        })
+
+            target_url = url or browser.page.url
+            browser.page.on("response", on_any_response)
+            try:
+                await browser.goto(target_url)
+                await asyncio.sleep(8)
+                await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(3)
+            finally:
+                browser.page.remove_listener("response", on_any_response)
+
+            return {
+                "status": "ok",
+                "target_url": target_url,
+                "final_url": browser.page.url,
+                "total_captured": len(captured_responses),
+                "responses": captured_responses,
+            }
+
+        if action == "intercept_requests":
+            # Intercept outgoing requests (not just responses) to capture POST bodies
+            # Navigate to URL and log all request details
+            captured_requests = []
+
+            async def on_request(request, _captures=captured_requests):
+                if request.method == "POST" and "json" in (request.headers.get("content-type", "") or ""):
+                    try:
+                        _captures.append({
+                            "url": request.url,
+                            "method": request.method,
+                            "post_data": request.post_data[:3000] if request.post_data else None,
+                            "headers": {k: v for k, v in request.headers.items()
+                                        if k.lower() in ("content-type", "appid", "systemid", "authorization")},
+                        })
+                    except Exception:
+                        pass
+
+            browser.page.on("request", on_request)
+            try:
+                nav_url = url or browser.page.url
+                await browser.goto(nav_url)
+                await asyncio.sleep(5)
+                await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(3)
+            finally:
+                browser.page.remove_listener("request", on_request)
+
+            return {
+                "status": "ok",
+                "intercepted_requests_count": len(captured_requests),
+                "intercepted_requests": captured_requests,
+            }
+
         if action == "click_discover":
             # Click an element and capture resulting API calls
             # url parameter format: "selector|target_url_or_current"
@@ -113,13 +271,17 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                 if response.status == 200 and "json" in content_type:
                     try:
                         body = await response.json()
-                        _captures.append({
+                        entry = {
                             "url": response.url,
                             "method": response.request.method,
                             "status": response.status,
                             "body_keys": list(body.keys()) if isinstance(body, dict) else f"[list of {len(body)}]",
                             "body_preview": _truncate_body(body, max_depth=3, max_items=10),
-                        })
+                        }
+                        # Capture POST request body if present
+                        if response.request.method == "POST" and response.request.post_data:
+                            entry["request_body"] = response.request.post_data[:2000]
+                        _captures.append(entry)
                     except Exception:
                         pass
 
@@ -721,13 +883,17 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                     if response.status == 200 and "json" in content_type:
                         try:
                             body = await response.json()
-                            _captures.append({
+                            entry = {
                                 "url": response.url,
                                 "method": response.request.method,
                                 "status": response.status,
                                 "body_keys": list(body.keys()) if isinstance(body, dict) else f"[list of {len(body)}]",
                                 "body_preview": _truncate_body(body),
-                            })
+                            }
+                            # Capture POST request body if present
+                            if response.request.method == "POST" and response.request.post_data:
+                                entry["request_body"] = response.request.post_data[:2000]
+                            _captures.append(entry)
                         except Exception:
                             pass
 

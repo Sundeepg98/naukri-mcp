@@ -77,9 +77,11 @@ NOTIFICATION_READ_API = "/cloudgateway-mynaukri/notification-center-services/v0/
 DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
 MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"
 
-# Job Alerts (discovered via webpack chunk analysis of SRP page JS)
-# SSA = "Save Search Alert" — the main job alert CRUD endpoint
+# Job Alerts (discovered via webpack chunk analysis of SRP page JS + live API research)
+# SSA = "Save Search Alert" — create-only endpoint (POST)
 JOB_ALERT_API = "/alertapi/v2/ssa"  # POST → create alert {name, keyword, location, functionAreaId, roleId, experience, minCTC, industryTypeId, email}
+# CJA = "Custom Job Alerts" — the unified list endpoint (GET) that returns both SSA and CJA alerts
+JOB_ALERTS_LIST_API = "/alertapi/v2/user/cjas"  # GET → {list: [{alertId, name, keywords, location, functionAreaId, roleId, experience, minCTC, maxCTC, industryTypeId, alertType, email}]}
 JOB_ALERT_CREATE_PATH = "/alert/createsmjlt"  # Path for "Send Me Jobs Like These" flow (browser navigation)
 JOB_ALERTS_PAGE = "https://www.naukri.com/mnjuser/jobalerts"  # Legacy page — renders empty (widget-based, no API calls)
 FREE_JOB_ALERTS_PAGE = "https://www.naukri.com/free-job-alerts"  # Redirects to profile → jobSearchPreferences
@@ -119,6 +121,3 @@ N360_CONFIG_API = "/n360-services/v1/config-n360-pro"
 MOCK_INTERVIEW_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/topics"
 MOCK_INTERVIEW_HISTORY_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/previousInterview"
 MOCK_INTERVIEW_ROLE_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/role"
-
-# Job Alerts List (needs appid:109 auth)
-JOB_ALERTS_LIST_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/jobalerts"

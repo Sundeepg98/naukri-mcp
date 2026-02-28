@@ -1,8 +1,13 @@
 """Performance tools — search impressions, recruiter activity, and profile activity level."""
 
+from typing import Optional
+
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API
+
+# Valid filter values for recruiter activity (from activityBucketCount keys)
+ACTIVITY_FILTERS = {"VIEWED", "MOBILE_VIEWED", "DOWNLOADED", "CONTACTED", "ADD_TO_FOLDER"}
 
 
 @mcp.tool()
@@ -39,16 +44,51 @@ async def naukri_get_search_impressions(days: int = 7) -> dict:
 
 
 @mcp.tool()
-async def naukri_get_recruiter_activity() -> dict:
+async def naukri_get_recruiter_activity(
+    page: int = 1,
+    size: int = 20,
+    filter_by: Optional[str] = None,
+) -> dict:
     """Get detailed recruiter activity on your profile — who viewed, downloaded,
-    contacted you, or added you to their folder. Shows activity counts by type.
+    contacted you, or added you to their folder. Supports pagination and filtering.
+
+    The API returns a paginated list of recruiter actions (last 90 days).
+    Each page defaults to 20 items. Use filter_by to see only specific action types.
+
+    Args:
+        page: Page number (1-based). Default 1.
+        size: Items per page (default 20, max ~50).
+        filter_by: Filter by activity type. One of:
+                   "VIEWED" — recruiters who viewed your Naukri profile
+                   "MOBILE_VIEWED" — recruiters who viewed via mobile
+                   "DOWNLOADED" — recruiters who downloaded your resume
+                   "CONTACTED" — recruiters who sent you NVites/messages
+                   "ADD_TO_FOLDER" — recruiters who bookmarked your profile
+                   None — all actions (default)
 
     Returns:
-        - {status: "success", total_actions, percentage_change, buckets: {VIEWED: {count, change}, DOWNLOADED: {...}, CONTACTED: {...}, ADD_TO_FOLDER: {...}}, activities: [{...}]}
+        - {status: "success", page, size, filter_by, total_actions, percentage_change,
+           buckets: {VIEWED: {count, change}, ...}, activities: [{recruiter_name, company, action, date, designation, location, recruiter_id, previous_actions_count}],
+           has_more: bool}
         - {status: "error", message}
     """
+    # Validate filter_by
+    if filter_by is not None:
+        filter_by = filter_by.upper()
+        if filter_by not in ACTIVITY_FILTERS:
+            return {
+                "status": "error",
+                "message": f"Invalid filter_by '{filter_by}'. Must be one of: {', '.join(sorted(ACTIVITY_FILTERS))}",
+            }
+
     try:
-        data = await api_post(RECRUITER_ACTIVITY_API, body={})
+        # POST body format discovered via JS bundle analysis of profilePerformance page:
+        # The frontend sends {page: N, size: M, filterBy: "TYPE"|null}
+        body = {"page": page, "size": size}
+        if filter_by:
+            body["filterBy"] = filter_by
+
+        data = await api_post(RECRUITER_ACTIVITY_API, body=body)
 
         success = data.get("successResponse", data)
         activities_raw = success.get("jobseekerActivityList", [])
@@ -65,7 +105,7 @@ async def naukri_get_recruiter_activity() -> dict:
             else:
                 buckets[bucket_name] = {"count": bucket_data}
 
-        # Parse individual activities
+        # Parse individual activities (each has ~25 keys)
         activities = []
         for act in activities_raw:
             if not isinstance(act, dict):
@@ -76,14 +116,24 @@ async def naukri_get_recruiter_activity() -> dict:
                 "action": act.get("activityType") or act.get("action", ""),
                 "date": act.get("activityDate") or act.get("date", ""),
                 "designation": act.get("designation", ""),
+                "location": act.get("city") or act.get("location", ""),
+                "recruiter_id": act.get("recruiterId") or act.get("recruiterProfileId", ""),
+                "previous_actions_count": act.get("previousActionCount", 0),
             })
+
+        total = success.get("count", len(activities))
+        has_more = (page * size) < total
 
         return {
             "status": "success",
-            "total_actions": success.get("count", len(activities)),
+            "page": page,
+            "size": size,
+            "filter_by": filter_by,
+            "total_actions": total,
             "percentage_change": success.get("percentageChange"),
             "buckets": buckets,
             "activities": activities,
+            "has_more": has_more,
         }
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}
