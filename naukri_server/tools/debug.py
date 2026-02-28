@@ -6,6 +6,26 @@ from naukri_server import mcp
 from naukri_server.browser import browser
 
 
+def _truncate_body(body, max_depth=2, max_items=5, max_str=200):
+    """Truncate a JSON body for preview — show structure, not full data."""
+    if isinstance(body, dict):
+        if max_depth <= 0:
+            return f"{{...{len(body)} keys}}"
+        return {k: _truncate_body(v, max_depth - 1, max_items, max_str)
+                for i, (k, v) in enumerate(body.items()) if i < max_items * 2}
+    if isinstance(body, list):
+        count = len(body)
+        if count == 0:
+            return []
+        preview = [_truncate_body(body[0], max_depth - 1, max_items, max_str)]
+        if count > 1:
+            preview.append(f"...+{count - 1} more")
+        return preview
+    if isinstance(body, str) and len(body) > max_str:
+        return body[:max_str] + "..."
+    return body
+
+
 # ============================================================================
 # Tool 7: Debug (Playwright)
 # ============================================================================
@@ -17,8 +37,10 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
 
     Args:
         action: "snapshot" -- DOM structure | "screenshot" -- saves debug.png |
-                "scan" -- deep scan for specific elements (chatbot, neo, agent, iframe)
-        url: Optional URL to navigate to before performing the action
+                "scan" -- deep scan for specific elements (chatbot, neo, agent, iframe) |
+                "discover" -- intercept JSON API calls on applied/saved jobs pages
+        url: Optional URL to navigate to before performing the action.
+             For "discover", can be a page key ("applied_jobs" / "saved_jobs") or a custom URL.
 
     Returns:
         - {status: "ok", url, title, ...action-specific data...}
@@ -196,6 +218,60 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                 return out;
             }""")
             return {"status": "ok", "url": url, "title": title, "deepscan": result}
+
+        if action == "discover":
+            # Discover API endpoints by intercepting all JSON responses on a page
+            from naukri_server.config import APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE
+
+            pages = {
+                "applied_jobs": APPLIED_JOBS_PAGE,
+                "saved_jobs": SAVED_JOBS_PAGE,
+            }
+            # Allow targeting a specific page or custom URL
+            if url:
+                if url in pages:
+                    pages = {url: pages[url]}
+                elif url.startswith("http"):
+                    pages = {"custom": url}
+
+            all_discovered = {}
+
+            for page_name, page_url in pages.items():
+                captured_responses = []
+
+                async def on_response(response, _captures=captured_responses):
+                    content_type = response.headers.get("content-type", "")
+                    if response.status == 200 and "json" in content_type:
+                        try:
+                            body = await response.json()
+                            _captures.append({
+                                "url": response.url,
+                                "method": response.request.method,
+                                "status": response.status,
+                                "body_keys": list(body.keys()) if isinstance(body, dict) else f"[list of {len(body)}]",
+                                "body_preview": _truncate_body(body),
+                            })
+                        except Exception:
+                            pass
+
+                browser.page.on("response", on_response)
+                try:
+                    await browser.goto(page_url)
+                    await asyncio.sleep(5)
+                    # Scroll to trigger lazy-loaded API calls
+                    await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(3)
+                finally:
+                    browser.page.remove_listener("response", on_response)
+
+                all_discovered[page_name] = {
+                    "page_url": page_url,
+                    "final_url": browser.page.url,
+                    "api_calls_count": len(captured_responses),
+                    "api_calls": captured_responses,
+                }
+
+            return {"status": "ok", "discovered": all_discovered}
 
         structure = await browser.page.evaluate("""() => {
             const selectors = [

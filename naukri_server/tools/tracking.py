@@ -112,9 +112,25 @@ async def naukri_get_applications(
     }
 
 
+async def _push_save_to_naukri(job_id: str) -> bool:
+    """Attempt to save a job on Naukri's backend via discovered POST endpoint."""
+    from naukri_server.config import SAVE_JOB_API
+    from naukri_server.api import api_post
+    if not SAVE_JOB_API:
+        logger.info("SAVE_JOB_API not configured, skipping remote sync")
+        return False
+    try:
+        await api_post(SAVE_JOB_API, {"jobId": job_id})
+        return True
+    except Exception as e:
+        logger.warning("Failed to sync save to Naukri: %s", e)
+        return False
+
+
 @mcp.tool()
 async def naukri_save_job(job_id: str, title: str = None, company: str = None,
-                           notes: Optional[str] = None) -> dict:
+                           notes: Optional[str] = None,
+                           sync_to_naukri: bool = False) -> dict:
     """Save/bookmark a job for later.
 
     Args:
@@ -122,9 +138,11 @@ async def naukri_save_job(job_id: str, title: str = None, company: str = None,
         title: Job title (optional, for display)
         company: Company name (optional, for display)
         notes: Personal notes about this job
+        sync_to_naukri: If True, also save the job on Naukri's backend
+            via the discovered SAVE_JOB_API endpoint.
 
     Returns:
-        - {status: "saved", job_id, total_saved}
+        - {status: "saved", job_id, total_saved, synced_remote}
         - {status: "already_saved", job_id}
     """
     async with _saved_jobs_lock:
@@ -143,7 +161,11 @@ async def naukri_save_job(job_id: str, title: str = None, company: str = None,
         })
         _save_json(SAVED_JOBS_FILE, saved)
 
-    return {"status": "saved", "job_id": job_id}
+    synced_remote = False
+    if sync_to_naukri:
+        synced_remote = await _push_save_to_naukri(job_id)
+
+    return {"status": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
 
 
 @mcp.tool()

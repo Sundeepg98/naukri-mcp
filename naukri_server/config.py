@@ -51,3 +51,10 @@ APPLY_TRAILER = {
     "closebtn": "y",
     "applySrc": "drecomm_profile",
 }
+
+# Sync pages & API endpoints (endpoints filled after running discover)
+APPLIED_JOBS_PAGE = "https://www.naukri.com/applied-jobs"
+SAVED_JOBS_PAGE = "https://www.naukri.com/mnjuser/savedjobs"
+APPLIED_JOBS_API = None   # REST path, e.g. "/cloudgateway-.../applications"
+SAVED_JOBS_API = None     # REST path, e.g. "/cloudgateway-.../savedjobs"
+SAVE_JOB_API = None       # POST endpoint for saving a job remotely
