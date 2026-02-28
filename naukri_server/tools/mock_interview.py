@@ -16,24 +16,31 @@ async def naukri_get_mock_interview_topics() -> dict:
         - {status: "error", message}
     """
     try:
-        topics_data = await api_get(MOCK_INTERVIEW_TOPICS_API)
-        roles_data = await api_get(MOCK_INTERVIEW_ROLE_API)
+        topics_resp = await api_get(MOCK_INTERVIEW_TOPICS_API)
+        roles_resp = await api_get(MOCK_INTERVIEW_ROLE_API)
 
-        # Parse topics
-        topics_raw = topics_data if isinstance(topics_data, list) else topics_data.get("topics", topics_data.get("data", []))
+        # Both responses are wrapped: {"statusCode":"0","message":"Successful","data":{...}}
+        # Unwrap the "data" envelope first.
+        topics_data = topics_resp.get("data", topics_resp) if isinstance(topics_resp, dict) else topics_resp
+        roles_data = roles_resp.get("data", roles_resp) if isinstance(roles_resp, dict) else roles_resp
+
+        # Parse topics — data.topics is a list of {topicId, topicName, testDoneCount, freeTopic, ...}
+        topics_raw = topics_data if isinstance(topics_data, list) else topics_data.get("topics", [])
         topics = []
         if isinstance(topics_raw, list):
             for t in topics_raw:
                 if isinstance(t, dict):
                     topics.append({
-                        "name": t.get("name") or t.get("topic", ""),
+                        "name": t.get("topicName") or t.get("name") or t.get("topic", ""),
                         "status": t.get("status", ""),
-                        "id": t.get("id") or t.get("topicId", ""),
+                        "id": t.get("topicId") or t.get("id", ""),
+                        "tests_done": t.get("testDoneCount", 0),
+                        "free": t.get("freeTopic", False),
                     })
                 elif isinstance(t, str):
                     topics.append({"name": t, "status": ""})
 
-        # Parse roles
+        # Parse roles — data.roleInfo is a list of {roleId, active, expiryDate}
         roles_raw = roles_data if isinstance(roles_data, list) else roles_data.get("roleInfo", roles_data.get("roles", []))
         roles = []
         if isinstance(roles_raw, list):
@@ -41,7 +48,9 @@ async def naukri_get_mock_interview_topics() -> dict:
                 if isinstance(r, dict):
                     roles.append({
                         "name": r.get("name") or r.get("role", ""),
-                        "id": r.get("id") or r.get("roleId", ""),
+                        "id": r.get("roleId") or r.get("id", ""),
+                        "active": r.get("active", ""),
+                        "expiry_date": r.get("expiryDate", ""),
                     })
 
         return {
@@ -65,12 +74,18 @@ async def naukri_get_mock_interview_history() -> dict:
         - {status: "error", message}
     """
     try:
+        # The previousInterview endpoint requires pagination params in the POST body.
+        # Sending an empty body {} causes HTTP 500 (server bug — it NPEs on missing page/pageSize).
+        # The detailedView query param is also required (400 without it).
+        # Discovered via browser request interception: body must be {"page":1,"pageSize":N}.
         data = await api_post(
             MOCK_INTERVIEW_HISTORY_API + "?detailedView=false",
-            body={},
+            body={"page": 1, "pageSize": 50},
         )
 
-        interviews_raw = data.get("previousInterview", data.get("interviews", []))
+        # Response is wrapped: {"statusCode":"0","message":"Successful","data":{...}}
+        inner = data.get("data", data)
+        interviews_raw = inner.get("previousInterview", inner.get("interviews", []))
         interviews = []
         if isinstance(interviews_raw, list):
             for iv in interviews_raw:
@@ -79,7 +94,7 @@ async def naukri_get_mock_interview_history() -> dict:
 
         return {
             "status": "success",
-            "interview_count": data.get("interviewCount", len(interviews)),
+            "interview_count": inner.get("interviewCount", len(interviews)),
             "interviews": interviews,
         }
     except NaukriAPIError as e:
