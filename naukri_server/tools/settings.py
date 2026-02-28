@@ -3,7 +3,7 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_put, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API
 
 JOB_SEARCH_STATUS = {
@@ -130,7 +130,7 @@ async def naukri_update_settings(
         if not body:
             return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
 
-        await api_put(SETTINGS_API, body)
+        await api_post(SETTINGS_API, body)
         return {
             "status": "success",
             "updated_fields": updated_fields,

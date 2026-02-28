@@ -294,20 +294,43 @@ async def naukri_update_profile(fields: dict) -> dict:
                        f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
         }
 
-    # Try v0 then v2 (same fallback pattern as naukri_refresh_profile)
-    last_error = None
-    for version in ("v0", "v2"):
-        endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", "/v2/")
+    # The fullprofiles endpoint blocks aiohttp requests (405) but works from
+    # browser context with proper Naukri app headers. Use page.evaluate + fetch.
+    import json as _json
+    async with browser._lock:
         try:
-            result = await api_post(endpoint, fields)
-            return {
-                "status": "updated",
-                "updated_fields": list(fields.keys()),
-                "api_version": version,
-                "response": result,
-            }
-        except Exception as e:
-            last_error = e
-            continue
+            token = await browser.ensure_token()
+            result = await browser.page.evaluate("""async ({endpoint, fields, token}) => {
+                const resp = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'accept': 'application/json',
+                        'appid': '105',
+                        'clientid': 'd3skt0p',
+                        'content-type': 'application/json',
+                        'systemid': 'Naukri',
+                        'gid': 'LOCATION,INDUSTRY,EDUCATION,FAREA_ROLE',
+                        'x-requested-with': 'XMLHttpRequest',
+                        'Authorization': 'Bearer ' + token,
+                    },
+                    body: JSON.stringify(fields),
+                });
+                const text = await resp.text();
+                return {status: resp.status, ok: resp.ok, body: text};
+            }""", {"endpoint": NAUKRI_BASE + FULLPROFILES_API, "fields": fields, "token": token})
 
-    return {"status": "error", "message": f"Profile update failed on all API versions: {last_error}"}
+            if result.get("ok"):
+                body = {}
+                try:
+                    body = _json.loads(result.get("body", "{}"))
+                except Exception:
+                    pass
+                return {
+                    "status": "updated",
+                    "updated_fields": list(fields.keys()),
+                    "response": body,
+                }
+            else:
+                return {"status": "error", "message": f"HTTP {result.get('status')}: {result.get('body', '')[:300]}"}
+        except Exception as e:
+            return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}
