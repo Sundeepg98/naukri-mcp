@@ -31,27 +31,54 @@ async def _extract_next_data() -> dict | None:
 
 
 async def _scrape_salary_table() -> list:
-    """Fallback: scrape salary data directly from the rendered DOM table."""
-    return await browser.page.evaluate("""
+    """Fallback: scrape salary data from rendered DOM and parse into structured entries."""
+    raw = await browser.page.evaluate("""
         () => {
-            const rows = document.querySelectorAll('[class*="salary"] table tbody tr, [class*="SalaryCard"], [class*="salaryCard"], [data-testid*="salary"]');
-            if (!rows.length) {
-                // Try finding designation-salary pairs from the page text
-                const cards = document.querySelectorAll('[class*="designation"], [class*="cmp-salary-card"]');
-                const results = [];
-                cards.forEach(card => {
-                    const text = card.innerText.trim();
-                    if (text) results.push({raw_text: text});
-                });
-                return results;
-            }
+            const cards = document.querySelectorAll('[class*="designation"], [class*="cmp-salary-card"], [class*="SalaryCard"], [class*="salaryCard"]');
             const results = [];
-            rows.forEach(row => {
-                results.push({raw_text: row.innerText.trim()});
+            cards.forEach(card => {
+                const text = card.innerText.trim();
+                if (text && text.length > 10) results.push(text);
             });
             return results;
         }
     """)
+    salaries = []
+    if not isinstance(raw, list):
+        return salaries
+    for text in raw:
+        if not isinstance(text, str):
+            continue
+        # Parse entries like "Software Engineer\n\n2 - 5 years exp. (1.1k salaries)\n₹14.8 Lakhs\n\n₹14.1 L/yr - ₹15.5 L/yr"
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if len(lines) < 2:
+            continue
+        # Skip non-salary cards (ads, promos)
+        if any(skip in text for skip in ["Claim Now", "fresher salaries", "Share your salary", "Salary Hike", "also viewed"]):
+            continue
+        designation = lines[0] if lines else ""
+        experience = ""
+        avg_salary = ""
+        salary_range = ""
+        salary_count = ""
+        for line in lines[1:]:
+            if "exp." in line or "year" in line.lower():
+                experience = line.split("(")[0].strip()
+                if "(" in line and "salaries" in line:
+                    salary_count = line.split("(")[1].split("salaries")[0].strip()
+            elif line.startswith("₹") and "L/yr" in line and "-" in line:
+                salary_range = line
+            elif line.startswith("₹") and ("Lakhs" in line or "L" in line):
+                avg_salary = line
+        if designation and (avg_salary or salary_range):
+            salaries.append({
+                "designation": designation,
+                "avg_salary": avg_salary,
+                "salary_range": salary_range,
+                "experience": experience,
+                "salary_count": salary_count,
+            })
+    return salaries
 
 
 # ============================================================================
@@ -258,42 +285,27 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
                     "message": "pageProps is empty — the company slug may be invalid or the page didn't load correctly.",
                 }
 
-            # Extract company info
-            company_data = page_props.get("companyData", {}) or page_props.get("company", {}) or {}
+            # Extract company info — actual keys: companyName, companyHeaderData
             company_name = (
-                company_data.get("CompanyName")
-                or company_data.get("companyName")
-                or company_data.get("name")
+                page_props.get("companyName")
+                or (page_props.get("companyHeaderData") or {}).get("CompanyName")
                 or company_slug
             )
 
-            # Extract overall rating info
-            rating_data = (
-                page_props.get("companyRating", {})
-                or page_props.get("ratingData", {})
-                or page_props.get("overallRating", {})
-                or {}
-            )
+            # Extract overall rating — actual key: ratingsData
+            rating_data = page_props.get("ratingsData", {}) or {}
             overall_rating = (
                 rating_data.get("overallRating")
                 or rating_data.get("rating")
-                or rating_data.get("avgRating")
-                or company_data.get("overallRating")
-                or company_data.get("rating")
             )
             review_count = (
-                rating_data.get("totalReviewCount")
-                or rating_data.get("reviewCount")
-                or rating_data.get("count")
-                or company_data.get("reviewCount")
+                page_props.get("reviewCount")
+                or page_props.get("fixedReviewCount")
+                or rating_data.get("totalReviewCount")
             )
 
-            # Extract rating distribution (1-star through 5-star counts)
-            rating_dist_raw = (
-                rating_data.get("ratingDistribution")
-                or page_props.get("ratingDistribution")
-                or {}
-            )
+            # Rating distribution — actual key: ratingDistribution (dict of star:count)
+            rating_dist_raw = page_props.get("ratingDistribution", {})
             rating_distribution = None
             if isinstance(rating_dist_raw, dict) and rating_dist_raw:
                 rating_distribution = rating_dist_raw
@@ -304,13 +316,8 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
                     if isinstance(entry, dict)
                 }
 
-            # Extract category-wise ratings (work-life balance, salary, etc.)
-            category_ratings_raw = (
-                rating_data.get("categoryRatings")
-                or page_props.get("categoryRatings")
-                or rating_data.get("subRatings")
-                or []
-            )
+            # Category ratings — from ratingsData or ratingCounts
+            category_ratings_raw = page_props.get("ratingCounts", rating_data.get("categoryRatings", []))
             category_ratings = {}
             if isinstance(category_ratings_raw, list):
                 for cat in category_ratings_raw:
@@ -323,11 +330,11 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             elif isinstance(category_ratings_raw, dict):
                 category_ratings = category_ratings_raw
 
-            # Extract individual reviews
+            # Individual reviews — actual keys: reviewsData, detailedReviews
             raw_reviews = (
-                page_props.get("reviews")
-                or page_props.get("reviewList")
-                or page_props.get("companyReviews")
+                page_props.get("reviewsData")
+                or page_props.get("detailedReviews")
+                or page_props.get("reviews")
                 or []
             )
             reviews = []
