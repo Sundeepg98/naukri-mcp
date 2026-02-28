@@ -3,7 +3,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API
 
 
@@ -31,7 +31,8 @@ async def naukri_search_jobs(
         - {status: "success", keywords, location, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
-    async with browser._lock:
+    page_no = page  # save before shadowing by page_pool
+    async with browser.page_pool.acquire() as page:
         try:
             # Build Naukri search URL (SEO-friendly format)
             slug = keywords.lower().replace(" ", "-").replace(".", "-")
@@ -43,8 +44,8 @@ async def naukri_search_jobs(
             params = []
             if experience is not None:
                 params.append(f"experience={experience}")
-            if page > 1:
-                params.append(f"pageNo={page}")
+            if page_no > 1:
+                params.append(f"pageNo={page_no}")
             if params:
                 page_url += "?" + "&".join(params)
 
@@ -60,15 +61,15 @@ async def naukri_search_jobs(
                         pass
                     response_event.set()
 
-            browser.page.on("response", on_response)
+            page.on("response", on_response)
             try:
-                await browser.goto(page_url)
+                await page_goto(page, page_url)
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
                     pass  # Fall through to check captured data
             finally:
-                browser.page.remove_listener("response", on_response)
+                page.remove_listener("response", on_response)
 
             data = captured.get("data")
             if not data:
@@ -112,7 +113,7 @@ async def naukri_search_jobs(
                 "status": "success",
                 "keywords": keywords,
                 "location": location,
-                "page": page,
+                "page": page_no,
                 "total_found": data.get("noOfJobs"),
                 "count": len(jobs),
                 "jobs": jobs,

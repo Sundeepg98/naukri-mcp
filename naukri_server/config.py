@@ -27,6 +27,7 @@ NAUKRI_BASE = "https://www.naukri.com"
 NAV_TIMEOUT = int(os.environ.get("NAUKRI_NAV_TIMEOUT", "20000"))
 ELEMENT_TIMEOUT = int(os.environ.get("NAUKRI_ELEMENT_TIMEOUT", "5000"))
 API_TIMEOUT = int(os.environ.get("NAUKRI_API_TIMEOUT", "30"))
+MAX_TABS = int(os.environ.get("NAUKRI_MAX_TABS", "3"))
 
 # API headers (from Naukri-Automation reverse engineering)
 API_HEADERS = {

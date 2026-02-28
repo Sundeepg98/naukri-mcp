@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 
 
 def _truncate_body(body, max_depth=2, max_items=5, max_str=200):
@@ -46,17 +46,17 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
         - {status: "ok", url, title, ...action-specific data...}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         # fetch_api and click_discover use url differently — skip goto for them
         if url and action not in ("fetch_api", "fetch_widget", "post_api", "delete_api", "put_api", "click_discover"):
-            await browser.goto(url)
+            await page_goto(page, url)
             await asyncio.sleep(3)
-        current_url = browser.page.url
-        title = await browser.page.title()
+        current_url = page.url
+        title = await page.title()
 
         if action == "screenshot":
             path = str(Path(__file__).parent.parent.parent / "debug.png")
-            await browser.page.screenshot(path=path, full_page=False)
+            await page.screenshot(path=path, full_page=False)
             return {"status": "ok", "url": current_url, "title": title, "screenshot": path}
 
         if action == "fetch_api":
@@ -66,7 +66,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             api_url = url or ""
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
-            result = await browser.page.evaluate("""async (apiUrl) => {
+            result = await page.evaluate("""async (apiUrl) => {
                 try {
                     const resp = await fetch(apiUrl, {
                         credentials: 'include',
@@ -104,7 +104,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             post_body = parts[1] if len(parts) > 1 else "{}"
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
-            result = await browser.page.evaluate("""async ([apiUrl, postBody]) => {
+            result = await page.evaluate("""async ([apiUrl, postBody]) => {
                 try {
                     const resp = await fetch(apiUrl, {
                         method: 'POST',
@@ -144,7 +144,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             del_body = parts[1] if len(parts) > 1 else None
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
-            result = await browser.page.evaluate("""async ([apiUrl, delBody]) => {
+            result = await page.evaluate("""async ([apiUrl, delBody]) => {
                 try {
                     const opts = {
                         method: 'DELETE',
@@ -184,7 +184,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             put_body = parts[1] if len(parts) > 1 else "{}"
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
-            result = await browser.page.evaluate("""async ([apiUrl, putBody]) => {
+            result = await page.evaluate("""async ([apiUrl, putBody]) => {
                 try {
                     const resp = await fetch(apiUrl, {
                         method: 'PUT',
@@ -220,7 +220,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             api_url = url or ""
             if not api_url.startswith("http"):
                 api_url = f"https://www.naukri.com{api_url}"
-            result = await browser.page.evaluate("""async (apiUrl) => {
+            result = await page.evaluate("""async (apiUrl) => {
                 try {
                     const resp = await fetch(apiUrl, {
                         credentials: 'include',
@@ -280,20 +280,20 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                             "error": str(ex),
                         })
 
-            target_url = url or browser.page.url
-            browser.page.on("response", on_any_response)
+            target_url = url or page.url
+            page.on("response", on_any_response)
             try:
-                await browser.goto(target_url)
+                await page_goto(page, target_url)
                 await asyncio.sleep(8)
-                await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(3)
             finally:
-                browser.page.remove_listener("response", on_any_response)
+                page.remove_listener("response", on_any_response)
 
             return {
                 "status": "ok",
                 "target_url": target_url,
-                "final_url": browser.page.url,
+                "final_url": page.url,
                 "total_captured": len(captured_responses),
                 "responses": captured_responses,
             }
@@ -316,15 +316,15 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                     except Exception:
                         pass
 
-            browser.page.on("request", on_request)
+            page.on("request", on_request)
             try:
-                nav_url = url or browser.page.url
-                await browser.goto(nav_url)
+                nav_url = url or page.url
+                await page_goto(page, nav_url)
                 await asyncio.sleep(5)
-                await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(3)
             finally:
-                browser.page.remove_listener("request", on_request)
+                page.remove_listener("request", on_request)
 
             return {
                 "status": "ok",
@@ -341,7 +341,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             nav_url = parts[1] if len(parts) > 1 else None
 
             if nav_url:
-                await browser.goto(nav_url)
+                await page_goto(page, nav_url)
                 await asyncio.sleep(3)
 
             captured_responses = []
@@ -365,13 +365,13 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                     except Exception:
                         pass
 
-            browser.page.on("response", on_response)
+            page.on("response", on_response)
             try:
                 if selector:
-                    await browser.page.click(selector, timeout=5000)
+                    await page.click(selector, timeout=5000)
                 await asyncio.sleep(5)
             finally:
-                browser.page.remove_listener("response", on_response)
+                page.remove_listener("response", on_response)
 
             return {
                 "status": "ok",
@@ -382,7 +382,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
 
         if action == "scan":
             # Deep scan for chatbot, neo, agent, iframe, widget elements
-            scan = await browser.page.evaluate("""() => {
+            scan = await page.evaluate("""() => {
                 const keywords = ['neo', 'chat', 'bot', 'agent', 'widget', 'assist', 'copilot'];
                 const results = { iframes: [], matching_elements: [], floating_buttons: [] };
 
@@ -440,12 +440,12 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
         if action == "notif_explore":
             # Targeted notification page exploration
             # Scroll to trigger lazy loading, wait for dynamic content
-            await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(3)
-            await browser.page.evaluate("window.scrollTo(0, 0)")
+            await page.evaluate("window.scrollTo(0, 0)")
             await asyncio.sleep(2)
 
-            result = await browser.page.evaluate(r"""() => {
+            result = await page.evaluate(r"""() => {
                 const out = {};
 
                 // 1. __NEXT_DATA__
@@ -569,12 +569,12 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
 
         if action == "deepscan":
             # Scroll to bottom to trigger lazy loads, then wait
-            await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(5)
-            await browser.page.evaluate("window.scrollTo(0, 0)")
+            await page.evaluate("window.scrollTo(0, 0)")
             await asyncio.sleep(2)
 
-            result = await browser.page.evaluate("""() => {
+            result = await page.evaluate("""() => {
                 const out = {
                     high_zindex: [],
                     shadow_hosts: [],
@@ -673,7 +673,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
 
         if action == "explore":
             # Comprehensive DOM exploration — forms, buttons, data attrs, scripts, embedded JSON, API URLs
-            result = await browser.page.evaluate(r"""() => {
+            result = await page.evaluate(r"""() => {
                 const out = {
                     page_text_preview: '',
                     forms: [],
@@ -977,26 +977,26 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
                         except Exception:
                             pass
 
-                browser.page.on("response", on_response)
+                page.on("response", on_response)
                 try:
-                    await browser.goto(page_url)
+                    await page_goto(page, page_url)
                     await asyncio.sleep(5)
                     # Scroll to trigger lazy-loaded API calls
-                    await browser.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await asyncio.sleep(3)
                 finally:
-                    browser.page.remove_listener("response", on_response)
+                    page.remove_listener("response", on_response)
 
                 all_discovered[page_name] = {
                     "page_url": page_url,
-                    "final_url": browser.page.url,
+                    "final_url": page.url,
                     "api_calls_count": len(captured_responses),
                     "api_calls": captured_responses,
                 }
 
             return {"status": "ok", "discovered": all_discovered}
 
-        structure = await browser.page.evaluate("""() => {
+        structure = await page.evaluate("""() => {
             const selectors = [
                 '[class*="tuple"]', '[class*="jobCard"]', '[data-job-id]',
                 '[class*="title"]', '[class*="comp"]', '[class*="salary"]',

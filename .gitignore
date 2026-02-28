@@ -19,6 +19,9 @@ saved_jobs.json
 # Optional config overrides
 naukri_config.json
 
+# Plan docs (local only)
+docs/plans/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API
 
@@ -113,11 +113,11 @@ async def naukri_update_settings(
             }
         radio_id = _JOB_SEARCH_RADIO[key]
         try:
-            async with browser._lock:
-                await browser.goto(SETTINGS_PAGE)
+            async with browser.page_pool.acquire() as page:
+                await page_goto(page, SETTINGS_PAGE)
                 await asyncio.sleep(3)
 
-                if "/nlogin" in browser.page.url:
+                if "/nlogin" in page.url:
                     return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
                 # Capture settings API calls triggered by the radio click
@@ -128,10 +128,10 @@ async def naukri_update_settings(
                         captured["status"] = response.status
                         captured["url"] = response.url
 
-                browser.page.on("response", on_response)
+                page.on("response", on_response)
                 try:
                     # Click the radio button via JS (it may be out of viewport)
-                    clicked = await browser.page.evaluate("""(radioId) => {
+                    clicked = await page.evaluate("""(radioId) => {
                         const radio = document.getElementById(radioId);
                         if (!radio) return null;
                         radio.scrollIntoView({block: 'center'});
@@ -145,7 +145,7 @@ async def naukri_update_settings(
                     await asyncio.sleep(2)
 
                     # After clicking radio, find and click the SELECT button in that row
-                    select_clicked = await browser.page.evaluate("""(radioId) => {
+                    select_clicked = await page.evaluate("""(radioId) => {
                         const radio = document.getElementById(radioId);
                         if (!radio) return null;
                         const row = radio.closest('.jobSearchState, [class*="jobSearchState"]');
@@ -160,7 +160,7 @@ async def naukri_update_settings(
 
                     await asyncio.sleep(3)
                 finally:
-                    browser.page.remove_listener("response", on_response)
+                    page.remove_listener("response", on_response)
 
                 updated_fields.append(f"jobSearchStatus={key}")
                 api_ok = captured.get("status") in (200, 201, 204)

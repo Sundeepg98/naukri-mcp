@@ -3,7 +3,7 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
 from naukri_server.config import NAUKRI_BASE
 
 
@@ -35,14 +35,15 @@ async def naukri_login(
         - {status: "otp_required", needs_otp: true, message}
         - {status: "error", message}
     """
-    async with browser._lock:
-        await browser.goto(f"{NAUKRI_BASE}/nlogin/login")
+    async with browser.page_pool.acquire() as page:
+        await page_goto(page, f"{NAUKRI_BASE}/nlogin/login")
         await asyncio.sleep(2)
 
-        if "/nlogin" not in browser.page.url:
+        if "/nlogin" not in page.url:
             # Already logged in
-            token = await browser._extract_token()
-            if not token:
+            await browser.token_manager.extract()
+            browser.token = browser.token_manager._token
+            if not browser.token:
                 return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
             name = await browser.get_profile_name()
             return {"status": "already_logged_in", "profile_name": name, "has_token": True}
@@ -55,7 +56,7 @@ async def naukri_login(
                 "[class*='social'] button:first-child", "img[alt*='Google']",
             ]:
                 try:
-                    el = await browser.page.query_selector(selector)
+                    el = await page.query_selector(selector)
                     if el:
                         await el.click()
                         google_clicked = True
@@ -69,15 +70,16 @@ async def naukri_login(
             # Wait up to 30s for Google SSO to complete
             for _ in range(30):
                 await asyncio.sleep(1)
-                current_url = browser.page.url
+                current_url = page.url
                 if "/nlogin" not in current_url and "accounts.google" not in current_url:
-                    token = await browser._extract_token()
-                    if not token:
+                    await browser.token_manager.extract()
+                    browser.token = browser.token_manager._token
+                    if not browser.token:
                         return {"status": "error", "message": "Login redirect completed but token not found. Try again."}
                     name = await browser.get_profile_name()
                     return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
 
-            current_url = browser.page.url
+            current_url = page.url
             if "accounts.google" in current_url:
                 return {"status": "waiting_for_user", "message": "Google account picker is still open. Select your account in the browser, then call naukri_login() again."}
             return {"status": "error", "message": "Google login did not complete within 30s. Check the browser."}
@@ -86,26 +88,27 @@ async def naukri_login(
             if not email or not password:
                 return {"status": "error", "message": "email and password required for method='email'"}
             try:
-                await browser.safe_fill("input#usernameField", email)
-                await browser.safe_fill("input#passwordField", password)
-                await browser.page.click("button[type='submit']")
+                await page_safe_fill(page, "input#usernameField", email)
+                await page_safe_fill(page, "input#passwordField", password)
+                await page.click("button[type='submit']")
             except Exception as e:
                 return {"status": "error", "message": f"Login form error: {e}"}
 
             await asyncio.sleep(3)
 
-            otp_field = await browser.page.query_selector("input#otp")
+            otp_field = await page.query_selector("input#otp")
             if otp_field:
                 return {"status": "otp_required", "needs_otp": True, "message": "Enter OTP sent to your phone"}
 
-            if "/nlogin" not in browser.page.url:
-                token = await browser._extract_token()
-                if not token:
+            if "/nlogin" not in page.url:
+                await browser.token_manager.extract()
+                browser.token = browser.token_manager._token
+                if not browser.token:
                     return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
                 name = await browser.get_profile_name()
                 return {"status": "logged_in", "method": "email", "profile_name": name, "has_token": True}
 
-            error = await browser.text(".err-message, .error-msg, [class*='error']")
+            error = await page_text(page, ".err-message, .error-msg, [class*='error']")
             return {"status": "error", "message": error or "Login failed — check credentials"}
 
 
@@ -125,25 +128,26 @@ async def naukri_verify_otp(otp: str) -> dict:
         - {status: "logged_in", profile_name, has_token: true}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         # Validate OTP format
         otp = otp.strip()
         if not re.match(r'^\d{4,6}$', otp):
             return {"status": "error", "message": f"Invalid OTP format: expected 4-6 digits, got '{otp}'"}
 
         try:
-            await browser.safe_fill("input#otp", otp)
-            await browser.page.click("button[type='submit']")
+            await page_safe_fill(page, "input#otp", otp)
+            await page.click("button[type='submit']")
             await asyncio.sleep(3)
 
-            if "/nlogin" not in browser.page.url:
-                token = await browser._extract_token()
-                if not token:
+            if "/nlogin" not in page.url:
+                await browser.token_manager.extract()
+                browser.token = browser.token_manager._token
+                if not browser.token:
                     return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
                 name = await browser.get_profile_name()
                 return {"status": "logged_in", "profile_name": name, "has_token": True}
 
-            error = await browser.text(".err-message, .error-msg")
+            error = await page_text(page, ".err-message, .error-msg")
             return {"status": "error", "message": error or "OTP verification failed"}
         except Exception as e:
             return {"status": "error", "message": str(e)}

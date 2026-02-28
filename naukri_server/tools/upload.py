@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, logger
 
 ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
@@ -41,26 +41,26 @@ async def naukri_upload_resume(file_path: str) -> dict:
     if size_mb > MAX_SIZE_MB:
         return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {MAX_SIZE_MB}MB"}
 
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
-            await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
             await asyncio.sleep(3)
 
-            if "/nlogin" in browser.page.url:
+            if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
             # Find the resume upload input
-            file_input = await browser.page.query_selector('input[type="file"]')
+            file_input = await page.query_selector('input[type="file"]')
             if not file_input:
                 # Try clicking an upload button first to reveal the file input
-                upload_btn = await browser.page.query_selector(
+                upload_btn = await page.query_selector(
                     '[class*="upload"] button, button:has-text("Upload"), '
                     '[class*="resume"] button, [class*="Resume"] [class*="edit"]'
                 )
                 if upload_btn:
                     await upload_btn.click()
                     await asyncio.sleep(2)
-                    file_input = await browser.page.query_selector('input[type="file"]')
+                    file_input = await page.query_selector('input[type="file"]')
 
             if not file_input:
                 return {"status": "error", "message": "Could not find file upload input on profile page"}

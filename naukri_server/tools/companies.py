@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API
 from naukri_server.tools.search import _parse_job_list
 
@@ -104,12 +104,13 @@ async def naukri_get_company_jobs(
         - {status: "success", group_id, page, total_found, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
-    async with browser._lock:
+    page_no = page  # save before shadowing by page_pool
+    async with browser.page_pool.acquire() as page:
         try:
             # Navigate to company jobs page and intercept the search API response
             page_url = f"{NAUKRI_BASE}/jobs-in-{group_id}?groupId={group_id}&searchType=groupidsearch"
-            if page > 1:
-                page_url += f"&pageNo={page}"
+            if page_no > 1:
+                page_url += f"&pageNo={page_no}"
 
             captured = {}
             response_event = asyncio.Event()
@@ -122,15 +123,15 @@ async def naukri_get_company_jobs(
                         pass
                     response_event.set()
 
-            browser.page.on("response", on_response)
+            page.on("response", on_response)
             try:
-                await browser.goto(page_url)
+                await page_goto(page, page_url)
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
                     pass
             finally:
-                browser.page.remove_listener("response", on_response)
+                page.remove_listener("response", on_response)
 
             data = captured.get("data")
             if not data:
@@ -142,7 +143,7 @@ async def naukri_get_company_jobs(
             return {
                 "status": "success",
                 "group_id": group_id,
-                "page": page,
+                "page": page_no,
                 "total_found": data.get("noOfJobs"),
                 "count": len(jobs),
                 "jobs": jobs,

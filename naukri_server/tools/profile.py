@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, logger
 
@@ -60,14 +60,14 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
         logger.warning("REST refresh failed, falling back to browser: %s", e)
 
     # Strategy 2: Browser fallback (original approach)
-    async with browser._lock:
-        await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+    async with browser.page_pool.acquire() as page:
+        await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
         await asyncio.sleep(3)
 
-        if "/nlogin" in browser.page.url:
+        if "/nlogin" in page.url:
             return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-        edit_clicked = await browser.page.evaluate("""() => {
+        edit_clicked = await page.evaluate("""() => {
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
             );
@@ -98,10 +98,10 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
             if "fullprofiles" in response.url and response.request.method == "POST":
                 api_confirmed["status"] = response.status
 
-        browser.page.on("response", on_response)
+        page.on("response", on_response)
 
         try:
-            save_result = await browser.page.evaluate("""() => {
+            save_result = await page.evaluate("""() => {
                 const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
                 if (modal) {
                     const btn = Array.from(modal.querySelectorAll('button')).find(
@@ -121,7 +121,7 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
 
             await asyncio.sleep(3)
         finally:
-            browser.page.remove_listener("response", on_response)
+            page.remove_listener("response", on_response)
 
         return {
             "status": "refreshed",
@@ -297,12 +297,12 @@ async def naukri_update_profile(fields: dict) -> dict:
     # The fullprofiles endpoint rejects all external API calls (405 from CDN).
     # Only the React app's own XHR works. Use the browser UI approach:
     # navigate to profile → click edit → modify form fields → click save.
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
-            await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
             await asyncio.sleep(3)
 
-            if "/nlogin" in browser.page.url:
+            if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
             # Track which fields were updated via UI
@@ -313,12 +313,12 @@ async def naukri_update_profile(fields: dict) -> dict:
                 if "fullprofiles" in response.url and response.request.method == "POST":
                     api_confirmed["status"] = response.status
 
-            browser.page.on("response", on_response)
+            page.on("response", on_response)
 
             try:
                 # --- Resume Headline ---
                 if "resumeHeadline" in fields:
-                    edit_clicked = await browser.page.evaluate("""() => {
+                    edit_clicked = await page.evaluate("""() => {
                         const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                             el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
                         );
@@ -344,7 +344,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                     await asyncio.sleep(2)
 
                     # Find textarea in the modal and fill with new headline
-                    textarea = await browser.page.query_selector(
+                    textarea = await page.query_selector(
                         '[class*="modal"] textarea, [class*="dialog"] textarea, '
                         '[role="dialog"] textarea, textarea[class*="headline"], '
                         'textarea'
@@ -359,7 +359,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                         return {"status": "error", "message": "Edit modal opened but textarea not found"}
 
                     # Click save
-                    save_result = await browser.page.evaluate("""() => {
+                    save_result = await page.evaluate("""() => {
                         const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
                         if (modal) {
                             const btn = Array.from(modal.querySelectorAll('button')).find(
@@ -382,7 +382,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                 # --- Key Skills ---
                 elif "keySkills" in fields:
                     # Navigate to key skills section and click edit
-                    edit_clicked = await browser.page.evaluate("""() => {
+                    edit_clicked = await page.evaluate("""() => {
                         const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                             el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
                         );
@@ -402,7 +402,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                     await asyncio.sleep(2)
 
                     # Find the skills input and update
-                    skills_input = await browser.page.query_selector(
+                    skills_input = await page.query_selector(
                         '[class*="modal"] input[type="text"], [class*="dialog"] input, '
                         '[role="dialog"] input[type="text"], input[class*="skill"]'
                     )
@@ -416,7 +416,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                         return {"status": "error", "message": "Skills edit opened but input not found"}
 
                     # Click save
-                    save_result = await browser.page.evaluate("""() => {
+                    save_result = await page.evaluate("""() => {
                         const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
                         if (modal) {
                             const btn = Array.from(modal.querySelectorAll('button')).find(
@@ -446,7 +446,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                     }
 
             finally:
-                browser.page.remove_listener("response", on_response)
+                page.remove_listener("response", on_response)
 
             return {
                 "status": "updated",

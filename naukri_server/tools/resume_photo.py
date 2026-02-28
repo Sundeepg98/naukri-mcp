@@ -5,7 +5,7 @@ from pathlib import Path
 
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, logger
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
@@ -111,16 +111,16 @@ async def naukri_upload_photo(file_path: str) -> dict:
             "message": f"Unsupported format '{path.suffix}'. Use: {', '.join(PHOTO_ALLOWED_FORMATS)}",
         }
 
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
-            await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
             await asyncio.sleep(3)
 
-            if "/nlogin" in browser.page.url:
+            if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
             # Click photo area to open upload modal (JS click to bypass visibility checks)
-            await browser.page.evaluate("""() => {
+            await page.evaluate("""() => {
                 // Try clicking the photo/avatar area or "Add photo" link
                 const selectors = [
                     '.photoWrap', '.photoWrap img',
@@ -143,17 +143,17 @@ async def naukri_upload_photo(file_path: str) -> dict:
             await asyncio.sleep(3)
 
             # Set the file on the hidden file input
-            file_input = await browser.page.query_selector('#fileUpload')
+            file_input = await page.query_selector('#fileUpload')
             if not file_input:
                 # Fallback: look for any file input inside the photo cropper area
-                file_input = await browser.page.query_selector(
+                file_input = await page.query_selector(
                     '#photoCropper input[type="file"], '
                     '[class*="photo"] input[type="file"], '
                     'input[type="file"][accept*="image"]'
                 )
             if not file_input:
                 # Last resort: any file input on the page
-                file_input = await browser.page.query_selector('input[type="file"]')
+                file_input = await page.query_selector('input[type="file"]')
 
             if not file_input:
                 return {"status": "error", "message": "Could not find photo upload input on profile page"}
@@ -165,7 +165,7 @@ async def naukri_upload_photo(file_path: str) -> dict:
             await asyncio.sleep(3)
 
             # Click the save/submit button
-            save_btn = await browser.page.query_selector(
+            save_btn = await page.query_selector(
                 '#submit, button.save-photo, #photoCropper button[type="submit"], '
                 '#photoCropper button:has-text("Save"), '
                 'button:has-text("Save photo"), button:has-text("Apply")'
@@ -205,16 +205,16 @@ async def naukri_delete_photo() -> dict:
         - {status: "no_photo", message}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
-            await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
             await asyncio.sleep(3)
 
-            if "/nlogin" in browser.page.url:
+            if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
             # Check if a photo exists on the profile page
-            has_photo = await browser.page.evaluate("""() => {
+            has_photo = await page.evaluate("""() => {
                 const img = document.querySelector('.photoWrap img, [class*="photo"] img, [class*="avatar"] img, [class*="profilePhoto"] img');
                 if (img && img.src && !img.src.includes('placeholder') && !img.src.includes('default')) {
                     return true;
@@ -228,7 +228,7 @@ async def naukri_delete_photo() -> dict:
                 return {"status": "no_photo", "message": "No profile photo found to delete."}
 
             # Click on the photo area to open the photo cropper modal
-            photo_clicked = await browser.page.evaluate("""() => {
+            photo_clicked = await page.evaluate("""() => {
                 const selectors = [
                     '.photoWrap', '.photoWrap img',
                     '[class*="photo"] img', '[class*="avatar"] img',
@@ -252,7 +252,7 @@ async def naukri_delete_photo() -> dict:
             modal_appeared = False
             for _ in range(10):
                 await asyncio.sleep(1)
-                modal_appeared = await browser.page.evaluate("""() => {
+                modal_appeared = await page.evaluate("""() => {
                     const modal = document.querySelector('#photoCropper, [class*="photoCropper"], [class*="PhotoCropper"], [class*="cropModal"], [class*="photo-modal"], [class*="modal"][class*="photo"], [role="dialog"]');
                     return !!modal;
                 }""")
@@ -265,7 +265,7 @@ async def naukri_delete_photo() -> dict:
             await asyncio.sleep(1)  # Let modal fully render
 
             # Step 1: Click the initial "Delete" option (.delBtn) in the photo modal
-            delete_clicked = await browser.page.evaluate("""() => {
+            delete_clicked = await page.evaluate("""() => {
                 const el = document.querySelector('button.delBtn, .typ-14Bold.delBtn, .delBtn');
                 if (el) { el.click(); return el.className; }
                 const buttons = Array.from(document.querySelectorAll('button, a, span'));
@@ -288,7 +288,7 @@ async def naukri_delete_photo() -> dict:
             # After clicking .delBtn, a confirmation overlay appears with "Are you sure"
             # text and a separate Delete button (NOT inside #photoCropper)
             await asyncio.sleep(2)
-            confirm_clicked = await browser.page.evaluate("""() => {
+            confirm_clicked = await page.evaluate("""() => {
                 // Find all visible Delete buttons, click the one in the confirmation overlay
                 const buttons = Array.from(document.querySelectorAll('button'));
                 const delBtns = buttons.filter(b => {

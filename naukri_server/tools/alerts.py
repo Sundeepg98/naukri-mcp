@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
 
 
@@ -173,18 +173,18 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
         - {status: "success", alert_name, message}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
             # Step 1: Navigate to the legacy alert management page
-            await browser.goto(f"{NAUKRI_BASE}/alert/manage")
+            await page_goto(page, f"{NAUKRI_BASE}/alert/manage")
             await asyncio.sleep(3)
 
             # Check if logged in
-            if "/nlogin" in browser.page.url:
+            if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
             # Step 2: Scrape alert rows — extract alert names and their delete link hrefs
-            alerts_data = await browser.page.evaluate("""() => {
+            alerts_data = await page.evaluate("""() => {
                 const results = [];
                 // Look for links that contain '/alert/delete' in href
                 const deleteLinks = document.querySelectorAll('a[href*="/alert/delete"]');
@@ -221,8 +221,8 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
 
             if not alerts_data:
                 # Maybe the page structure is different — check if there are any alerts at all
-                page_text = await browser.page.evaluate("() => document.body.innerText")
-                logger.warning("No alert delete links found. Page text: %s", page_text[:500])
+                page_text_content = await page.evaluate("() => document.body.innerText")
+                logger.warning("No alert delete links found. Page text: %s", page_text_content[:500])
                 return {
                     "status": "error",
                     "message": "No alerts found on the manage page. The page may have no alerts, "
@@ -265,11 +265,11 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
 
             # Step 5: Navigate to the delete confirmation page
             delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
-            await browser.goto(delete_url)
+            await page_goto(page, delete_url)
             await asyncio.sleep(2)
 
             # Step 6: Submit the delete confirmation via fetch POST
-            delete_result = await browser.page.evaluate("""(params) => {
+            delete_result = await page.evaluate("""(params) => {
                 const { deleteUrl, aId } = params;
                 return fetch(deleteUrl, {
                     method: 'POST',
@@ -303,7 +303,7 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
             if not delete_result.get("ok"):
                 logger.info("Fetch POST returned status %s, trying button click fallback...",
                             delete_result.get("status"))
-                button_clicked = await browser.page.evaluate("""() => {
+                button_clicked = await page.evaluate("""() => {
                     // Look for confirm/submit/delete buttons
                     const buttons = Array.from(document.querySelectorAll(
                         'input[type="submit"], button[type="submit"], button, input[value*="Delete"], input[value*="Confirm"]'

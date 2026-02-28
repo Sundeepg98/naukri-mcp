@@ -7,7 +7,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
@@ -208,7 +208,7 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
 
     Returns the captured JSON body, or None.
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         captured_responses = []
         response_event = asyncio.Event()
 
@@ -223,9 +223,9 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                 except Exception:
                     pass
 
-        browser.page.on("response", on_response)
+        page.on("response", on_response)
         try:
-            await browser.goto(page_url)
+            await page_goto(page, page_url)
             try:
                 await asyncio.wait_for(response_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -233,7 +233,7 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
             # Extra wait for trailing API calls
             await asyncio.sleep(2)
         finally:
-            browser.page.remove_listener("response", on_response)
+            page.remove_listener("response", on_response)
 
         # Return pattern-matched response if available
         if url_pattern:
@@ -257,22 +257,22 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 
     Returns a list of normalized job dicts, or None if scraping failed.
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         all_jobs = []
         current_page = 1
 
         while current_page <= max_pages:
             url = page_url if current_page == 1 else f"{page_url}?pageNo={current_page}"
-            await browser.goto(url)
+            await page_goto(page, url)
             await asyncio.sleep(2)  # let server-rendered content settle
 
             # Detect login redirect
-            current_url = browser.page.url
+            current_url = page.url
             if "login" in current_url.lower() or "nologin" in current_url.lower():
                 logger.warning("HTML scrape: redirected to login (%s)", current_url)
                 return None
 
-            result = await browser.page.evaluate(_SCRAPE_APPLIED_JOBS_JS)
+            result = await page.evaluate(_SCRAPE_APPLIED_JOBS_JS)
 
             if result is None or result.get("error"):
                 logger.warning("HTML scrape page %d: %s", current_page,

@@ -1,25 +1,217 @@
 """
-Browser state — Playwright browser for login and cookie extraction.
+Browser state — Playwright browser with multi-tab page pool and cached token manager.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
-from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, logger
+from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, logger
 
+
+class TokenManager:
+    """Caches JWT token + cookies from browser context. Lock-free reads, locked refresh."""
+
+    def __init__(self):
+        self._token: Optional[str] = None
+        self._cookies: Optional[str] = None
+        self._refresh_lock = asyncio.Lock()
+        self._context: Optional[BrowserContext] = None
+
+    def bind(self, context: BrowserContext):
+        """Bind to a browser context for cookie extraction."""
+        self._context = context
+
+    async def extract(self):
+        """Pull token + cookies from browser context into cache."""
+        if not self._context:
+            return
+        try:
+            cookies = await self._context.cookies(NAUKRI_BASE)
+            self._cookies = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+            for c in cookies:
+                if c["name"] == "nauk_at":
+                    self._token = c["value"]
+                    return
+        except Exception as e:
+            logger.debug("Token extraction failed: %s", e)
+        self._token = None
+
+    def get_token(self) -> str:
+        """Get cached JWT token. Raises if not available."""
+        if self._token:
+            return self._token
+        raise ValueError("Not logged in — call naukri_login first")
+
+    def get_cookies(self) -> str:
+        """Get cached cookie header string."""
+        return self._cookies or ""
+
+    def invalidate(self):
+        """Mark token as stale. Next ensure_token() will refresh."""
+        self._token = None
+
+    async def refresh(self, page: Page) -> Optional[str]:
+        """Re-extract token by reloading a page. Protected by lock to prevent parallel refreshes."""
+        async with self._refresh_lock:
+            # Double-check after acquiring lock — another refresh may have succeeded
+            if self._token:
+                return self._token
+            try:
+                await page.reload(timeout=NAV_TIMEOUT)
+            except Exception:
+                pass
+            await self.extract()
+            return self._token
+
+    async def ensure_token(self) -> str:
+        """Get token, attempting extraction if cache is empty."""
+        if self._token:
+            return self._token
+        await self.extract()
+        if not self._token:
+            raise ValueError("Not logged in — call naukri_login first")
+        return self._token
+
+
+class PagePool:
+    """Manages a pool of browser pages (tabs) with semaphore-based checkout."""
+
+    def __init__(self, context: BrowserContext, max_pages: int = 3):
+        self._context = context
+        self._max_pages = max_pages
+        self._semaphore = asyncio.Semaphore(max_pages)
+        self._available: asyncio.Queue[Page] = asyncio.Queue()
+        self._all_pages: list[Page] = []
+
+    async def initialize(self, first_page: Page):
+        """Seed pool with the initial page from browser context."""
+        self._all_pages.append(first_page)
+        await self._available.put(first_page)
+
+    async def _create_page(self) -> Page:
+        """Create a new tab in the shared browser context."""
+        page = await self._context.new_page()
+        self._all_pages.append(page)
+        logger.info("PagePool: created new tab (%d/%d)", len(self._all_pages), self._max_pages)
+        return page
+
+    async def _recover_page(self, dead_page: Page) -> Page:
+        """Replace a crashed page with a new one."""
+        logger.warning("PagePool: recovering crashed tab")
+        if dead_page in self._all_pages:
+            self._all_pages.remove(dead_page)
+        page = await self._context.new_page()
+        self._all_pages.append(page)
+        logger.info("PagePool: recovered tab (%d total)", len(self._all_pages))
+        return page
+
+    @asynccontextmanager
+    async def acquire(self):
+        """Check out a page from the pool. Auto-returns on exit.
+
+        Usage:
+            async with page_pool.acquire() as page:
+                await page.goto(url)
+                result = await page.evaluate(...)
+        """
+        await self._semaphore.acquire()
+        page = None
+        try:
+            # Try to get an available page
+            if not self._available.empty():
+                page = self._available.get_nowait()
+            elif len(self._all_pages) < self._max_pages:
+                page = await self._create_page()
+            else:
+                # All pages in use, wait for one to return
+                page = await self._available.get()
+
+            # Verify page is alive
+            try:
+                _ = page.url  # Quick liveness check (property access, not network)
+            except (TargetClosedError, Exception):
+                page = await self._recover_page(page)
+
+            yield page
+        finally:
+            # Return page to pool
+            if page is not None:
+                try:
+                    await self._available.put(page)
+                except Exception:
+                    pass
+            self._semaphore.release()
+
+    async def close_all(self):
+        """Close all pages in the pool."""
+        for page in self._all_pages:
+            try:
+                await page.close()
+            except Exception:
+                pass
+        self._all_pages.clear()
+        while not self._available.empty():
+            try:
+                self._available.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+
+# ---------------------------------------------------------------------------
+# Page-level helper functions (replace old browser.goto, browser.text, etc.)
+# ---------------------------------------------------------------------------
+
+async def page_goto(page: Page, url: str, wait: str = "domcontentloaded") -> None:
+    """Navigate a page with fallback to 'commit' wait strategy."""
+    try:
+        await page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
+    except TargetClosedError:
+        raise  # Let PagePool handle recovery on next acquire()
+    except Exception:
+        try:
+            await page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
+        except TargetClosedError:
+            raise
+
+
+async def page_text(page: Page, selector: str) -> Optional[str]:
+    """Get text content of an element on the page."""
+    el = await page.query_selector(selector)
+    return (await el.text_content()).strip() if el else None
+
+
+async def page_exists(page: Page, selector: str) -> bool:
+    """Check if an element exists on the page."""
+    return await page.query_selector(selector) is not None
+
+
+async def page_safe_fill(page: Page, selector: str, value: str, delay: int = 30):
+    """Wait for element, click, clear, and type value."""
+    el = await page.wait_for_selector(selector, timeout=ELEMENT_TIMEOUT)
+    await el.click()
+    await el.fill("")
+    await el.type(value, delay=delay)
+
+
+# ---------------------------------------------------------------------------
+# NaukriBrowser — orchestrator
+# ---------------------------------------------------------------------------
 
 class NaukriBrowser:
-    """Playwright browser for login + cookie extraction. Lives entire MCP session."""
+    """Playwright browser with multi-tab page pool and cached token manager."""
 
     def __init__(self):
         self.pw = None
         self.context: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None
-        self.token: Optional[str] = None  # nauk_at JWT
-        self._lock = asyncio.Lock()
+        self.page: Optional[Page] = None  # Backward compat — first page reference
+        self.token: Optional[str] = None  # Backward compat — use token_manager instead
+        self.token_manager = TokenManager()
+        self.page_pool: Optional[PagePool] = None
+        self._lock = asyncio.Lock()  # Deprecated — kept for unmigrated tools
 
     async def start(self):
         self.pw = await async_playwright().start()
@@ -29,10 +221,24 @@ class NaukriBrowser:
             viewport={"width": 1280, "height": 800},
             args=["--disable-blink-features=AutomationControlled"],
         )
-        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        await self._extract_token()
-        logger.info("Browser started, token: %s", "found" if self.token else "none")
-        if self.token:
+
+        # Initialize token manager
+        self.token_manager.bind(self.context)
+        await self.token_manager.extract()
+
+        # Initialize page pool with first page
+        first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+        self.page = first_page  # Backward compat
+        self.token = self.token_manager._token  # Backward compat
+
+        self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
+        await self.page_pool.initialize(first_page)
+
+        logger.info("Browser started (pool: %d max tabs), token: %s",
+                     MAX_TABS, "found" if self.token_manager._token else "none")
+
+        # Validate session
+        if self.token_manager._token:
             try:
                 from naukri_server.api import api_get
                 await api_get(
@@ -42,84 +248,59 @@ class NaukriBrowser:
                 logger.info("Session validated — token is active")
             except Exception as e:
                 logger.warning("Token found but invalid: %s. Call naukri_login.", e)
+                self.token_manager.invalidate()
                 self.token = None
 
     async def stop(self):
+        if self.page_pool:
+            await self.page_pool.close_all()
         if self.context:
             await self.context.close()
         if self.pw:
             await self.pw.stop()
         logger.info("Browser stopped")
 
+    # --- Backward compat methods (deprecated — use token_manager + page_pool) ---
+
     async def _extract_token(self) -> Optional[str]:
-        """Extract nauk_at JWT from browser cookies."""
-        try:
-            cookies = await self.context.cookies(NAUKRI_BASE)
-            for c in cookies:
-                if c["name"] == "nauk_at":
-                    self.token = c["value"]
-                    return self.token
-        except Exception as e:
-            logger.debug("Token extraction failed: %s", e)
-        self.token = None
-        return None
-
-    async def refresh_token(self) -> Optional[str]:
-        """Re-extract token from cookies after page reload."""
-        try:
-            await self.page.reload(timeout=NAV_TIMEOUT)
-            await self._extract_token()
-            return self.token
-        except Exception:
-            return await self._extract_token()
-
-    async def ensure_token(self) -> str:
-        """Get fresh token, raising if not logged in."""
-        if self.token:
-            return self.token
-        await self._extract_token()
-        if not self.token:
-            raise ValueError("Not logged in — call naukri_login first")
+        """Deprecated: use token_manager.extract()."""
+        await self.token_manager.extract()
+        self.token = self.token_manager._token
         return self.token
 
-    async def _recover_page(self) -> None:
-        """Attempt to recover from a crashed browser page."""
-        logger.warning("Browser page appears dead, attempting recovery...")
-        try:
-            self.page = await self.context.new_page()
-            logger.info("Recovered: new page created in existing context")
-            return
-        except Exception:
-            pass
-        logger.warning("Context also dead, performing full browser restart...")
-        try:
-            await self.stop()
-        except Exception:
-            pass
-        await self.start()
-        logger.info("Full browser restart completed")
+    async def refresh_token(self) -> Optional[str]:
+        """Deprecated: use token_manager.refresh(page)."""
+        if self.page:
+            result = await self.token_manager.refresh(self.page)
+            self.token = self.token_manager._token
+            return result
+        return None
+
+    async def ensure_token(self) -> str:
+        """Deprecated: use token_manager.ensure_token()."""
+        result = await self.token_manager.ensure_token()
+        self.token = self.token_manager._token
+        return result
 
     async def goto(self, url: str, wait: str = "domcontentloaded") -> None:
-        try:
-            await self.page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
-        except TargetClosedError:
-            await self._recover_page()
-            await self.page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
-        except Exception:
-            try:
-                await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
-            except TargetClosedError:
-                await self._recover_page()
-                await self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
+        """Deprecated: use page_goto(page, url)."""
+        await page_goto(self.page, url, wait)
 
     async def text(self, selector: str) -> Optional[str]:
-        el = await self.page.query_selector(selector)
-        return (await el.text_content()).strip() if el else None
+        """Deprecated: use page_text(page, selector)."""
+        return await page_text(self.page, selector)
+
+    async def exists(self, selector: str) -> bool:
+        """Deprecated: use page_exists(page, selector)."""
+        return await page_exists(self.page, selector)
+
+    async def safe_fill(self, selector: str, value: str, delay: int = 30):
+        """Deprecated: use page_safe_fill(page, selector, value)."""
+        await page_safe_fill(self.page, selector, value, delay)
 
     async def get_profile_name(self) -> str:
-        """Get profile name via profile API (same path as naukri_get_profile)."""
+        """Get profile name via profile API."""
         from naukri_server.api import api_get
-
         try:
             data = await api_get(
                 "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
@@ -133,15 +314,6 @@ class NaukriBrowser:
         except Exception as e:
             logger.warning("Profile name API failed: %s: %s", type(e).__name__, e)
         return "unknown"
-
-    async def exists(self, selector: str) -> bool:
-        return await self.page.query_selector(selector) is not None
-
-    async def safe_fill(self, selector: str, value: str, delay: int = 30):
-        el = await self.page.wait_for_selector(selector, timeout=ELEMENT_TIMEOUT)
-        await el.click()
-        await el.fill("")
-        await el.type(value, delay=delay)
 
 
 browser = NaukriBrowser()

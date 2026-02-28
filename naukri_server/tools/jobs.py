@@ -3,7 +3,7 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE
 
 
@@ -35,7 +35,7 @@ async def naukri_get_job(job_url: str) -> dict:
         - {status: "success", job_id, title, company, salary, experience, location, description, skills, match_score, is_applied, can_apply, url, ...}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
             # Build URL if just an ID was passed
             if job_url.isdigit():
@@ -62,9 +62,9 @@ async def naukri_get_job(job_url: str) -> dict:
                 except Exception:
                     pass
 
-            browser.page.on("response", on_response_with_event)
+            page.on("response", on_response_with_event)
             try:
-                await browser.goto(page_url)
+                await page_goto(page, page_url)
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=10)
                 except asyncio.TimeoutError:
@@ -73,7 +73,7 @@ async def naukri_get_job(job_url: str) -> dict:
                 if "score" not in captured:
                     await asyncio.sleep(1)
             finally:
-                browser.page.remove_listener("response", on_response_with_event)
+                page.remove_listener("response", on_response_with_event)
 
             details_data = captured.get("details")
             if not details_data:

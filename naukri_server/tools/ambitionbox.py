@@ -4,17 +4,17 @@ import asyncio
 import logging
 
 from naukri_server import mcp
-from naukri_server.browser import browser
+from naukri_server.browser import browser, page_goto
 
 logger = logging.getLogger(__name__)
 
 AMBITIONBOX_BASE = "https://www.ambitionbox.com"
 
 
-async def _extract_next_data() -> dict | None:
-    """Extract __NEXT_DATA__ JSON from the current page."""
+async def _extract_next_data(page) -> dict | None:
+    """Extract __NEXT_DATA__ JSON from the given page."""
     await asyncio.sleep(2)
-    return await browser.page.evaluate("""
+    return await page.evaluate("""
         () => {
             const el = document.getElementById('__NEXT_DATA__');
             if (el) return JSON.parse(el.textContent);
@@ -30,9 +30,9 @@ async def _extract_next_data() -> dict | None:
     """)
 
 
-async def _scrape_salary_table() -> list:
+async def _scrape_salary_table(page) -> list:
     """Fallback: scrape salary data from rendered DOM body text via regex matching."""
-    raw = await browser.page.evaluate("""
+    raw = await page.evaluate("""
         () => {
             const body = document.body.innerText;
             const lines = body.split('\\n').filter(l => l.trim());
@@ -89,7 +89,7 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
         - {status: "success", company, salaries: [...], ...}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as page:
         try:
             # Build URL
             if designation:
@@ -98,19 +98,19 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
                 url = f"{AMBITIONBOX_BASE}/salaries/{company_slug}-salaries"
 
             logger.info("Navigating to AmbitionBox salary page: %s", url)
-            await browser.goto(url, wait="networkidle")
+            await page_goto(page, url, wait="networkidle")
 
             # Check for 404 / invalid page
-            if "404" in (await browser.page.title() or ""):
+            if "404" in (await page.title() or ""):
                 return {"status": "error", "message": f"Page not found for company slug '{company_slug}'."}
 
             # Extract __NEXT_DATA__
-            next_data = await _extract_next_data()
+            next_data = await _extract_next_data(page)
             if not next_data:
                 # Fallback: scrape salary data from the rendered DOM
-                dom_salaries = await _scrape_salary_table()
+                dom_salaries = await _scrape_salary_table(page)
                 if dom_salaries:
-                    title = await browser.page.title() or ""
+                    title = await page.title() or ""
                     return {
                         "status": "success",
                         "company": company_slug.replace("-", " ").title(),
@@ -249,19 +249,19 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
         - {status: "success", company, overall_rating, review_count, reviews: [...], ...}
         - {status: "error", message}
     """
-    async with browser._lock:
+    async with browser.page_pool.acquire() as tab:
         try:
             url = f"{AMBITIONBOX_BASE}/reviews/{company_slug}-reviews?page={page}"
 
             logger.info("Navigating to AmbitionBox reviews page: %s", url)
-            await browser.goto(url, wait="networkidle")
+            await page_goto(tab, url, wait="networkidle")
 
             # Check for 404 / invalid page
-            if "404" in (await browser.page.title() or ""):
+            if "404" in (await tab.title() or ""):
                 return {"status": "error", "message": f"Page not found for company slug '{company_slug}'."}
 
             # Extract __NEXT_DATA__
-            next_data = await _extract_next_data()
+            next_data = await _extract_next_data(tab)
             if not next_data:
                 return {
                     "status": "error",

@@ -38,19 +38,15 @@ def _raise_api_error(status: int, text: str):
     raise NaukriAPIError(status, message, code)
 
 
-async def _cookie_header() -> str:
-    """Build raw Cookie header string from all browser cookies."""
-    try:
-        cookies = await browser.context.cookies(NAUKRI_BASE)
-        return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-    except Exception:
-        return ""
+def _cookie_header() -> str:
+    """Get cached cookie header from token manager."""
+    return browser.token_manager.get_cookies()
 
 
 async def api_get(path: str, params: dict = None, extra_headers: dict = None, _attempt: int = 0) -> dict:
     """GET request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
-    token = await browser.ensure_token()
-    cookie_str = await _cookie_header()
+    token = await browser.token_manager.ensure_token()
+    cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
     if extra_headers:
         headers.update(extra_headers)
@@ -72,8 +68,10 @@ async def api_get(path: str, params: dict = None, extra_headers: dict = None, _a
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
                 logger.info("Token expired, refreshing and retrying...")
+                browser.token_manager.invalidate()
                 try:
-                    await browser.refresh_token()
+                    async with browser.page_pool.acquire() as refresh_page:
+                        await browser.token_manager.refresh(refresh_page)
                 except Exception as e:
                     logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
                     raise NaukriAPIError(401, f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.")
@@ -88,8 +86,8 @@ async def api_get(path: str, params: dict = None, extra_headers: dict = None, _a
 
 async def api_post(path: str, body: dict, _attempt: int = 0) -> dict:
     """POST request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
-    token = await browser.ensure_token()
-    cookie_str = await _cookie_header()
+    token = await browser.token_manager.ensure_token()
+    cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
     url = f"{NAUKRI_BASE}{path}" if path.startswith("/") else path
     logger.info("API POST %s", url)
@@ -106,8 +104,10 @@ async def api_post(path: str, body: dict, _attempt: int = 0) -> dict:
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
                 logger.info("Token expired, refreshing and retrying...")
+                browser.token_manager.invalidate()
                 try:
-                    await browser.refresh_token()
+                    async with browser.page_pool.acquire() as refresh_page:
+                        await browser.token_manager.refresh(refresh_page)
                 except Exception as e:
                     logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
                     raise NaukriAPIError(401, f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.")
@@ -122,8 +122,8 @@ async def api_post(path: str, body: dict, _attempt: int = 0) -> dict:
 
 async def api_put(path: str, body: dict, _attempt: int = 0) -> dict:
     """PUT request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
-    token = await browser.ensure_token()
-    cookie_str = await _cookie_header()
+    token = await browser.token_manager.ensure_token()
+    cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
     url = f"{NAUKRI_BASE}{path}" if path.startswith("/") else path
     logger.info("API PUT %s", url)
@@ -140,8 +140,10 @@ async def api_put(path: str, body: dict, _attempt: int = 0) -> dict:
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
                 logger.info("Token expired, refreshing and retrying...")
+                browser.token_manager.invalidate()
                 try:
-                    await browser.refresh_token()
+                    async with browser.page_pool.acquire() as refresh_page:
+                        await browser.token_manager.refresh(refresh_page)
                 except Exception as e:
                     logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
                     raise NaukriAPIError(401, f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.")
@@ -156,8 +158,8 @@ async def api_put(path: str, body: dict, _attempt: int = 0) -> dict:
 
 async def api_delete(path: str, body: dict = None, _attempt: int = 0) -> dict:
     """DELETE request to Naukri API (aiohttp — for non-reCAPTCHA endpoints)."""
-    token = await browser.ensure_token()
-    cookie_str = await _cookie_header()
+    token = await browser.token_manager.ensure_token()
+    cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
     url = f"{NAUKRI_BASE}{path}" if path.startswith("/") else path
     logger.info("API DELETE %s", url)
@@ -177,8 +179,10 @@ async def api_delete(path: str, body: dict = None, _attempt: int = 0) -> dict:
             text = await resp.text()
             if resp.status == 401 and _attempt == 0:
                 logger.info("Token expired, refreshing and retrying...")
+                browser.token_manager.invalidate()
                 try:
-                    await browser.refresh_token()
+                    async with browser.page_pool.acquire() as refresh_page:
+                        await browser.token_manager.refresh(refresh_page)
                 except Exception as e:
                     logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
                     raise NaukriAPIError(401, f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.")
