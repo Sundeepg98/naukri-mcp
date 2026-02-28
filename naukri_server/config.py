@@ -53,8 +53,8 @@ APPLY_TRAILER = {
 }
 
 # Sync pages & API endpoints (discovered via naukri_debug action="discover")
-APPLIED_JOBS_PAGE = "https://www.naukri.com/mnjuser/applied"  # server-rendered, no REST API
+APPLIED_JOBS_PAGE = "https://www.naukri.com/myapply/historypage"
 SAVED_JOBS_PAGE = "https://www.naukri.com/mnjuser/savedjobs"
-APPLIED_JOBS_API = None   # No client-side API exists — applied jobs page is server-rendered
+APPLIED_JOBS_API = "/cloudgateway-apply/whtma-services/v0/applyapi/v5/history"  # GET → {applyDetails, matchingRowsCount}
 SAVED_JOBS_API = "/jobapi/v3/user/savedJobs/detail"  # GET → {totaljobs, list}
 SAVE_JOB_API = None       # POST endpoint TBD

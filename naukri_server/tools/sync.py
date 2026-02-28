@@ -19,7 +19,7 @@ from naukri_server.tools.tracking import (
 
 
 # URL patterns for browser interception (discovered)
-_APPLIED_JOBS_URL_PATTERN = None  # No client-side API — page is server-rendered
+_APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
 _SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
 
 
@@ -155,6 +155,48 @@ async def _fetch_via_rest(api_path: Optional[str], params: dict = None) -> Optio
         return None
 
 
+async def _fetch_applied_jobs_rest(max_pages: int = 10) -> Optional[list]:
+    """Fetch all applied jobs via the history REST API with pagination.
+
+    GET /cloudgateway-apply/whtma-services/v0/applyapi/v5/history
+        ?pageSize=20&days=365&pageNumber=1&filterInfo=2
+
+    Returns a flat list of applyDetails entries, or None on failure.
+    """
+    if not APPLIED_JOBS_API:
+        return None
+
+    all_details = []
+    page = 1
+
+    while page <= max_pages:
+        params = {"pageSize": "20", "days": "365", "pageNumber": str(page), "filterInfo": "2"}
+        try:
+            data = await api_get(APPLIED_JOBS_API, params)
+        except Exception as e:
+            logger.warning("Applied jobs REST page %d failed: %s", page, e)
+            if page == 1:
+                return None
+            break
+
+        details = data.get("applyDetails", [])
+        if not details:
+            break
+
+        all_details.extend(details)
+
+        total = int(data.get("matchingRowsCount", 0))
+        if len(all_details) >= total:
+            break
+        page += 1
+
+    if not all_details:
+        return None
+
+    logger.info("REST: fetched %d applied jobs across %d page(s)", len(all_details), page)
+    return all_details
+
+
 async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                               timeout: float = 10) -> Optional[dict]:
     """Fetch data by navigating to a page and intercepting JSON API responses.
@@ -265,14 +307,19 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 # ---------------------------------------------------------------------------
 
 def _parse_applied_jobs(data) -> list:
-    """Parse Naukri applied-jobs API response into normalized format."""
+    """Parse Naukri applied-jobs API response into normalized format.
+
+    Handles two schemas:
+    - History API (applyDetails): {jobId, jobTitle, company, appliedDate, location, ...}
+    - Generic fallback: {jobs, jobDetails, applications, data, ...}
+    """
     items = []
 
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
-        for key in ("appliedJobs", "jobs", "jobDetails", "applications", "data",
-                     "appliedJobList", "results"):
+        for key in ("applyDetails", "appliedJobs", "jobs", "jobDetails",
+                     "applications", "data", "appliedJobList", "results"):
             if key in data and isinstance(data[key], list):
                 items = data[key]
                 break
@@ -284,17 +331,26 @@ def _parse_applied_jobs(data) -> list:
         job_id = str(item.get("jobId") or item.get("job_id") or item.get("id") or "")
         if not job_id:
             continue
+
+        # Extract status — history API uses statusMsg or nested status list
+        raw_status = item.get("statusMsg") or item.get("status") or item.get("applicationStatus")
+        if isinstance(raw_status, list) and raw_status:
+            # History API: status is a list of {statusMsg, statusDate, ...}
+            raw_status = raw_status[0].get("statusMsg") if isinstance(raw_status[0], dict) else raw_status
+
         jobs.append({
             "job_id": job_id,
-            "title": item.get("title") or item.get("jobTitle") or item.get("designation"),
-            "company": item.get("companyName") or item.get("company"),
-            "status": _map_naukri_status(item.get("status") or item.get("applicationStatus")),
+            "title": item.get("jobTitle") or item.get("title") or item.get("designation"),
+            "company": item.get("company") or item.get("companyName"),
+            "status": _map_naukri_status(raw_status),
             "applied_date": item.get("appliedDate") or item.get("applied_date") or item.get("createdDate"),
             "salary": (item.get("salary")
                        or (item.get("salaryDetail", {}).get("label")
                            if isinstance(item.get("salaryDetail"), dict) else None)),
             "location": item.get("location") or item.get("cityName"),
-            "url": item.get("url") or item.get("jdUrl"),
+            "url": item.get("jdUrl") or item.get("url"),
+            "apply_type": item.get("applyType"),
+            "recruiter_active": item.get("isRecruiterActive"),
         })
     return jobs
 
@@ -480,10 +536,11 @@ async def naukri_sync_applications(
         remote_jobs = None
         method = "unknown"
 
-        # Strategy 1: REST API
+        # Strategy 1: Paginated REST API (fetches all pages, returns raw entries)
         if not force_browser:
-            remote_data = await _fetch_via_rest(APPLIED_JOBS_API)
-            if remote_data is not None:
+            rest_entries = await _fetch_applied_jobs_rest()
+            if rest_entries is not None:
+                remote_data = {"applyDetails": rest_entries}
                 method = "rest_api"
 
         # Strategy 2: Browser JSON intercept (only if URL pattern known)
