@@ -31,16 +31,38 @@ async def _extract_next_data() -> dict | None:
 
 
 async def _scrape_salary_table() -> list:
-    """Fallback: scrape salary data from rendered DOM and parse into structured entries."""
+    """Fallback: scrape salary data from rendered DOM body text via regex matching."""
     raw = await browser.page.evaluate("""
         () => {
-            const cards = document.querySelectorAll('[class*="designation"], [class*="cmp-salary-card"], [class*="SalaryCard"], [class*="salaryCard"]');
-            const results = [];
-            cards.forEach(card => {
-                const text = card.innerText.trim();
-                if (text && text.length > 10) results.push(text);
-            });
-            return results;
+            const body = document.body.innerText;
+            const lines = body.split('\\n').filter(l => l.trim());
+            const entries = [];
+            for (let i = 0; i < lines.length - 2; i++) {
+                const line = lines[i].trim();
+                const next = lines[i+1] ? lines[i+1].trim() : '';
+                if (next.includes('exp.') && next.includes('salaries')) {
+                    let avgSalary = '';
+                    let salaryRange = '';
+                    for (let j = i + 2; j < Math.min(i + 6, lines.length); j++) {
+                        const l = lines[j].trim();
+                        if (l.startsWith('\\u20B9') && !avgSalary) {
+                            avgSalary = l;
+                        } else if (l.startsWith('\\u20B9') && avgSalary && l.includes('-')) {
+                            salaryRange = l;
+                            break;
+                        }
+                    }
+                    if (avgSalary) {
+                        entries.push({
+                            designation: line,
+                            experience_info: next,
+                            avg_salary: avgSalary,
+                            salary_range: salaryRange
+                        });
+                    }
+                }
+            }
+            return entries;
         }
     """)
     salaries = []
