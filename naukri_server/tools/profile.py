@@ -294,14 +294,20 @@ async def naukri_update_profile(fields: dict) -> dict:
                        f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
         }
 
-    try:
-        result = await api_post(FULLPROFILES_API, fields)
-        return {
-            "status": "updated",
-            "updated_fields": list(fields.keys()),
-            "response": result,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}
+    # Try v0 then v2 (same fallback pattern as naukri_refresh_profile)
+    last_error = None
+    for version in ("v0", "v2"):
+        endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", "/v2/")
+        try:
+            result = await api_post(endpoint, fields)
+            return {
+                "status": "updated",
+                "updated_fields": list(fields.keys()),
+                "api_version": version,
+                "response": result,
+            }
+        except Exception as e:
+            last_error = e
+            continue
+
+    return {"status": "error", "message": f"Profile update failed on all API versions: {last_error}"}
