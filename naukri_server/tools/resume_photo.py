@@ -212,10 +212,7 @@ async def naukri_delete_photo() -> dict:
 
             # Check if a photo exists on the profile page
             has_photo = await browser.page.evaluate("""() => {
-                const img = document.querySelector(
-                    '.photoWrap img, [class*="photo"] img, [class*="avatar"] img, '
-                    '[class*="profilePhoto"] img'
-                );
+                const img = document.querySelector('.photoWrap img, [class*="photo"] img, [class*="avatar"] img, [class*="profilePhoto"] img');
                 if (img && img.src && !img.src.includes('placeholder') && !img.src.includes('default')) {
                     return true;
                 }
@@ -253,11 +250,7 @@ async def naukri_delete_photo() -> dict:
             for _ in range(10):
                 await asyncio.sleep(1)
                 modal_appeared = await browser.page.evaluate("""() => {
-                    const modal = document.querySelector(
-                        '#photoCropper, [class*="photoCropper"], [class*="PhotoCropper"], '
-                        '[class*="cropModal"], [class*="photo-modal"], '
-                        '[class*="modal"][class*="photo"], [role="dialog"]'
-                    );
+                    const modal = document.querySelector('#photoCropper, [class*="photoCropper"], [class*="PhotoCropper"], [class*="cropModal"], [class*="photo-modal"], [class*="modal"][class*="photo"], [role="dialog"]');
                     return !!modal;
                 }""")
                 if modal_appeared:
@@ -268,23 +261,14 @@ async def naukri_delete_photo() -> dict:
 
             await asyncio.sleep(1)  # Let modal fully render
 
-            # Click the delete button inside the modal
+            # Step 1: Click the initial "Delete" option (.delBtn) in the photo modal
             delete_clicked = await browser.page.evaluate("""() => {
-                const selectors = [
-                    'button.delBtn',
-                    '.typ-14Bold.delBtn',
-                    '.delBtn',
-                    'button.btn-dark-ot',
-                ];
-                for (const sel of selectors) {
-                    const el = document.querySelector(sel);
-                    if (el) { el.click(); return sel; }
-                }
-                // Fallback: find any button with delete-related text
+                const el = document.querySelector('button.delBtn, .typ-14Bold.delBtn, .delBtn');
+                if (el) { el.click(); return el.className; }
                 const buttons = Array.from(document.querySelectorAll('button, a, span'));
                 for (const btn of buttons) {
                     const text = btn.textContent.trim().toLowerCase();
-                    if (text === 'delete' || text === 'delete photo' || text === 'remove' || text === 'remove photo') {
+                    if ((text === 'delete' || text === 'delete photo') && !btn.classList.contains('btn-dark-ot')) {
                         btn.click();
                         return 'text:' + btn.textContent.trim();
                     }
@@ -295,24 +279,29 @@ async def naukri_delete_photo() -> dict:
             if not delete_clicked:
                 return {"status": "error", "message": "Could not find the delete button in the photo modal."}
 
-            logger.info("Clicked delete button: %s", delete_clicked)
+            logger.info("Clicked initial delete option: %s", delete_clicked)
 
-            # Handle confirmation dialog (if one appears)
+            # Step 2: Click the confirmation "Delete" button
+            # After clicking .delBtn, a confirmation overlay appears with "Are you sure"
+            # text and a separate Delete button (NOT inside #photoCropper)
             await asyncio.sleep(2)
-            await browser.page.evaluate("""() => {
-                const confirmTexts = ['yes', 'confirm', 'delete', 'ok', 'yes, delete'];
+            confirm_clicked = await browser.page.evaluate("""() => {
+                // Find all visible Delete buttons, click the one in the confirmation overlay
                 const buttons = Array.from(document.querySelectorAll('button'));
-                for (const btn of buttons) {
-                    const text = btn.textContent.trim().toLowerCase();
-                    if (confirmTexts.includes(text) && btn.offsetParent !== null) {
-                        btn.click();
-                        return true;
-                    }
+                const delBtns = buttons.filter(b => {
+                    const text = b.textContent.trim().toLowerCase();
+                    return text === 'delete' && !b.classList.contains('delBtn') && b.offsetParent !== null;
+                });
+                // The confirmation Delete is the non-.delBtn one
+                if (delBtns.length > 0) {
+                    delBtns[delBtns.length - 1].click();
+                    return delBtns[delBtns.length - 1].className;
                 }
-                return false;
+                return null;
             }""")
 
-            await asyncio.sleep(3)  # Wait for deletion to complete
+            logger.info("Clicked confirmation button: %s", confirm_clicked)
+            await asyncio.sleep(5)  # Wait for deletion to complete
 
             return {
                 "status": "deleted",
