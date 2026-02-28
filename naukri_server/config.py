@@ -58,3 +58,13 @@ SAVED_JOBS_PAGE = "https://www.naukri.com/mnjuser/savedjobs"
 APPLIED_JOBS_API = "/cloudgateway-apply/whtma-services/v0/applyapi/v5/history"  # GET → {applyDetails, matchingRowsCount}
 SAVED_JOBS_API = "/jobapi/v3/user/savedJobs/detail"  # GET → {totaljobs, list}
 SAVE_JOB_API = None       # POST endpoint TBD
+
+# Application status detail
+APPLICATION_STATUS_API = "/cloudgateway-apply/whtma-services/v0/applyapi/v3/history-description"
+
+# Inbox & messaging
+INBOX_API = "/cloudgateway-nc-js/nc-services/v0/template/ni-inboxusermails-svc-tmpl_v0"
+MESSAGE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/inbox/users/self/mail"
+
+# Recommended jobs
+RECOMMENDED_JOBS_API = "/jobapi/v2/search/recom-jobs"

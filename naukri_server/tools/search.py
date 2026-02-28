@@ -2,8 +2,9 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.api import api_post, NaukriAPIError
 from naukri_server.browser import browser
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API
 
 
 @mcp.tool()
@@ -118,3 +119,68 @@ async def naukri_search_jobs(
             }
         except Exception as e:
             return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}"}
+
+
+def _parse_job_list(job_details: list, limit: int) -> list:
+    """Parse Naukri's jobDetails array into a clean list of job dicts."""
+    jobs = []
+    for job in job_details[:limit]:
+        salary = job.get("salaryDetail", {})
+        sal_min = salary.get("minimumSalary", 0)
+        sal_max = salary.get("maximumSalary", 0)
+        sal_label = salary.get("label", "")
+        salary_str = sal_label if sal_label else (
+            f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+        )
+
+        placeholders = job.get("placeholders", [])
+        loc_label = None
+        for ph in placeholders:
+            if ph.get("type") == "location":
+                loc_label = ph.get("label")
+                break
+        if not loc_label and placeholders:
+            loc_label = placeholders[0].get("label")
+
+        jobs.append({
+            "job_id": job.get("jobId"),
+            "title": job.get("title"),
+            "company": job.get("companyName"),
+            "salary": salary_str,
+            "location": loc_label,
+            "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
+            "is_applied": job.get("isApplied", False),
+            "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
+            "job_age": job.get("jobAge"),
+            "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
+            "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
+        })
+    return jobs
+
+
+@mcp.tool()
+async def naukri_get_recommendations(limit: int = 20) -> dict:
+    """Get personalized job recommendations from Naukri's algorithm based on your profile.
+
+    Args:
+        limit: Max jobs to return (default 20, max 50)
+
+    Returns:
+        - {status: "success", source: "recommendations", total_found, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_post(RECOMMENDED_JOBS_API, body={})
+        job_details = data.get("jobDetails", [])
+        jobs = _parse_job_list(job_details, limit)
+        return {
+            "status": "success",
+            "source": "recommendations",
+            "total_found": data.get("noOfJobs"),
+            "count": len(jobs),
+            "jobs": jobs,
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get recommendations: {type(e).__name__}: {e}"}

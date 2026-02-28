@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.config import logger
+from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.config import logger, APPLICATION_STATUS_API
 
 # Data files live alongside questions.json in the naukri/ directory
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
@@ -189,3 +190,50 @@ async def naukri_get_saved_jobs(limit: int = 50) -> dict:
         "count": min(len(saved), limit),
         "saved_jobs": saved[:limit],
     }
+
+
+@mcp.tool()
+async def naukri_get_application_status(job_id: str) -> dict:
+    """Get detailed status for a specific job application — recruiter activity, applicant count, match score, timeline.
+
+    Args:
+        job_id: Naukri job ID (e.g. "270226007446")
+
+    Returns:
+        - {status: "success", job_id, title, company, location, is_open, total_applicants,
+           recruiter_activity, match_rating, status_timeline: [{status, date}], matching_results}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
+
+        job_details = data.get("jobDetails") or {}
+        status_steps = data.get("status") or []
+        matching = data.get("matchingResults")
+
+        timeline = []
+        for step in status_steps:
+            entry = {"status": step.get("status") or step.get("label", "")}
+            if step.get("date"):
+                entry["date"] = step["date"]
+            timeline.append(entry)
+
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "title": job_details.get("jobTitle"),
+            "company": job_details.get("company"),
+            "location": job_details.get("location"),
+            "is_open": job_details.get("isOpen"),
+            "total_applicants": data.get("totalApplicants"),
+            "recruiter_activity": job_details.get("jobActivity"),
+            "recruiter_activity_date": job_details.get("jobActivityDate"),
+            "match_rating": data.get("starRating"),
+            "feedback_stored": data.get("feedbackStored"),
+            "status_timeline": timeline,
+            "matching_results": matching,
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get application status: {type(e).__name__}: {e}"}
