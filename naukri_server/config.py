@@ -52,9 +52,9 @@ APPLY_TRAILER = {
     "applySrc": "drecomm_profile",
 }
 
-# Sync pages & API endpoints (endpoints filled after running discover)
-APPLIED_JOBS_PAGE = "https://www.naukri.com/applied-jobs"
+# Sync pages & API endpoints (discovered via naukri_debug action="discover")
+APPLIED_JOBS_PAGE = "https://www.naukri.com/mnjuser/applied"  # server-rendered, no REST API
 SAVED_JOBS_PAGE = "https://www.naukri.com/mnjuser/savedjobs"
-APPLIED_JOBS_API = None   # REST path, e.g. "/cloudgateway-.../applications"
-SAVED_JOBS_API = None     # REST path, e.g. "/cloudgateway-.../savedjobs"
-SAVE_JOB_API = None       # POST endpoint for saving a job remotely
+APPLIED_JOBS_API = None   # No client-side API exists — applied jobs page is server-rendered
+SAVED_JOBS_API = "/jobapi/v3/user/savedJobs/detail"  # GET → {totaljobs, list}
+SAVE_JOB_API = None       # POST endpoint TBD

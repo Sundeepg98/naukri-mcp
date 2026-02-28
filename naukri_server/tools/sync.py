@@ -18,9 +18,9 @@ from naukri_server.tools.tracking import (
 )
 
 
-# URL patterns for browser interception (set after running discover)
-_APPLIED_JOBS_URL_PATTERN = None  # e.g., "applied" or "applications"
-_SAVED_JOBS_URL_PATTERN = None    # e.g., "saved" or "bookmark"
+# URL patterns for browser interception (discovered)
+_APPLIED_JOBS_URL_PATTERN = None  # No client-side API — page is server-rendered
+_SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
 
 
 # ---------------------------------------------------------------------------
@@ -292,18 +292,23 @@ async def naukri_sync_applications(
 ) -> dict:
     """Sync applied jobs from Naukri.com into local tracking.
 
-    Pulls your full application history from Naukri's backend and merges
+    Pulls your application history from Naukri's backend and merges
     with local applications.json. Preserves local-only fields (pending_questions,
     tracking_extra, source, etc.). New jobs from Naukri are added with
     source="naukri_sync".
 
-    Tries direct REST API first (fast), falls back to browser interception.
+    NOTE: Naukri's applied-jobs page is server-rendered with no client-side API.
+    This tool only works if a REST API endpoint has been discovered and configured.
+    Currently returns "not_available" until an endpoint is found.
+    Applications made via naukri_apply/naukri_batch_apply are always tracked locally.
 
     Args:
-        force_browser: If True, skip REST API and use browser interception.
+        force_browser: If True, skip REST API and use browser interception
+                       (requires a known URL pattern to avoid capturing wrong data).
 
     Returns:
         - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, applications: [...first 20...]}
+        - {status: "not_available", message} — no API endpoint discovered
         - {status: "error", message}
     """
     try:
@@ -315,7 +320,7 @@ async def naukri_sync_applications(
             if remote_data is not None:
                 method = "rest_api"
 
-        if remote_data is None:
+        if remote_data is None and _APPLIED_JOBS_URL_PATTERN:
             remote_data = await _fetch_via_browser(
                 APPLIED_JOBS_PAGE,
                 url_pattern=_APPLIED_JOBS_URL_PATTERN,
@@ -324,8 +329,10 @@ async def naukri_sync_applications(
 
         if remote_data is None:
             return {
-                "status": "error",
-                "message": "Could not fetch applied jobs. Run naukri_debug(action='discover') to find the API endpoint.",
+                "status": "not_available",
+                "message": ("No applied-jobs API endpoint discovered yet. "
+                            "Naukri's applied-jobs page is server-rendered with no client-side API. "
+                            "Applications made via naukri_apply/naukri_batch_apply are tracked locally."),
             }
 
         remote_jobs = _parse_applied_jobs(remote_data)
