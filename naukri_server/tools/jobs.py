@@ -1,0 +1,110 @@
+import asyncio
+import re
+from typing import Optional
+
+from naukri_server import mcp
+from naukri_server.browser import browser
+from naukri_server.config import NAUKRI_BASE
+
+
+# ============================================================================
+# Tool 4: Get Job Details (REST API)
+# ============================================================================
+
+
+def _extract_job_id(job_url_or_id: str) -> str:
+    """Extract numeric job ID from URL or pass through if already an ID."""
+    if job_url_or_id.isdigit():
+        return job_url_or_id
+    # URL pattern: ...-<jobId> at the end
+    match = re.search(r'(\d{10,})', job_url_or_id)
+    return match.group(1) if match else job_url_or_id
+
+
+@mcp.tool()
+async def naukri_get_job(job_url: str) -> dict:
+    """Get full details for a specific Naukri job.
+
+    Navigates to the job page and intercepts the structured JSON response
+    that Naukri's frontend receives from its job details API.
+
+    Args:
+        job_url: Naukri job URL or job ID (numeric)
+
+    Returns title, company, description, skills, salary, match score,
+    and whether you can apply.
+    """
+    async with browser._lock:
+        try:
+            # Build URL if just an ID was passed
+            if job_url.isdigit():
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
+            elif not job_url.startswith("http"):
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
+            else:
+                page_url = job_url
+
+            job_id = _extract_job_id(job_url)
+
+            # Intercept job details + match score API responses
+            captured = {}
+
+            async def on_response(response):
+                try:
+                    if f"/jobapi/v4/job/{job_id}" in response.url and response.status == 200:
+                        captured["details"] = await response.json()
+                    elif f"/job/{job_id}/matchscore" in response.url and response.status == 200:
+                        captured["score"] = await response.json()
+                except Exception:
+                    pass
+
+            browser.page.on("response", on_response)
+            try:
+                await browser.goto(page_url)
+                await asyncio.sleep(4)
+            finally:
+                browser.page.remove_listener("response", on_response)
+
+            details_data = captured.get("details")
+            if not details_data:
+                return {"status": "error", "message": "Job details API response not captured. Page may not have loaded."}
+
+            job = details_data.get("jobDetails", details_data)
+
+            salary = job.get("salaryDetail", {})
+            sal_label = salary.get("label", "")
+            sal_min = salary.get("minimumSalary", 0)
+            sal_max = salary.get("maximumSalary", 0)
+            salary_str = sal_label if sal_label else (
+                f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+            )
+
+            company = job.get("companyDetail", {})
+            is_applied = job.get("isApplied", False)
+            external = bool(job.get("applyRedirectUrl"))
+
+            match_score = None
+            score_data = captured.get("score")
+            if score_data:
+                match_score = score_data.get("Keyskills")
+
+            return {
+                "status": "success",
+                "job_id": job_id,
+                "title": job.get("title"),
+                "company": company.get("name"),
+                "salary": salary_str,
+                "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
+                "location": job.get("cityName") or job.get("citySuburb"),
+                "description": job.get("description", ""),
+                "skills": [s.get("label", s) if isinstance(s, dict) else s for s in job.get("keySkills", [])],
+                "match_score": match_score,
+                "is_applied": is_applied,
+                "external_apply": external,
+                "can_apply": not is_applied and not external,
+                "vacancies": job.get("vacany"),
+                "apply_count": job.get("applyCount"),
+                "url": page_url,
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}"}

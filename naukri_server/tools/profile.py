@@ -1,0 +1,165 @@
+import asyncio
+from typing import Optional
+
+from naukri_server import mcp
+from naukri_server.browser import browser
+from naukri_server.api import api_get
+from naukri_server.config import NAUKRI_BASE
+
+
+# ============================================================================
+# Tool 6: Refresh Profile (Playwright — needs browser interaction)
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_refresh_profile() -> dict:
+    """Refresh Naukri profile to boost visibility (daily trick).
+
+    Re-saves your resume headline via REST API (no browser interaction).
+    Triggers Naukri's 'recently active' signal — recruiters see you first.
+    """
+    async with browser._lock:
+        await browser.goto(f"{NAUKRI_BASE}/mnjuser/profile")
+        await asyncio.sleep(3)
+
+        if "/nlogin" in browser.page.url:
+            return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+
+        # Click Resume Headline edit icon
+        edit_clicked = await browser.page.evaluate("""() => {
+            const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+            );
+            if (editIcons.length === 0) return null;
+            for (const icon of editIcons) {
+                const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
+                if (section) { icon.click(); return 'headline_edit'; }
+            }
+            for (const icon of editIcons) {
+                const parent = icon.closest('div, section');
+                if (parent && parent.textContent.includes('Resume headline')) {
+                    icon.click();
+                    return 'headline_parent';
+                }
+            }
+            editIcons[0].click();
+            return 'first_edit';
+        }""")
+
+        if not edit_clicked:
+            return {"status": "error", "message": "Could not find edit button on profile"}
+
+        await asyncio.sleep(2)
+
+        # Intercept the API call that Save triggers — confirms it actually saved
+        api_confirmed = {}
+
+        async def on_response(response):
+            if "fullprofiles" in response.url and response.request.method == "POST":
+                api_confirmed["status"] = response.status
+
+        browser.page.on("response", on_response)
+
+        try:
+            save_result = await browser.page.evaluate("""() => {
+                const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                if (modal) {
+                    const btn = Array.from(modal.querySelectorAll('button')).find(
+                        b => b.textContent.trim().toLowerCase() === 'save'
+                    );
+                    if (btn) { btn.click(); return 'modal_save'; }
+                }
+                const exactSave = Array.from(document.querySelectorAll('button')).find(
+                    b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+                );
+                if (exactSave) { exactSave.click(); return 'exact_save'; }
+                return null;
+            }""")
+
+            if not save_result:
+                return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
+
+            await asyncio.sleep(3)
+        finally:
+            browser.page.remove_listener("response", on_response)
+
+        return {
+            "status": "refreshed",
+            "method": edit_clicked,
+            "save": save_result,
+            "api_confirmed": api_confirmed.get("status") == 200,
+            "message": "Profile refreshed. You appear as 'recently active'.",
+        }
+
+
+# ============================================================================
+# Tool 8: Get Profile (REST API)
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_profile() -> dict:
+    """Get your full Naukri profile via API.
+
+    Returns skills (with experience years), employment history, education,
+    current CTC, expected CTC, notice period, location — everything needed
+    for Claude to auto-answer screening questions intelligently.
+    """
+    try:
+        data = await api_get(
+            "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+            {"expand_level": "4"},
+        )
+
+        profile = data.get("profile", [{}])[0]
+        additional = data.get("profileAdditional", {})
+
+        skills = []
+        for s in data.get("itskills", []):
+            exp_time = s.get("experienceTime", {})
+            skills.append({
+                "skill": s.get("skill"),
+                "experience_years": exp_time.get("year", 0),
+                "experience_months": exp_time.get("month", 0),
+            })
+
+        employment = []
+        for emp in data.get("employments", []):
+            employment.append({
+                "designation": emp.get("designation"),
+                "organization": emp.get("organization"),
+                "start_date": emp.get("startDate"),
+                "end_date": emp.get("endDate") or "Present",
+            })
+
+        education = []
+        for edu in data.get("educations", []):
+            education.append({
+                "degree": edu.get("course", {}).get("value"),
+                "specialization": edu.get("specialisation", {}).get("value"),
+                "institute": edu.get("institute"),
+                "year": edu.get("yearOfCompletion"),
+            })
+
+        exp = profile.get("experience", {})
+
+        return {
+            "status": "success",
+            "name": profile.get("name"),
+            "current_ctc": profile.get("absoluteCtc"),
+            "expected_ctc": profile.get("absoluteExpectedCtc"),
+            "notice_period": profile.get("noticePeriod", {}).get("value"),
+            "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
+            "current_location": profile.get("city", {}).get("value"),
+            "gender": "Male" if profile.get("gender") == "M" else "Female",
+            "key_skills": profile.get("keySkills"),
+            "skills_with_experience": skills,
+            "employment": employment,
+            "education": education,
+            "profile_id": additional.get("profileId"),
+        }
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
