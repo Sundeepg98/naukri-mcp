@@ -6,7 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import NAUKRI_BASE, SEARCH_API, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
+from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.search import _parse_job_list
 from naukri_server.validation import validate_company_list, validate_job_list
 
@@ -219,20 +219,20 @@ async def naukri_follow_company(
 
 
 @mcp.tool()
-async def naukri_get_company_follow_status(company_ids: list[str]) -> dict:
+async def naukri_get_company_follow_status(group_ids: list[str]) -> dict:
     """Check follow status for multiple companies at once.
 
     Requires: group_ids from naukri_search_companies results.
 
     Args:
-        company_ids: List of company group IDs to check
+        group_ids: List of company group IDs to check
 
     Returns:
         - {status: "success", followed: [...ids...], not_followed: [...ids...]}
         - {status: "error", message}
     """
     try:
-        query = ",".join(company_ids)
+        query = ",".join(group_ids)
         data = await api_get(
             COMPANY_FOLLOW_STATUS_API,
             params={"query": query},
@@ -243,8 +243,8 @@ async def naukri_get_company_follow_status(company_ids: list[str]) -> dict:
             gid = str(g.get("id", g) if isinstance(g, dict) else g)
             followed_ids.add(gid)
 
-        followed = [cid for cid in company_ids if cid in followed_ids]
-        not_followed = [cid for cid in company_ids if cid not in followed_ids]
+        followed = [gid for gid in group_ids if gid in followed_ids]
+        not_followed = [gid for gid in group_ids if gid not in followed_ids]
 
         return {
             "status": "success",

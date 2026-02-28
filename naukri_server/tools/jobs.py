@@ -28,13 +28,13 @@ def _extract_job_id(job_url_or_id: str) -> str:
 
 
 @mcp.tool()
-async def naukri_get_job(job_url: str) -> dict:
+async def naukri_get_job(job_id_or_url: str) -> dict:
     """Get full details for a specific Naukri job — description, skills, salary, match score, apply status.
 
     Requires: a job URL or numeric job_id from search results.
 
     Args:
-        job_url: Naukri job URL or job ID (numeric)
+        job_id_or_url: Naukri job URL or job ID (numeric)
 
     Returns:
         - {status: "success", job_id, title, company, salary, experience, location, description, skills, match_score, is_applied, can_apply, url, ...}
@@ -43,14 +43,14 @@ async def naukri_get_job(job_url: str) -> dict:
     async with browser.page_pool.acquire() as page:
         try:
             # Build URL if just an ID was passed
-            if job_url.isdigit():
-                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
-            elif not job_url.startswith("http"):
-                page_url = f"{NAUKRI_BASE}/job-listings-{job_url}"
+            if job_id_or_url.isdigit():
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_id_or_url}"
+            elif not job_id_or_url.startswith("http"):
+                page_url = f"{NAUKRI_BASE}/job-listings-{job_id_or_url}"
             else:
-                page_url = job_url
+                page_url = job_id_or_url
 
-            job_id = _extract_job_id(job_url)
+            job_id = _extract_job_id(job_id_or_url)
 
             # Intercept job details + match score API responses
             captured = {}

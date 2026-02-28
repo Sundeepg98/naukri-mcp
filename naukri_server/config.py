@@ -2,11 +2,8 @@
 Configuration constants and logging setup for Naukri MCP server.
 """
 
-import asyncio
-import json
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -83,9 +80,6 @@ MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-ma
 JOB_ALERT_API = "/alertapi/v2/ssa"  # POST → create alert {name, keyword, location, functionAreaId, roleId, experience, minCTC, industryTypeId, email}
 # CJA = "Custom Job Alerts" — the unified list endpoint (GET) that returns both SSA and CJA alerts
 JOB_ALERTS_LIST_API = "/alertapi/v2/user/cjas"  # GET → {list: [{alertId, name, keywords, location, functionAreaId, roleId, experience, minCTC, maxCTC, industryTypeId, alertType, email}]}
-JOB_ALERT_CREATE_PATH = "/alert/createsmjlt"  # Path for "Send Me Jobs Like These" flow (browser navigation)
-JOB_ALERTS_PAGE = "https://www.naukri.com/mnjuser/jobalerts"  # Legacy page — renders empty (widget-based, no API calls)
-FREE_JOB_ALERTS_PAGE = "https://www.naukri.com/free-job-alerts"  # Redirects to profile → jobSearchPreferences
 
 # Save/Unsave Jobs (discovered via webpack config module 55841)
 SAVE_JOB_API = "/jobapi/v3/user/savejob/"  # POST (append job_id)
@@ -98,7 +92,6 @@ SIMILAR_JOBS_API = "/jobapi/v2/search/simjobs/"  # GET (append job_id)
 APPLY_WORKFLOW_API = "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply"  # POST
 REPORT_FRAUD_API = "/servicegateway-apply/fraud-detection/1.0/jobseeker/report"  # POST
 COMPANY_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/users/self/companygroups-follow-status"  # GET
-FILE_VALIDATION_API = "https://filevalidation.naukri.com/file"  # POST (resume upload validation)
 
 # Profile editing & settings
 PROFILE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self"
@@ -112,9 +105,6 @@ COMPANY_SEARCH_API = "/companyapi/v1/search"
 SEARCH_IMPRESSIONS_API = "/cloudgateway-apply/profile-performance/v0/jobseeker/self/search-impressions"
 RECRUITER_ACTIVITY_API = "/cloudgateway-nc-js/nc-services/v0/template/ni-jobseeker-activity-svc-tmpl_v0"
 ACTIVITY_LEVEL_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/activityLevel"
-
-# Login Status
-LOGIN_STATUS_API = "/central-login-services/v0/credentials/login-status"
 
 # Naukri 360 / Subscription & Services
 N360_CONFIG_API = "/n360-services/v1/config-n360-pro"

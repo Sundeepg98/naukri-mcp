@@ -14,8 +14,8 @@ from naukri_server.validation import validate_profile
 
 
 @mcp.tool()
-async def naukri_refresh_profile(randomize: bool = False) -> dict:
-    """Refresh Naukri profile to boost visibility (daily trick).
+async def naukri_boost_visibility(randomize: bool = False) -> dict:
+    """Boost your profile visibility by refreshing your headline — re-saves your current headline to bump your profile in recruiter searches.
 
     Re-saves your resume headline via REST API to trigger Naukri's
     'recently active' signal — recruiters see you first.
@@ -61,76 +61,79 @@ async def naukri_refresh_profile(randomize: bool = False) -> dict:
         logger.warning("REST refresh failed, falling back to browser: %s", e)
 
     # Strategy 2: Browser fallback (original approach)
-    async with browser.page_pool.acquire() as page:
-        await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-        await asyncio.sleep(3)
+    try:
+        async with browser.page_pool.acquire() as page:
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
+            await asyncio.sleep(3)
 
-        if "/nlogin" in page.url:
-            return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+            if "/nlogin" in page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-        edit_clicked = await page.evaluate("""() => {
-            const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
-                el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
-            );
-            if (editIcons.length === 0) return null;
-            for (const icon of editIcons) {
-                const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
-                if (section) { icon.click(); return 'headline_edit'; }
-            }
-            for (const icon of editIcons) {
-                const parent = icon.closest('div, section');
-                if (parent && parent.textContent.includes('Resume headline')) {
-                    icon.click();
-                    return 'headline_parent';
-                }
-            }
-            editIcons[0].click();
-            return 'first_edit';
-        }""")
-
-        if not edit_clicked:
-            return {"status": "error", "message": "Could not find edit button on profile"}
-
-        await asyncio.sleep(2)
-
-        api_confirmed = {}
-
-        async def on_response(response):
-            if "fullprofiles" in response.url and response.request.method == "POST":
-                api_confirmed["status"] = response.status
-
-        page.on("response", on_response)
-
-        try:
-            save_result = await page.evaluate("""() => {
-                const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-                if (modal) {
-                    const btn = Array.from(modal.querySelectorAll('button')).find(
-                        b => b.textContent.trim().toLowerCase() === 'save'
-                    );
-                    if (btn) { btn.click(); return 'modal_save'; }
-                }
-                const exactSave = Array.from(document.querySelectorAll('button')).find(
-                    b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+            edit_clicked = await page.evaluate("""() => {
+                const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                    el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
                 );
-                if (exactSave) { exactSave.click(); return 'exact_save'; }
-                return null;
+                if (editIcons.length === 0) return null;
+                for (const icon of editIcons) {
+                    const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
+                    if (section) { icon.click(); return 'headline_edit'; }
+                }
+                for (const icon of editIcons) {
+                    const parent = icon.closest('div, section');
+                    if (parent && parent.textContent.includes('Resume headline')) {
+                        icon.click();
+                        return 'headline_parent';
+                    }
+                }
+                editIcons[0].click();
+                return 'first_edit';
             }""")
 
-            if not save_result:
-                return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
+            if not edit_clicked:
+                return {"status": "error", "message": "Could not find edit button on profile"}
 
-            await asyncio.sleep(3)
-        finally:
-            page.remove_listener("response", on_response)
+            await asyncio.sleep(2)
 
-        return {
-            "status": "refreshed",
-            "method": f"browser_{edit_clicked}",
-            "save": save_result,
-            "api_confirmed": api_confirmed.get("status") == 200,
-            "message": "Profile refreshed via browser. You appear as 'recently active'.",
-        }
+            api_confirmed = {}
+
+            async def on_response(response):
+                if "fullprofiles" in response.url and response.request.method == "POST":
+                    api_confirmed["status"] = response.status
+
+            page.on("response", on_response)
+
+            try:
+                save_result = await page.evaluate("""() => {
+                    const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                    if (modal) {
+                        const btn = Array.from(modal.querySelectorAll('button')).find(
+                            b => b.textContent.trim().toLowerCase() === 'save'
+                        );
+                        if (btn) { btn.click(); return 'modal_save'; }
+                    }
+                    const exactSave = Array.from(document.querySelectorAll('button')).find(
+                        b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+                    );
+                    if (exactSave) { exactSave.click(); return 'exact_save'; }
+                    return null;
+                }""")
+
+                if not save_result:
+                    return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
+
+                await asyncio.sleep(3)
+            finally:
+                page.remove_listener("response", on_response)
+
+            return {
+                "status": "refreshed",
+                "method": f"browser_{edit_clicked}",
+                "save": save_result,
+                "api_confirmed": api_confirmed.get("status") == 200,
+                "message": "Profile refreshed via browser. You appear as 'recently active'.",
+            }
+    except Exception as e:
+        return {"status": "error", "message": f"Browser fallback failed: {type(e).__name__}: {e}"}
 
 
 # ============================================================================
@@ -270,9 +273,9 @@ BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills"}
 async def naukri_update_profile(fields: dict) -> dict:
     """Update your Naukri profile fields via browser UI automation.
 
-    Currently only resumeHeadline and keySkills are supported via browser UI.
-    Other fields in the UPDATABLE_FIELDS set are validated but will return an
-    error saying they're not yet supported for browser UI updates.
+    Currently supported fields: resumeHeadline, keySkills (browser-based update).
+    Other fields in UPDATABLE_FIELDS are accepted but may not persist —
+    Naukri's API support for direct field updates varies.
 
     Use naukri_get_profile first to see current values.
 
@@ -280,7 +283,7 @@ async def naukri_update_profile(fields: dict) -> dict:
         fields: Dict of fields to update. Currently supported:
             - resumeHeadline: str — your profile headline
             - keySkills: str — comma-separated skills
-            Other fields are accepted but not yet implemented for browser UI.
+            Other fields in UPDATABLE_FIELDS are accepted but may not persist.
 
     Returns:
         - {status: "updated", updated_fields: [...], method, api_confirmed, message}
@@ -383,7 +386,7 @@ async def naukri_update_profile(fields: dict) -> dict:
                     await asyncio.sleep(3)
 
                 # --- Key Skills ---
-                elif "keySkills" in fields:
+                if "keySkills" in fields:
                     # Navigate to key skills section and click edit
                     edit_clicked = await page.evaluate("""() => {
                         const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>

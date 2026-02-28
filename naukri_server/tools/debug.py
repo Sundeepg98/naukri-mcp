@@ -37,11 +37,36 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
     """Debug tool: capture current page state for troubleshooting.
 
     Args:
-        action: "snapshot" -- DOM structure | "screenshot" -- saves debug.png |
-                "scan" -- deep scan for specific elements (chatbot, neo, agent, iframe) |
-                "discover" -- intercept JSON API calls on applied/saved jobs pages
-        url: Optional URL to navigate to before performing the action.
-             For "discover", can be a page key ("applied_jobs" / "saved_jobs") or a custom URL.
+        action: One of the actions below.
+
+            Browser actions (navigate to url first, then act):
+                "snapshot"    -- (default) DOM structure of current page (job cards, buttons, etc.)
+                "screenshot"  -- save a PNG screenshot to debug.png in the project root
+                "scan"        -- deep scan for chatbot/widget/iframe/neo/agent elements
+                "deepscan"    -- thorough scan: high z-index, shadow DOM, web components, bottom-right floaters
+                "explore"     -- comprehensive DOM exploration: forms, buttons, scripts, data attrs, embedded JSON
+                "notif_explore" -- targeted notification page exploration (NEXT_DATA, scripts, DOM tree)
+
+            API actions (url = API path or "API_PATH|JSON_BODY"):
+                "fetch_api"   -- browser-context GET request; url is the API path to fetch
+                "post_api"    -- browser-context POST; url format "API_PATH|JSON_BODY"
+                "put_api"     -- browser-context PUT; url format "API_PATH|JSON_BODY"
+                "delete_api"  -- browser-context DELETE; url is API path, optional "|JSON_BODY"
+                "fetch_widget" -- like fetch_api but uses widget headers (appid:109, systemid:109)
+                "settings_api" -- fetch profile/communication/visibility settings from Naukri API (url ignored)
+
+            Discovery actions (navigate + intercept network traffic):
+                "discover"          -- navigate to applied/saved jobs pages, capture all 200 JSON responses;
+                                       url can be a page key ("applied_jobs"/"saved_jobs") or a custom URL
+                "fetch_all_statuses" -- like discover but captures ALL HTTP statuses (not just 200)
+                "intercept_requests" -- capture outgoing POST request bodies (method, url, post_data)
+                "click_discover"     -- click a CSS selector then capture resulting API calls;
+                                       url format "CSS_SELECTOR|OPTIONAL_NAV_URL"
+
+        url: Meaning depends on the action (see above).
+             For browser actions: optional URL to navigate to before performing the action.
+             For API actions: the API path (or "path|body" for POST/PUT/DELETE).
+             For discovery actions: page key, custom URL, or "selector|url".
 
     Returns:
         - {status: "ok", url, title, ...action-specific data...}

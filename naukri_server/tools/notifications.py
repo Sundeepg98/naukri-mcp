@@ -50,14 +50,14 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
 
 
 @mcp.tool()
-async def naukri_mark_notification_read(notification_id: str, created_at: str) -> dict:
+async def naukri_mark_notification_read(notification_id: str, date: str) -> dict:
     """Mark a notification as read in your Naukri notification center.
 
-    Requires: notification_id and created_at from naukri_get_notifications results.
+    Requires: notification_id and date from naukri_get_notifications results.
 
     Args:
         notification_id: Notification ID to mark as read
-        created_at: The notification's creation timestamp (from the 'date' field in naukri_get_notifications)
+        date: The notification's date field from naukri_get_notifications
 
     Returns:
         - {status: "success", notification_id}
@@ -66,7 +66,7 @@ async def naukri_mark_notification_read(notification_id: str, created_at: str) -
     try:
         await api_post(NOTIFICATION_READ_API, body={
             "notificationId": notification_id,
-            "createdAt": created_at,
+            "createdAt": date,
         })
         return {
             "status": "success",
@@ -106,7 +106,7 @@ async def naukri_mark_all_notifications_read() -> dict:
         marked = 0
         errors = []
         for n in unread:
-            mark_result = await naukri_mark_notification_read(n["id"], n["date"])
+            mark_result = await naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
             if mark_result.get("status") == "success":
                 marked += 1
             else:

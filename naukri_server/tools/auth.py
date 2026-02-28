@@ -3,8 +3,9 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.config import ACTIVITY_LEVEL_API, NAUKRI_BASE
 
 
 # ============================================================================
@@ -151,3 +152,30 @@ async def naukri_verify_otp(otp: str) -> dict:
             return {"status": "error", "message": error or "OTP verification failed"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# Tool 3: Login Status Check (API — no browser needed)
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_login_status() -> dict:
+    """Quick check if your Naukri session is still active and authenticated.
+
+    Uses the activity level endpoint which reliably returns login state.
+
+    Returns:
+        - {status: "success", logged_in: true/false}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(ACTIVITY_LEVEL_API)
+        return {
+            "status": "success",
+            "logged_in": data.get("loggedInStatus", False),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}"}

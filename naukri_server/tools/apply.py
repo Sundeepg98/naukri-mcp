@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
-from naukri_server.config import APPLY_TRAILER, logger
+from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, logger
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application
 
@@ -41,7 +41,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                 body["applyData"] = {job_id: {"answers": apply_answers}}
 
         data = await api_post(
-            "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+            APPLY_WORKFLOW_API,
             body,
         )
 
@@ -123,7 +123,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
             if not pending and auto_answers:
                 body["applyData"] = {job_id: {"answers": auto_answers}}
                 data2 = await api_post(
-                    "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply",
+                    APPLY_WORKFLOW_API,
                     body,
                 )
                 jobs2 = data2.get("jobs", [])

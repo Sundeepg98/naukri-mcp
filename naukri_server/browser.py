@@ -234,7 +234,6 @@ class NaukriBrowser:
         self.token: Optional[str] = None  # Backward compat — use token_manager instead
         self.token_manager = TokenManager()
         self.page_pool: Optional[PagePool] = None
-        self._lock = asyncio.Lock()  # Deprecated — kept for unmigrated tools
 
     async def start(self):
         self.pw = await async_playwright().start()
@@ -289,44 +288,6 @@ class NaukriBrowser:
         if self.pw:
             await self.pw.stop()
         logger.info("Browser stopped")
-
-    # --- Backward compat methods (deprecated — use token_manager + page_pool) ---
-
-    async def _extract_token(self) -> Optional[str]:
-        """Deprecated: use token_manager.extract()."""
-        await self.token_manager.extract()
-        self.token = self.token_manager._token
-        return self.token
-
-    async def refresh_token(self) -> Optional[str]:
-        """Deprecated: use token_manager.refresh(page)."""
-        if self.page:
-            result = await self.token_manager.refresh(self.page)
-            self.token = self.token_manager._token
-            return result
-        return None
-
-    async def ensure_token(self) -> str:
-        """Deprecated: use token_manager.ensure_token()."""
-        result = await self.token_manager.ensure_token()
-        self.token = self.token_manager._token
-        return result
-
-    async def goto(self, url: str, wait: str = "domcontentloaded") -> None:
-        """Deprecated: use page_goto(page, url)."""
-        await page_goto(self.page, url, wait)
-
-    async def text(self, selector: str) -> Optional[str]:
-        """Deprecated: use page_text(page, selector)."""
-        return await page_text(self.page, selector)
-
-    async def exists(self, selector: str) -> bool:
-        """Deprecated: use page_exists(page, selector)."""
-        return await page_exists(self.page, selector)
-
-    async def safe_fill(self, selector: str, value: str, delay: int = 30):
-        """Deprecated: use page_safe_fill(page, selector, value)."""
-        await page_safe_fill(self.page, selector, value, delay)
 
     async def get_profile_name(self) -> str:
         """Get profile name via profile API."""

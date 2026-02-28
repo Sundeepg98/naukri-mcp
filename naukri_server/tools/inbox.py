@@ -20,7 +20,6 @@ async def naukri_get_inbox(
     unread_only: bool = False,
     mail_type: str = "",
     page: int = 1,
-    page_size: int = 20,
 ) -> dict:
     """List recruiter messages and invitations from your Naukri inbox.
 
@@ -34,7 +33,6 @@ async def naukri_get_inbox(
         unread_only: If True, only return unread messages
         mail_type: Filter by message type (e.g. "powerNvite" for NVites only, "" for all)
         page: Page number for pagination (default 1)
-        page_size: Number of items per page (default 20)
 
     Returns:
         - {status: "success", total, unread, count, total_power_nvite, unread_power_nvite,
@@ -45,7 +43,7 @@ async def naukri_get_inbox(
     """
     try:
         body = {
-            "pageSize": page_size,
+            "pageSize": limit,
             "pageNo": page,
             "mailType": mail_type,
             "isUnRead": False,
@@ -145,7 +143,7 @@ async def naukri_get_inbox(
 async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
     """Read a specific message from your Naukri inbox.
 
-    Requires: message_id, folder, and recipient_id from naukri_get_inbox results.
+    Requires: message_id, vcard_id, and unique_id from naukri_get_inbox results.
 
     Args:
         message_id: Message ID from inbox listing

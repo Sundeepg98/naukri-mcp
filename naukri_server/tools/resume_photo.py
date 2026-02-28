@@ -303,6 +303,9 @@ async def naukri_delete_photo() -> dict:
                 return null;
             }""")
 
+            if confirm_clicked is None:
+                return {"status": "error", "message": "Could not find confirmation dialog to delete photo."}
+
             logger.info("Clicked confirmation button: %s", confirm_clicked)
             await asyncio.sleep(5)  # Wait for deletion to complete
 

@@ -77,6 +77,8 @@ async def naukri_get_applications(
 ) -> dict:
     """List your tracked job applications with filtering and summary stats.
 
+    Reads from local applications tracking file. Use naukri_sync_applications first to fetch latest data from Naukri.com.
+
     Lists applications from local tracking. For detailed status of ONE specific
     application, use naukri_get_application_status instead.
 
@@ -139,6 +141,8 @@ async def naukri_save_job(job_id: str, title: str = None, company: str = None,
                            notes: Optional[str] = None,
                            sync_to_naukri: bool = False) -> dict:
     """Save/bookmark a job for later.
+
+    Note: Saves locally by default. Set sync_to_naukri=True to also save on Naukri.com.
 
     Args:
         job_id: Naukri job ID
@@ -315,26 +319,3 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get match analytics: {type(e).__name__}: {e}"}
-
-
-@mcp.tool()
-async def naukri_export_applications() -> dict:
-    """Export all tracked job applications as structured JSON.
-
-    Combines local tracking data into a single export. Useful for
-    spreadsheet import, backup, or analysis.
-
-    Returns:
-        - {status: "success", total, exported_at, applications: [...all...]}
-    """
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-
-    apps.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
-
-    return {
-        "status": "success",
-        "total": len(apps),
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "applications": apps,
-    }

@@ -2,7 +2,7 @@
 
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.config import N360_CONFIG_API, LOGIN_STATUS_API
+from naukri_server.config import N360_CONFIG_API
 
 
 @mcp.tool()
@@ -43,26 +43,3 @@ async def naukri_get_subscription_status() -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get subscription status: {type(e).__name__}: {e}"}
-
-
-@mcp.tool()
-async def naukri_get_login_status() -> dict:
-    """Quick check if your Naukri session is still active and authenticated.
-
-    Uses the activity level endpoint which reliably returns login state.
-
-    Returns:
-        - {status: "success", logged_in: true/false}
-        - {status: "error", message}
-    """
-    try:
-        from naukri_server.config import ACTIVITY_LEVEL_API
-        data = await api_get(ACTIVITY_LEVEL_API)
-        return {
-            "status": "success",
-            "logged_in": data.get("loggedInStatus", False),
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}"}
