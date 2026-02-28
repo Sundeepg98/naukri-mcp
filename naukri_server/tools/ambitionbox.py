@@ -45,9 +45,9 @@ async def _scrape_salary_table() -> list:
                     let salaryRange = '';
                     for (let j = i + 2; j < Math.min(i + 6, lines.length); j++) {
                         const l = lines[j].trim();
-                        if (l.startsWith('\\u20B9') && !avgSalary) {
+                        if ((l.startsWith('\u20B9') || l.includes('Lakhs') || l.includes('L/yr')) && !avgSalary) {
                             avgSalary = l;
-                        } else if (l.startsWith('\\u20B9') && avgSalary && l.includes('-')) {
+                        } else if ((l.startsWith('\u20B9') || l.includes('L/yr')) && avgSalary && l.includes('-')) {
                             salaryRange = l;
                             break;
                         }
@@ -65,42 +65,10 @@ async def _scrape_salary_table() -> list:
             return entries;
         }
     """)
-    salaries = []
+    # JS returns list of dicts with designation, experience_info, avg_salary, salary_range
     if not isinstance(raw, list):
-        return salaries
-    for text in raw:
-        if not isinstance(text, str):
-            continue
-        # Parse entries like "Software Engineer\n\n2 - 5 years exp. (1.1k salaries)\n₹14.8 Lakhs\n\n₹14.1 L/yr - ₹15.5 L/yr"
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        if len(lines) < 2:
-            continue
-        # Skip non-salary cards (ads, promos)
-        if any(skip in text for skip in ["Claim Now", "fresher salaries", "Share your salary", "Salary Hike", "also viewed"]):
-            continue
-        designation = lines[0] if lines else ""
-        experience = ""
-        avg_salary = ""
-        salary_range = ""
-        salary_count = ""
-        for line in lines[1:]:
-            if "exp." in line or "year" in line.lower():
-                experience = line.split("(")[0].strip()
-                if "(" in line and "salaries" in line:
-                    salary_count = line.split("(")[1].split("salaries")[0].strip()
-            elif line.startswith("₹") and "L/yr" in line and "-" in line:
-                salary_range = line
-            elif line.startswith("₹") and ("Lakhs" in line or "L" in line):
-                avg_salary = line
-        if designation and (avg_salary or salary_range):
-            salaries.append({
-                "designation": designation,
-                "avg_salary": avg_salary,
-                "salary_range": salary_range,
-                "experience": experience,
-                "salary_count": salary_count,
-            })
-    return salaries
+        return []
+    return [entry for entry in raw if isinstance(entry, dict) and entry.get("designation")]
 
 
 # ============================================================================
