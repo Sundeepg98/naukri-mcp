@@ -4,7 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.config import NAUKRI_BASE, logger
 
 
 # ============================================================================
@@ -59,8 +59,8 @@ async def naukri_get_job(job_url: str) -> dict:
                         response_event.set()
                     elif f"/job/{job_id}/matchscore" in response.url and response.status == 200:
                         captured["score"] = await response.json()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("job response parse failed: %s", e)
 
             page.on("response", on_response_with_event)
             try:

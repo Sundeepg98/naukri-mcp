@@ -4,6 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
+from naukri_server.config import NAUKRI_BASE
 
 
 def _truncate_body(body, max_depth=2, max_items=5, max_str=200):
@@ -65,7 +66,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             # For POST: use "post_api" action instead
             api_url = url or ""
             if not api_url.startswith("http"):
-                api_url = f"https://www.naukri.com{api_url}"
+                api_url = f"{NAUKRI_BASE}{api_url}"
             result = await page.evaluate("""async (apiUrl) => {
                 try {
                     const resp = await fetch(apiUrl, {
@@ -103,7 +104,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             api_url = parts[0] if parts else ""
             post_body = parts[1] if len(parts) > 1 else "{}"
             if not api_url.startswith("http"):
-                api_url = f"https://www.naukri.com{api_url}"
+                api_url = f"{NAUKRI_BASE}{api_url}"
             result = await page.evaluate("""async ([apiUrl, postBody]) => {
                 try {
                     const resp = await fetch(apiUrl, {
@@ -143,7 +144,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             api_url = parts[0] if parts else ""
             del_body = parts[1] if len(parts) > 1 else None
             if not api_url.startswith("http"):
-                api_url = f"https://www.naukri.com{api_url}"
+                api_url = f"{NAUKRI_BASE}{api_url}"
             result = await page.evaluate("""async ([apiUrl, delBody]) => {
                 try {
                     const opts = {
@@ -183,7 +184,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             api_url = parts[0] if parts else ""
             put_body = parts[1] if len(parts) > 1 else "{}"
             if not api_url.startswith("http"):
-                api_url = f"https://www.naukri.com{api_url}"
+                api_url = f"{NAUKRI_BASE}{api_url}"
             result = await page.evaluate("""async ([apiUrl, putBody]) => {
                 try {
                     const resp = await fetch(apiUrl, {
@@ -219,7 +220,7 @@ async def naukri_debug(action: str = "snapshot", url: Optional[str] = None) -> d
             # Like fetch_api but uses widget headers (appid:109, systemid:109)
             api_url = url or ""
             if not api_url.startswith("http"):
-                api_url = f"https://www.naukri.com{api_url}"
+                api_url = f"{NAUKRI_BASE}{api_url}"
             result = await page.evaluate("""async (apiUrl) => {
                 try {
                     const resp = await fetch(apiUrl, {

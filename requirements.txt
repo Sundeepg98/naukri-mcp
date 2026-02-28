@@ -1,0 +1,7 @@
+mcp[cli]
+playwright
+aiohttp
+pydantic
+pydantic-settings
+python-dotenv
+PyJWT
