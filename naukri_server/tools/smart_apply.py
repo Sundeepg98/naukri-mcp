@@ -5,6 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.scoring import compute_fit_score
 
 
 @mcp.tool()
@@ -49,83 +50,35 @@ async def naukri_smart_apply(
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
         return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
 
-    # Extract data
+    # Compute fit
     job_skills = set(s.lower() for s in job_result.get("skills", []))
     profile_skills = set(s.lower() for s in profile_result.get("key_skills", []))
-
-    job_exp_str = job_result.get("experience", "")
-    profile_exp = profile_result.get("total_experience")
-
-    job_salary = job_result.get("salary", "")
-
-    # Skill match
-    matched_skills = job_skills & profile_skills
-    missing_skills = job_skills - profile_skills
-    skill_score = (len(matched_skills) / len(job_skills) * 100) if job_skills else 50
-
-    # Experience match
-    exp_score = 50  # Default if can't determine
-    if profile_exp is not None and job_exp_str:
-        import re
-        exp_nums = re.findall(r'(\d+)', str(job_exp_str))
-        # Parse profile experience — may be "5 years 0 months" or numeric
-        p_exp_match = re.findall(r'(\d+)', str(profile_exp))
-        p_exp = float(p_exp_match[0]) if p_exp_match else 0
-        if len(exp_nums) >= 2:
-            min_exp, max_exp = float(exp_nums[0]), float(exp_nums[1])
-            if min_exp <= p_exp <= max_exp:
-                exp_score = 100
-            elif p_exp < min_exp:
-                exp_score = max(0, 100 - (min_exp - p_exp) * 20)
-            else:
-                exp_score = max(50, 100 - (p_exp - max_exp) * 10)
-
-    # Overall score
-    overall_score = round(skill_score * 0.6 + exp_score * 0.4)
-
-    # Recommendation
-    if overall_score >= 80:
-        recommendation = "Strong match — apply confidently"
-    elif overall_score >= 60:
-        recommendation = "Good match — worth applying"
-    elif overall_score >= 40:
-        recommendation = "Partial match — review missing skills before applying"
-    else:
-        recommendation = "Weak match — consider upskilling first"
+    fit = compute_fit_score(
+        job_skills, profile_skills,
+        job_result.get("experience", ""),
+        profile_result.get("total_experience"),
+    )
 
     result = {
         "status": "success",
         "job_summary": {
             "title": job_result.get("title"),
             "company": job_result.get("company"),
-            "salary": job_salary,
-            "experience": job_exp_str,
+            "salary": job_result.get("salary", ""),
+            "experience": job_result.get("experience", ""),
             "location": job_result.get("location"),
             "work_mode": job_result.get("work_mode"),
         },
-        "fit_assessment": {
-            "overall_score": overall_score,
-            "skill_match": {
-                "score": round(skill_score),
-                "matched": sorted(matched_skills),
-                "missing": sorted(missing_skills),
-            },
-            "experience_match": {
-                "score": round(exp_score),
-                "your_experience": profile_exp,
-                "required": job_exp_str,
-            },
-            "recommendation": recommendation,
-        },
+        "fit_assessment": fit,
         "applied": False,
     }
 
     # Auto-apply if requested and fit
-    if apply_if_fit and overall_score >= 60:
+    if apply_if_fit and fit["overall_score"] >= 60:
         apply_result = await _apply_single(
             job_id=job_id, answers=answers,
             title=job_result.get("title"), company=job_result.get("company"),
-            tracking_extra={"source": "smart_apply", "fit_score": overall_score},
+            tracking_extra={"source": "smart_apply", "fit_score": fit["overall_score"]},
         )
         result["applied"] = apply_result.get("status") == "applied"
         result["apply_result"] = apply_result
