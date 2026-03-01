@@ -1,10 +1,12 @@
-"""AmbitionBox salary and review tools — scrapes __NEXT_DATA__ from SSR pages."""
+"""AmbitionBox salary, review, and slug-bridge tools — scrapes __NEXT_DATA__ from SSR pages."""
 
 import asyncio
 import logging
+import re
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
+from naukri_server.config import NAUKRI_BASE
 from naukri_server.validation import validate_salary_data, validate_review_data
 
 logger = logging.getLogger(__name__)
@@ -447,3 +449,191 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
                 "status": "error",
                 "message": f"Failed to get reviews: {type(e).__name__}: {e}",
             }
+
+
+# ============================================================================
+# Tool: Convert Naukri group_id to AmbitionBox company slug
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_company_slug(group_id: str) -> dict:
+    """Convert a Naukri company group_id to an AmbitionBox company slug.
+
+    Use this to bridge between Naukri company tools (which use group_id from
+    naukri_search_companies) and AmbitionBox tools (naukri_get_company_salary,
+    naukri_get_company_reviews) which require company_slug.
+
+    Requires: group_id from naukri_search_companies results.
+
+    Args:
+        group_id: Naukri company group ID (from naukri_search_companies)
+
+    Returns:
+        - {status: "success", group_id, company_slug, company_name}
+        - {status: "error", message}
+    """
+    async with browser.page_pool.acquire() as page:
+        try:
+            # Navigate to the Naukri company overview page — it embeds AmbitionBox links
+            page_url = f"{NAUKRI_BASE}/company/{group_id}"
+            logger.info("Navigating to Naukri company page for slug extraction: %s", page_url)
+
+            # Intercept the company API response which contains ambitionBoxData
+            captured = {}
+            event = asyncio.Event()
+
+            async def on_response(response):
+                try:
+                    url = response.url
+                    # Company info API returns ambitionBoxData with Url field
+                    if response.status == 200 and (
+                        f"/companyapi/v1/company/{group_id}" in url
+                        or f"/companyapi/v2/company/{group_id}" in url
+                        or (f"/company/{group_id}" in url and "api" in url)
+                    ):
+                        data = await response.json()
+                        captured["company"] = data
+                        event.set()
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+            try:
+                await page_goto(page, page_url)
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.warning("Company API response not captured after 10s for group_id: %s", group_id)
+            finally:
+                page.remove_listener("response", on_response)
+
+            # Strategy 1: Extract from intercepted API response
+            company_data = captured.get("company", {})
+            ambition_data = (
+                company_data.get("ambitionBoxData")
+                or company_data.get("ambitionBox")
+                or {}
+            )
+            company_name = (
+                company_data.get("companyName")
+                or company_data.get("groupName")
+                or company_data.get("name")
+            )
+
+            # Look for AmbitionBox URL in the data — e.g., Url: "/reviews/google-reviews"
+            ab_url = ambition_data.get("Url") or ambition_data.get("url") or ""
+            slug = _extract_slug_from_url(ab_url)
+
+            if slug:
+                return {
+                    "status": "success",
+                    "group_id": group_id,
+                    "company_slug": slug,
+                    "company_name": company_name or slug.replace("-", " ").title(),
+                }
+
+            # Strategy 2: Scrape AmbitionBox links from the rendered page
+            logger.info("API interception didn't yield slug, trying DOM scrape")
+            await asyncio.sleep(2)  # Let page render fully
+            ab_link = await page.evaluate("""
+                () => {
+                    // Look for links to ambitionbox.com
+                    for (const a of document.querySelectorAll('a[href*="ambitionbox.com"]')) {
+                        return a.href;
+                    }
+                    // Fallback: look for data attributes or embedded JSON
+                    const scripts = document.querySelectorAll('script');
+                    for (const s of scripts) {
+                        const text = s.textContent || '';
+                        const match = text.match(/ambitionbox\\.com\\/(?:reviews|salaries)\\/([a-z0-9-]+)/i);
+                        if (match) return match[0];
+                    }
+                    return null;
+                }
+            """)
+
+            if ab_link:
+                slug = _extract_slug_from_url(ab_link)
+                if slug:
+                    # Get company name from page if not already found
+                    if not company_name:
+                        company_name = await page.evaluate("""
+                            () => {
+                                const h1 = document.querySelector('h1');
+                                return h1 ? h1.textContent.trim() : null;
+                            }
+                        """)
+                    return {
+                        "status": "success",
+                        "group_id": group_id,
+                        "company_slug": slug,
+                        "company_name": company_name or slug.replace("-", " ").title(),
+                    }
+
+            # Strategy 3: Derive slug from company name (fallback)
+            if not company_name:
+                company_name = await page.evaluate("""
+                    () => {
+                        const h1 = document.querySelector('h1');
+                        return h1 ? h1.textContent.trim() : null;
+                    }
+                """)
+
+            if company_name:
+                slug = _derive_slug(company_name)
+                return {
+                    "status": "success",
+                    "group_id": group_id,
+                    "company_slug": slug,
+                    "company_name": company_name,
+                    "derived": True,
+                    "_note": "Slug derived from company name — may not match AmbitionBox exactly. Verify with naukri_get_company_salary.",
+                }
+
+            return {
+                "status": "error",
+                "message": f"Could not determine AmbitionBox slug for group_id '{group_id}'. The company page may not have AmbitionBox integration.",
+            }
+
+        except Exception as e:
+            logger.error("Failed to get company slug: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to get company slug: {type(e).__name__}: {e}",
+            }
+
+
+def _extract_slug_from_url(url: str) -> str | None:
+    """Extract AmbitionBox company slug from a URL like /reviews/google-reviews or /salaries/tcs-salaries."""
+    if not url:
+        return None
+    # Match patterns: /reviews/{slug}-reviews, /salaries/{slug}-salaries, /overview/{slug}-overview
+    match = re.search(r'/(?:reviews|salaries|overview)/([a-z0-9-]+?)(?:-(?:reviews|salaries|overview))?(?:\?|$|/)', url, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Simpler pattern: ambitionbox.com/{section}/{slug}
+    match = re.search(r'ambitionbox\.com/\w+/([a-z0-9-]+)', url, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _derive_slug(company_name: str) -> str:
+    """Derive an AmbitionBox-style slug from a company name.
+
+    Examples: "Tata Consultancy Services" -> "tata-consultancy-services"
+              "Google India Pvt. Ltd." -> "google-india"
+    """
+    # Remove common suffixes
+    name = company_name.strip()
+    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd", "Limited",
+                   "Inc.", "Inc", "Corp.", "Corp", "Corporation", "LLP", "LLC"):
+        if name.lower().endswith(suffix.lower()):
+            name = name[:len(name) - len(suffix)].strip()
+            break
+    # Lowercase, replace non-alphanumeric with hyphens, collapse
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    # Collapse multiple hyphens
+    slug = re.sub(r'-+', '-', slug)
+    return slug

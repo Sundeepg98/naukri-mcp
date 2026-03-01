@@ -7,7 +7,7 @@ from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, logger
 from naukri_server.tools.jobs import _extract_job_id
-from naukri_server.tools.tracking import record_application
+from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
 
 
 # ============================================================================
@@ -52,7 +52,11 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                 await record_application(job_id, title=title, company=company,
                                          status="already_applied",
                                          extra={**(tracking_extra or {})})
-                return {"status": "already_applied", "job_id": job_id}
+                return {
+                    "status": "already_applied",
+                    "job_id": job_id,
+                    "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
+                }
             await record_application(job_id, title=title, company=company,
                                      status="error",
                                      extra={"message": msg or "Unexpected response", **(tracking_extra or {})})
@@ -146,6 +150,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     "job_id": job_id,
                     "questions": pending,
                     "auto_answered": len(auto_answers),
+                    "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
                 }
 
         await record_application(job_id, title=title, company=company,
@@ -194,6 +199,18 @@ async def naukri_apply(
         - {status: "already_applied"} — already applied
         - {status: "error", message} — failure
     """
+    job_id = _extract_job_id(job_id)
+
+    # Check for duplicate application from local tracking
+    async with _applications_lock:
+        existing = _load_json(APPLICATIONS_FILE)
+        if any(str(a.get("job_id")) == str(job_id) for a in existing):
+            return {
+                "status": "already_applied",
+                "message": "You have already applied to this job (from local tracking).",
+                "job_id": job_id,
+            }
+
     return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 
 
@@ -241,14 +258,24 @@ async def naukri_batch_apply(
     if not all_jobs:
         return {"status": "error", "message": "No jobs found for this search"}
 
-    # Step 2: Filter out already-applied
+    # Step 2: Filter out already-applied (from search results + local tracking)
     to_apply = [j for j in all_jobs if not j.get("is_applied")]
+
+    # Also filter out jobs we've already applied to locally
+    async with _applications_lock:
+        existing = _load_json(APPLICATIONS_FILE)
+        applied_ids = {str(a.get("job_id")) for a in existing}
+    before_local_filter = len(to_apply)
+    to_apply = [j for j in to_apply if str(j.get("job_id")) not in applied_ids]
+    skipped_duplicates = before_local_filter - len(to_apply)
+
     if not to_apply:
         return {
             "status": "success",
             "message": f"All {len(all_jobs)} jobs already applied to",
             "searched": len(all_jobs),
             "filtered": 0,
+            "skipped_duplicates": skipped_duplicates,
         }
 
     # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
@@ -344,6 +371,7 @@ async def naukri_batch_apply(
         "status": final_status,
         "searched": len(all_jobs),
         "filtered": len(to_apply),
+        "skipped_duplicates": skipped_duplicates,
         "applied": applied,
         "already_applied": already,
         "needs_input": needs_input,

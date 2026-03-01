@@ -1,13 +1,12 @@
 """Naukri data sync — pull applied jobs and saved jobs from Naukri's backend."""
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
-from naukri_server.browser import browser, page_goto
+from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
@@ -199,16 +198,15 @@ async def _fetch_applied_jobs_rest(max_pages: int = 10) -> Optional[list]:
 
 async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                               timeout: float = 10) -> Optional[dict]:
-    """Fetch data by navigating to a page and intercepting JSON API responses.
-
-    Args:
-        page_url: The Naukri page to navigate to.
-        url_pattern: Substring to match in response URLs. If None, returns largest JSON response.
-        timeout: Seconds to wait for the target response.
-
-    Returns the captured JSON body, or None.
-    """
+    """Fetch data by navigating in browser and intercepting JSON responses."""
     async with browser.page_pool.acquire() as page:
+        # Try targeted capture first
+        if url_pattern:
+            data = await page_intercept_json(page, page_url, url_pattern=url_pattern, timeout=timeout)
+            if data:
+                return data
+
+        # Fallback: capture all JSON responses and return the largest
         captured_responses = []
         response_event = asyncio.Event()
 
@@ -218,10 +216,9 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                 try:
                     body = await response.json()
                     captured_responses.append({"url": response.url, "body": body})
-                    if url_pattern and url_pattern in response.url:
-                        response_event.set()
-                except Exception as e:
-                    logger.warning("Failed to parse response from %s: %s", response.url, e)
+                except Exception:
+                    logger.warning("Failed to parse response from %s: %s", response.url, "JSON parse error")
+                response_event.set()
 
         page.on("response", on_response)
         try:
@@ -229,24 +226,16 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
             try:
                 await asyncio.wait_for(response_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
-                pass
-            # Extra wait for trailing API calls
+                logger.warning("Browser fetch timed out after %ss for: %s", timeout, page_url)
             await asyncio.sleep(2)
         finally:
             page.remove_listener("response", on_response)
 
-        # Return pattern-matched response if available
-        if url_pattern:
-            matched = [r for r in captured_responses if url_pattern in r["url"]]
-            if matched:
-                return matched[0]["body"]
+        if not captured_responses:
+            return None
 
-        # Fallback: largest JSON response (most likely the data payload)
-        if captured_responses:
-            return max(captured_responses,
-                       key=lambda r: len(json.dumps(r["body"], default=str)))["body"]
-
-        return None
+        # Return the largest captured response
+        return max(captured_responses, key=lambda r: len(str(r["body"])))["body"]
 
 
 async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional[list]:

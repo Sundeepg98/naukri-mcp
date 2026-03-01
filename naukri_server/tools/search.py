@@ -1,9 +1,8 @@
-import asyncio
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.browser import browser, page_goto
+from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API, logger
 from naukri_server.validation import validate_job_list
 
@@ -50,31 +49,9 @@ async def naukri_search_jobs(
             if params:
                 page_url += "?" + "&".join(params)
 
-            # Intercept the search API response that Naukri's frontend makes
-            captured = {}
-            response_event = asyncio.Event()
-
-            async def on_response(response):
-                if "/jobapi/v3/search" in response.url and response.status == 200:
-                    try:
-                        captured["data"] = await response.json()
-                    except Exception as e:
-                        logger.debug("search response parse failed: %s", e)
-                    response_event.set()
-
-            page.on("response", on_response)
-            try:
-                await page_goto(page, page_url)
-                try:
-                    await asyncio.wait_for(response_event.wait(), timeout=10)
-                except asyncio.TimeoutError:
-                    logger.warning("Search response capture timed out after 10s for: %s", page_url)
-            finally:
-                page.remove_listener("response", on_response)
-
-            data = captured.get("data")
+            data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
-                return {"status": "error", "message": "Search API response not captured. Page may not have loaded correctly."}
+                return {"status": "error", "message": "Search API response not captured. Try again."}
 
             jobs = _parse_job_list(data.get("jobDetails", []), limit)
 

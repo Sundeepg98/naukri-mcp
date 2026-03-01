@@ -220,6 +220,49 @@ async def page_safe_fill(page: Page, selector: str, value: str, delay: int = 30)
     await el.type(value, delay=delay)
 
 
+async def page_intercept_json(
+    page: Page,
+    url: str,
+    url_pattern: str | None = None,
+    timeout: float = 10,
+    wait: str = "domcontentloaded",
+) -> dict | None:
+    """Navigate to a URL and capture the first matching JSON API response.
+
+    Args:
+        page: Playwright page (from page_pool.acquire())
+        url: Page URL to navigate to
+        url_pattern: Substring to match in response URL (None = first JSON response)
+        timeout: Seconds to wait for the response (default 10)
+        wait: Navigation wait strategy (default "domcontentloaded")
+
+    Returns:
+        Parsed JSON dict, or None if no matching response within timeout.
+    """
+    captured = {}
+    event = asyncio.Event()
+
+    async def on_response(response):
+        if response.status == 200 and (url_pattern is None or url_pattern in response.url):
+            try:
+                captured["data"] = await response.json()
+            except Exception:
+                logger.warning("Failed to parse JSON from %s", response.url)
+            event.set()
+
+    page.on("response", on_response)
+    try:
+        await page_goto(page, url, wait=wait)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Response capture timed out after %ss for pattern: %s", timeout, url_pattern)
+    finally:
+        page.remove_listener("response", on_response)
+
+    return captured.get("data")
+
+
 # ---------------------------------------------------------------------------
 # NaukriBrowser — orchestrator
 # ---------------------------------------------------------------------------

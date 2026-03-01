@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,10 @@ def _load_json(path: Path) -> list:
 
 def _save_json(path: Path, data: list):
     text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+    # Backup existing file before overwriting
+    if path.exists():
+        backup = path.with_suffix(".backup")
+        shutil.copy2(str(path), str(backup))
     tmp = path.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(str(tmp), str(path))

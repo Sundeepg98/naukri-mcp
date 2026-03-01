@@ -1,11 +1,10 @@
 """Company tools — search companies, browse company jobs, follow/unfollow."""
 
-import asyncio
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.browser import browser, page_goto
+from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.search import _parse_job_list
 from naukri_server.validation import validate_company_list, validate_job_list
@@ -117,28 +116,7 @@ async def naukri_get_company_jobs(
             if page_no > 1:
                 page_url += f"&pageNo={page_no}"
 
-            captured = {}
-            response_event = asyncio.Event()
-
-            async def on_response(response):
-                if "/jobapi/v3/search" in response.url and response.status == 200:
-                    try:
-                        captured["data"] = await response.json()
-                    except Exception as e:
-                        logger.warning("Failed to parse company jobs response: %s", e)
-                    response_event.set()
-
-            page.on("response", on_response)
-            try:
-                await page_goto(page, page_url)
-                try:
-                    await asyncio.wait_for(response_event.wait(), timeout=10)
-                except asyncio.TimeoutError:
-                    logger.warning("Company jobs response capture timed out after 10s for group: %s", group_id)
-            finally:
-                page.remove_listener("response", on_response)
-
-            data = captured.get("data")
+            data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
                 return {"status": "error", "message": "Search API response not captured for company jobs."}
 
