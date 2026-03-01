@@ -13,6 +13,11 @@ async def naukri_search_jobs(
     keywords: str,
     location: Optional[str] = None,
     experience: Optional[int] = None,
+    salary_min: Optional[int] = None,
+    salary_max: Optional[int] = None,
+    sort_by: Optional[str] = None,
+    freshness: Optional[int] = None,
+    work_mode: Optional[str] = None,
     limit: int = 20,
     page: int = 1,
 ) -> dict:
@@ -25,11 +30,16 @@ async def naukri_search_jobs(
         keywords: Job title or skills (e.g., "python developer", "react")
         location: City name (e.g., "Bangalore", "Mumbai", "Remote")
         experience: Years of experience filter (e.g., 5)
+        salary_min: Minimum CTC in LPA (e.g., 15 for 15 LPA)
+        salary_max: Maximum CTC in LPA (e.g., 50 for 50 LPA)
+        sort_by: Sort order — "relevance" (default), "date", or "salary"
+        freshness: Posted within N days — 1, 3, 7, 15, or 30
+        work_mode: Work arrangement — "wfh", "hybrid", or "office"
         limit: Max jobs to return (default 20, max 50)
         page: Page number for pagination (default 1)
 
     Returns:
-        - {status: "success", keywords, location, page, total, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
+        - {status: "success", keywords, location, page, total, count, filters, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
     page_no = page  # save before shadowing by page_pool
@@ -45,6 +55,19 @@ async def naukri_search_jobs(
             params = []
             if experience is not None:
                 params.append(f"experience={experience}")
+            if salary_min is not None:
+                params.append(f"nignbekg={salary_min}")
+            if salary_max is not None:
+                params.append(f"naagnbekg={salary_max}")
+            if sort_by:
+                params.append(f"sortBy={sort_by}")
+            if freshness is not None:
+                params.append(f"jobAge={freshness}")
+            if work_mode:
+                wm_map = {"wfh": "1", "hybrid": "3", "office": "2"}
+                wm_val = wm_map.get(work_mode.lower())
+                if wm_val:
+                    params.append(f"wfhType={wm_val}")
             if page_no > 1:
                 params.append(f"pageNo={page_no}")
             if params:
@@ -63,6 +86,14 @@ async def naukri_search_jobs(
                 "page": page_no,
                 "total": data.get("noOfJobs"),
                 "count": len(jobs),
+                "filters": {k: v for k, v in {
+                    "experience": experience,
+                    "salary_min": salary_min,
+                    "salary_max": salary_max,
+                    "sort_by": sort_by,
+                    "freshness": freshness,
+                    "work_mode": work_mode,
+                }.items() if v is not None},
                 "jobs": jobs,
             }
             warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")

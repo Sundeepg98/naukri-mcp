@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from typing import Optional
 
 from naukri_server import mcp
@@ -219,6 +220,11 @@ async def naukri_batch_apply(
     keywords: str,
     location: Optional[str] = None,
     experience: Optional[int] = None,
+    salary_min: Optional[int] = None,
+    salary_max: Optional[int] = None,
+    sort_by: Optional[str] = None,
+    freshness: Optional[int] = None,
+    work_mode: Optional[str] = None,
     limit: int = 5,
     answers: Optional[dict] = None,
 ) -> dict:
@@ -234,6 +240,11 @@ async def naukri_batch_apply(
         keywords: Job title or skills (e.g., "python developer", "react node.js")
         location: City name (e.g., "Bangalore", "Mumbai", "Remote")
         experience: Years of experience filter
+        salary_min: Minimum salary filter in lakhs (forwarded to search)
+        salary_max: Maximum salary filter in lakhs (forwarded to search)
+        sort_by: Sort order — "relevance" or "date" (forwarded to search)
+        freshness: Job age in days — 1, 3, 7, 15, 30 (forwarded to search)
+        work_mode: Work mode filter — "wfh", "hybrid", "wfo" (forwarded to search)
         limit: Max jobs to apply to (default 5, max 20)
         answers: Pre-filled answers for common screening questions.
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
@@ -250,7 +261,12 @@ async def naukri_batch_apply(
         return {"status": "error", "message": "limit must be a positive number"}
 
     # Step 1: Search
-    search_result = await naukri_search_jobs(keywords, location, experience, limit)
+    search_result = await naukri_search_jobs(
+        keywords, location, experience,
+        salary_min=salary_min, salary_max=salary_max,
+        sort_by=sort_by, freshness=freshness, work_mode=work_mode,
+        limit=limit,
+    )
     if search_result.get("status") != "success":
         return {"status": "error", "message": "Search failed", "search_result": search_result}
 
@@ -317,7 +333,7 @@ async def naukri_batch_apply(
                 "title": job_info.get("title"),
                 "company": job_info.get("company"),
                 "status": "error",
-                "message": str(result),
+                "message": f"{type(result).__name__}: {result}",
             })
             continue
 
@@ -383,28 +399,33 @@ async def naukri_batch_apply(
 
 def _find_user_answer(qid: str, q_name: str, answers: dict) -> Optional[str]:
     """Find a user-provided answer by question ID or fuzzy text match."""
-    # Exact ID match
-    if qid in answers:
-        return str(answers[qid])
+    def _to_str(val):
+        """Unwrap single-element lists, stringify scalars."""
+        if isinstance(val, list):
+            return str(val[0]) if val else ""
+        return str(val)
 
-    # Fuzzy text match on question name
+    if qid in answers:
+        return _to_str(answers[qid])
     q_lower = q_name.lower()
     for key, value in answers.items():
         k = key.lower().replace("_", " ")
         if k in q_lower or q_lower in k:
-            return str(value)
+            return _to_str(value)
         if all(w in q_lower for w in k.split()):
-            return str(value)
+            return _to_str(value)
     return None
 
 
-def _format_answer(answer: str, q_type: str, options: dict) -> any:
+def _format_answer(answer: str, q_type: str, options: dict) -> str | list[str]:
     """Format answer for the Naukri API based on question type."""
     if q_type == "Text Box":
         return answer
 
     if not options:
-        return answer  # Treat as text when no options exist
+        if q_type and q_type != "Text Box":
+            logger.debug("Question type '%s' has no options, treating as text", q_type)
+        return answer
 
     option_values = list(options.values())
 
@@ -418,7 +439,6 @@ def _format_answer(answer: str, q_type: str, options: dict) -> any:
         return [options[answer]]
 
     # Priority 3: Word-boundary regex match (prevents "java" matching "javascript")
-    import re
     for opt in option_values:
         if re.search(r'\b' + re.escape(answer.lower()) + r'\b', opt.lower()):
             return [opt]

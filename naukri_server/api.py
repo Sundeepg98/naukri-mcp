@@ -54,7 +54,13 @@ async def get_session() -> aiohttp.ClientSession:
     """Lazily create and return a shared aiohttp session."""
     global _session
     if _session is None or _session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=20,
+            limit_per_host=10,
+            ttl_dns_cache=300,
+        )
         _session = aiohttp.ClientSession(
+            connector=connector,
             timeout=aiohttp.ClientTimeout(total=API_TIMEOUT),
             trust_env=True,
         )

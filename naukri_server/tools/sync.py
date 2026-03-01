@@ -1,7 +1,9 @@
 """Naukri data sync — pull applied jobs and saved jobs from Naukri's backend."""
 
 import asyncio
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
@@ -20,6 +22,23 @@ from naukri_server.tools.tracking import (
 # URL patterns for browser interception (discovered)
 _APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
 _SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
+
+# Sync state persistence
+_SYNC_STATE_FILE = Path(__file__).parent.parent.parent / "sync_state.json"
+
+
+def _load_sync_state() -> dict:
+    if _SYNC_STATE_FILE.exists():
+        try:
+            return json.loads(_SYNC_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_sync_state(state: dict):
+    text = json.dumps(state, indent=2)
+    _SYNC_STATE_FILE.write_text(text, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +173,7 @@ async def _fetch_via_rest(api_path: Optional[str], params: dict = None) -> Optio
         return None
 
 
-async def _fetch_applied_jobs_rest(max_pages: int = 10) -> Optional[list]:
+async def _fetch_applied_jobs_rest(max_pages: int = 10, days_back: int = 365) -> Optional[list]:
     """Fetch all applied jobs via the history REST API with pagination.
 
     GET /cloudgateway-apply/whtma-services/v0/applyapi/v5/history
@@ -169,7 +188,7 @@ async def _fetch_applied_jobs_rest(max_pages: int = 10) -> Optional[list]:
     page = 1
 
     while page <= max_pages:
-        params = {"pageSize": "20", "days": "365", "pageNumber": str(page), "filterInfo": "2"}
+        params = {"pageSize": "20", "days": str(days_back), "pageNumber": str(page), "filterInfo": "2"}
         try:
             data = await api_get(APPLIED_JOBS_API, params)
         except Exception as e:
@@ -500,6 +519,7 @@ def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
 @mcp.tool()
 async def naukri_sync_applications(
     force_browser: bool = False,
+    days_back: int = 365,
 ) -> dict:
     """Sync applied jobs from Naukri.com into local tracking.
 
@@ -511,9 +531,11 @@ async def naukri_sync_applications(
 
     Args:
         force_browser: If True, skip REST API and use browser strategies.
+        days_back: Fetch applications from the last N days (default 365).
+                  Use smaller values (e.g., 7 or 30) for faster incremental syncs.
 
     Returns:
-        - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, applications: [...first 20...]}
+        - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, days_back, last_sync, applications: [...first 20...]}
         - {status: "error", message}
     """
     try:
@@ -523,7 +545,7 @@ async def naukri_sync_applications(
 
         # Strategy 1: Paginated REST API (fetches all pages, returns raw entries)
         if not force_browser:
-            rest_entries = await _fetch_applied_jobs_rest()
+            rest_entries = await _fetch_applied_jobs_rest(days_back=days_back)
             if rest_entries is not None:
                 remote_data = {"applyDetails": rest_entries}
                 method = "rest_api"
@@ -568,11 +590,20 @@ async def naukri_sync_applications(
             stats = _merge_applications(local_apps, remote_jobs)
             _save_json(APPLICATIONS_FILE, local_apps)
 
+        # Record sync metadata
+        state = _load_sync_state()
+        state["last_applications_sync"] = datetime.now(timezone.utc).isoformat()
+        state["last_applications_method"] = method
+        state["last_applications_count"] = len(remote_jobs)
+        _save_sync_state(state)
+
         return {
             "status": "success",
             "method": method,
             "total_remote": len(remote_jobs),
             **stats,
+            "days_back": days_back,
+            "last_sync": state.get("last_applications_sync"),
             "applications": local_apps[:20],
         }
     except Exception as e:
@@ -625,11 +656,19 @@ async def naukri_sync_saved_jobs(
             stats = _merge_saved_jobs(local_saved, remote_jobs)
             _save_json(SAVED_JOBS_FILE, local_saved)
 
+        # Record sync metadata
+        state = _load_sync_state()
+        state["last_saved_jobs_sync"] = datetime.now(timezone.utc).isoformat()
+        state["last_saved_jobs_method"] = method
+        state["last_saved_jobs_count"] = len(remote_jobs)
+        _save_sync_state(state)
+
         return {
             "status": "success",
             "method": method,
             "total_remote": len(remote_jobs),
             **stats,
+            "last_sync": state.get("last_saved_jobs_sync"),
             "saved_jobs": local_saved[:20],
         }
     except Exception as e:
