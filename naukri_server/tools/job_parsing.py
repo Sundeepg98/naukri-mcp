@@ -35,18 +35,17 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "experience_max": job.get("maximumExperience"),
             "is_applied": job.get("isApplied", False),
             "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
-            "job_age": job.get("jobAge"),
             "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
             "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
             "vacancies": job.get("vacancy") or job.get("vacany"),
-            "apply_count": job.get("applyCount"),
-            "function_area": job.get("functionArea"),
+            "apply_count": job.get("applyCount"),          # populated in detail only
+            "function_area": job.get("functionArea"),       # populated in detail only
             "group_id": job.get("groupId"),
             "work_mode": job.get("workMode") or job.get("wfhType"),
             "is_saved": job.get("isSaved"),
             "company_rating": (job.get("ambitionBoxData") or {}).get("Rating") or (job.get("ambitionBoxData") or {}).get("AggregateRating"),
             "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),
-            "candidates_count": job.get("candidatesCount"),
-            "type_of_business": job.get("typeOfBusiness"),
+            "candidates_count": job.get("candidatesCount"), # populated in detail only
+            "type_of_business": job.get("typeOfBusiness"),  # populated in detail only
         })
     return jobs

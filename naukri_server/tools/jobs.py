@@ -45,6 +45,28 @@ def _extract_skills(raw_skills) -> list:
     return []
 
 
+def _format_education(edu) -> str | None:
+    """Format the v4 education object into a readable string."""
+    if not edu or not isinstance(edu, dict):
+        return None
+    parts = []
+    ug = edu.get("ugQualification") or edu.get("ug")
+    pg = edu.get("pgQualification") or edu.get("pg")
+    if ug:
+        parts.append(f"UG: {ug}")
+    if pg:
+        parts.append(f"PG: {pg}")
+    return ", ".join(parts) if parts else None
+
+
+def _extract_placeholder(placeholders: list, ptype: str) -> str | None:
+    """Extract a label from Naukri's placeholders array by type."""
+    for p in placeholders:
+        if isinstance(p, dict) and p.get("type") == ptype:
+            return p.get("label")
+    return None
+
+
 def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
                       score_data: dict = None) -> dict:
     """Parse job detail API response (v3 or v4 format) into a structured result dict."""
@@ -59,7 +81,14 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
     )
 
     company = job.get("companyDetail", {})
-    ambition = job.get("ambitionBoxData", {})
+    ambition = job.get("ambitionBoxData") or {}
+    ab_details = details_data.get("ambitionBoxDetails", {})
+    if not ambition and ab_details:
+        ci = ab_details.get("companyInfo") or {}
+        ambition = {
+            "AggregateRating": ci.get("rating"),
+            "ReviewsCount": ci.get("reviewsCount"),
+        }
     is_applied = job.get("isApplied", False)
     external = bool(job.get("applyRedirectUrl"))
 
@@ -79,7 +108,12 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "experience_min": job.get("minimumExperience"),
         "experience_max": job.get("maximumExperience"),
         "candidates_count": job.get("candidatesCount"),
-        "location": job.get("cityName") or job.get("citySuburb"),
+        "location": (
+            job.get("cityName")
+            or job.get("citySuburb")
+            or _extract_placeholder(job.get("placeholders", []), "location")
+            or job.get("location")
+        ),
         "description": job.get("description", ""),
         "skills": _extract_skills(job.get("keySkills", [])),
         "match_score": match_score,
@@ -97,9 +131,13 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "group_id": company.get("groupId") if company else None,
         "work_mode": job.get("workMode") or job.get("wfhType"),
         "posted_date": job.get("createdDate"),
-        "industry": job.get("industryType"),
+        "industry": (
+            job.get("industryType")
+            or (job.get("industryTypeGid", {}).get("label")
+                if isinstance(job.get("industryTypeGid"), dict) else None)
+        ),
         "role_category": job.get("roleCategory"),
-        "education": job.get("qualification"),
+        "education": _format_education(job.get("education")) or job.get("qualification"),
         "url": page_url,
     }
     warnings = validate_job_detail(result)
