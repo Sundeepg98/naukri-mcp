@@ -129,14 +129,23 @@ def _score_work_mode(job_work_mode: Optional[str]) -> int:
     return 0  # Office — no penalty, just no bonus
 
 
-def _score_salary(job_salary: Optional[str], profile_expected_ctc: Optional[float]) -> int:
+def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
     """Score salary fit. Returns 0-5 bonus points.
 
     Only scores when both job salary and profile expected CTC are available.
+    Accepts profile_expected_ctc as float or string (e.g., "15.0 Lacs").
     """
     if not job_salary or profile_expected_ctc is None:
         return 0
     if "not disclosed" in job_salary.lower():
+        return 0
+    # Parse profile CTC to float if string
+    if isinstance(profile_expected_ctc, str):
+        ctc_nums = re.findall(r'([\d.]+)', profile_expected_ctc)
+        if not ctc_nums:
+            return 0
+        profile_expected_ctc = float(ctc_nums[0])
+    elif not isinstance(profile_expected_ctc, (int, float)):
         return 0
     nums = re.findall(r'([\d.]+)', job_salary)
     if len(nums) < 2:
@@ -166,7 +175,7 @@ def compute_fit_score(
     profile_location: Optional[str] = None,
     job_work_mode: Optional[str] = None,
     job_salary: Optional[str] = None,
-    profile_expected_ctc: Optional[float] = None,
+    profile_expected_ctc=None,
 ) -> dict:
     """Compute fit score between a job and a candidate profile.
 
