@@ -365,3 +365,136 @@ async def naukri_purge_applications(
             "dry_run": dry_run,
             "sample_purged": sample,
         }
+
+
+@mcp.tool()
+async def naukri_get_stale_applications(
+    days_threshold: int = 14,
+    min_stale_score: int = 40,
+) -> dict:
+    """Detect stale job applications that need follow-up or should be abandoned.
+
+    Analyzes your synced applications for staleness signals: closed jobs, no
+    recruiter activity, no views, low match scores, and age. Returns ranked
+    list with stale scores and recommended actions.
+
+    Run naukri_sync_applications first to ensure fresh data.
+
+    Args:
+        days_threshold: Consider apps older than N days for staleness (default 14)
+        min_stale_score: Minimum staleness score 0-100 to include (default 40)
+
+    Returns:
+        - {status: "success", total_applications, stale_count,
+           stale_applications: [{job_id, title, company, stale_score,
+           reasons, recommendation, applied_date, is_open, view_count,
+           job_activity, ars_score}]}
+        - {status: "error", message}
+    """
+    from datetime import datetime, timezone
+
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    if not apps:
+        return {"status": "success", "total_applications": 0, "stale_count": 0, "stale_applications": []}
+
+    now = datetime.now(timezone.utc)
+    stale_apps = []
+
+    for app in apps:
+        applied_at = app.get("applied_at") or app.get("appliedDate") or ""
+        if not applied_at:
+            continue
+
+        # Parse applied date
+        try:
+            if "T" in applied_at:
+                applied_dt = datetime.fromisoformat(applied_at.replace("Z", "+00:00"))
+            else:
+                applied_dt = datetime.strptime(applied_at[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+
+        days_since_apply = (now - applied_dt).days
+        if days_since_apply < days_threshold:
+            continue  # Too fresh to be stale
+
+        # Compute stale score
+        stale_score = 0
+        reasons = []
+
+        is_open = app.get("is_open")
+        if is_open is False:
+            stale_score += 100
+            reasons.append("Job closed")
+
+        view_count = app.get("view_count")
+        has_been_viewed = view_count and view_count > 0
+        if days_since_apply > days_threshold and not has_been_viewed:
+            stale_score += 60
+            reasons.append(f"Applied {days_since_apply}d ago, never viewed")
+        elif days_since_apply > days_threshold * 2:
+            stale_score += 30
+            reasons.append(f"Applied {days_since_apply}d ago")
+
+        job_activity = app.get("job_activity")
+        if job_activity is not None and job_activity == 0:
+            stale_score += 30
+            reasons.append("Zero recruiter activity on posting")
+
+        ars_score = app.get("ars_score")
+        if ars_score is not None and ars_score < 30:
+            stale_score += 20
+            reasons.append(f"Low match score ({ars_score}%)")
+
+        job_activity_date = app.get("job_activity_date")
+        if job_activity_date:
+            try:
+                if "T" in str(job_activity_date):
+                    act_dt = datetime.fromisoformat(str(job_activity_date).replace("Z", "+00:00"))
+                else:
+                    act_dt = datetime.strptime(str(job_activity_date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                days_since_activity = (now - act_dt).days
+                if days_since_activity > 14:
+                    stale_score += 25
+                    reasons.append(f"Recruiter inactive for {days_since_activity}d")
+            except (ValueError, TypeError):
+                pass
+
+        if stale_score < min_stale_score:
+            continue
+
+        # Recommendation
+        if stale_score >= 100:
+            recommendation = "Move on — job is closed or very stale"
+        elif stale_score >= 60:
+            recommendation = "Follow up or move on"
+        elif stale_score >= 40:
+            recommendation = "Consider following up"
+        else:
+            recommendation = "Still active — wait"
+
+        stale_apps.append({
+            "job_id": app.get("job_id"),
+            "title": app.get("title"),
+            "company": app.get("company"),
+            "stale_score": min(stale_score, 100),
+            "reasons": reasons,
+            "recommendation": recommendation,
+            "applied_date": applied_at[:10],
+            "is_open": is_open,
+            "view_count": view_count,
+            "job_activity": job_activity,
+            "ars_score": ars_score,
+        })
+
+    # Sort by stale score descending
+    stale_apps.sort(key=lambda x: x["stale_score"], reverse=True)
+
+    return {
+        "status": "success",
+        "total_applications": len(apps),
+        "stale_count": len(stale_apps),
+        "stale_applications": stale_apps,
+    }

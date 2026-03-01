@@ -11,13 +11,14 @@ from naukri_server.config import logger
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 9 checks in parallel: unread messages, notifications, new recommendations,
+    Runs 11 checks in parallel: unread messages, notifications, new recommendations,
     recruiter activity, profile activity level, today's applications, dashboard stats,
-    early access roles, and subscription status.
+    early access roles, subscription status, due reminders, and stale applications.
 
     Returns:
         - {status: "success", unread_messages, notifications, recommendations,
-           recruiter_activity, activity_level, todays_applications, dashboard, errors}
+           recruiter_activity, activity_level, todays_applications, dashboard,
+           due_reminders, stale_applications, errors}
     """
     from naukri_server.tools.inbox import naukri_get_inbox
     from naukri_server.tools.notifications import _fetch_notifications
@@ -27,6 +28,8 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.profile import naukri_get_dashboard
     from naukri_server.tools.early_access import naukri_get_early_access_roles
     from naukri_server.tools.subscription import naukri_get_subscription_status
+    from naukri_server.tools.reminders import naukri_get_reminders
+    from naukri_server.tools.tracking import naukri_get_stale_applications
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors = []
@@ -41,6 +44,8 @@ async def naukri_daily_brief() -> dict:
         naukri_get_dashboard(),
         naukri_get_early_access_roles(limit=3),
         naukri_get_subscription_status(),
+        naukri_get_reminders(include_past=True),
+        naukri_get_stale_applications(days_threshold=14, min_stale_score=50),
         return_exceptions=True,
     )
 
@@ -63,6 +68,8 @@ async def naukri_daily_brief() -> dict:
     dashboard = _extract(6, "Dashboard")
     early_access = _extract(7, "Early access")
     subscription = _extract(8, "Subscription")
+    reminders_result = _extract(9, "Reminders")
+    stale = _extract(10, "Stale detection")
 
     brief = {
         "status": "success",
@@ -99,6 +106,14 @@ async def naukri_daily_brief() -> dict:
             "roles": early_access.get("roles", []) if early_access else [],
         },
         "subscription": subscription if subscription else None,
+        "due_reminders": {
+            "count": reminders_result.get("due_count", 0) if reminders_result else 0,
+            "reminders": [r for r in (reminders_result.get("reminders") or []) if r.get("is_due")][:5],
+        },
+        "stale_applications": {
+            "count": stale.get("stale_count", 0) if stale else 0,
+            "top_stale": stale.get("stale_applications", [])[:3] if stale else [],
+        },
     }
 
     if errors:
