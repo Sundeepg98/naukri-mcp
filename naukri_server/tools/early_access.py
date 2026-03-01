@@ -1,25 +1,18 @@
 """Early access tools — pre-posted roles from top companies."""
 
+from typing import Optional
+
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API
 
 
-@mcp.tool()
-@api_tool("Get early access roles")
-async def naukri_get_early_access_roles(page: int = 1, limit: int = 20) -> dict:
-    """Get early access roles — pre-posted jobs from top companies before they go live.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
 
-    These are jobs where you can "share interest" before formal applications open.
-
-    Args:
-        page: Page number (default 1)
-        limit: Max roles to return (default 20)
-
-    Returns:
-        - {status: "success", page, total, count, roles: [{job_id, title, company_hint, location, experience, tags, url}]}
-        - {status: "error", message}
-    """
+async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
+    """Fetch early access roles from the API and return structured result."""
     data = await api_get(
         EARLY_ACCESS_API,
         params={"pageNo": str(page), "noOfResults": str(limit)},
@@ -51,22 +44,8 @@ async def naukri_get_early_access_roles(page: int = 1, limit: int = 20) -> dict:
     }
 
 
-@mcp.tool()
-@api_tool("Share interest")
-async def naukri_share_interest(job_id: str) -> dict:
-    """Express interest in an early access (pre-posted) role.
-
-    Early access roles are jobs from top companies before they go live.
-    Sharing interest is instant — no screening questions.
-    Get job_ids from naukri_get_early_access_roles.
-
-    Args:
-        job_id: Early access role job ID
-
-    Returns:
-        - {status: "success", job_id, message, quota}
-        - {status: "error", message}
-    """
+async def _share_interest(job_id: str) -> dict:
+    """Express interest in an early access role via the apply workflow API."""
     data = await api_post(
         APPLY_WORKFLOW_API,
         body={
@@ -94,3 +73,59 @@ async def naukri_share_interest(job_id: str) -> dict:
         }
     else:
         return {"status": "error", "message": job_result.get("message", f"Failed with status {job_result.get('status')}")}
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_early_access(
+    action: str = "list",
+    job_id: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20,
+) -> dict:
+    """Unified early access management — browse pre-posted roles and share interest.
+
+    Early access roles are jobs from top companies before they go live.
+    Sharing interest is instant — no screening questions.
+
+    Actions:
+      - "list": Get early access roles (use page/limit for pagination)
+      - "share": Express interest in a role (requires job_id)
+
+    Args:
+        action: "list" | "share"
+        job_id: Required for share — the early access role job ID
+        page: Page number for list action (default 1)
+        limit: Max roles for list action (default 20)
+
+    Returns:
+        - list: {status, page, total, count, roles: [{job_id, title, company_hint, location, experience, salary, job_type, tags, url}]}
+        - share: {status, job_id, message, quota}
+        - {status: "error", message} on failure
+    """
+    # ── list ───────────────────────────────────────────────────────────
+    if action == "list":
+        try:
+            return await _list_early_access_roles(page=page, limit=limit)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get early access roles failed: {type(e).__name__}: {e}"}
+
+    # ── share ──────────────────────────────────────────────────────────
+    elif action == "share":
+        if not job_id:
+            return {"status": "error", "message": "share requires job_id."}
+        try:
+            return await _share_interest(job_id)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Share interest failed: {type(e).__name__}: {e}"}
+
+    # ── unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, share"}

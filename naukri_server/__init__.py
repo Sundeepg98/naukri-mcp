@@ -6,20 +6,21 @@ Quick Start for AI consumers:
   3. naukri_auto_hunt (one-call job hunting with fit scoring)
   4. naukri_smart_apply (fit assessment) → naukri_apply (apply)
   5. naukri_compare_jobs (side-by-side comparison with fit scores)
-  6. naukri_accept_nvite (respond to recruiter NVites)
+  6. naukri_inbox(action="accept_nvite") (respond to recruiter NVites)
   7. naukri_sync_applications → naukri_get_stale_applications (track + detect stale)
   8. naukri_set_reminder / naukri_get_reminders (follow-up scheduling)
-  9. naukri_research_company / naukri_get_interview_experiences (company intel)
+  9. naukri_research_company / naukri_company_intel (company intel)
  10. naukri_resume_tailor → naukri_update_profile (optimize profile)
- 11. naukri_resume(action="download") (download your resume)
+ 11. naukri_profile_media(media_type="resume", action="download") (download your resume)
 
-Consolidated tools (use action parameter):
+Consolidated tools (use action/intel_type parameter):
+  - naukri_inbox(action="list|read|mark_interested|accept_nvite")
   - naukri_notifications(action="list|count|mark_read|mark_all_read")
   - naukri_job_alerts(action="list|detail|create|update|delete")
   - naukri_cached_answers(action="list|update|delete")
-  - naukri_resume(action="info|download|upload")
-  - naukri_photo(action="info|upload|delete")
+  - naukri_profile_media(media_type="resume|photo", action="info|download|upload|delete")
   - naukri_settings(action="get|update|blocked_companies|check_email")
+  - naukri_company_intel(intel_type="salary|reviews|interviews")
 
 For automation: naukri_auto_hunt, naukri_skill_gap_analysis, naukri_batch_apply
 For analytics: naukri_get_application_insights, naukri_analyze_salary_position

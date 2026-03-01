@@ -4,9 +4,13 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API
 
+
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
 
 def _strip_html(html: str) -> str:
     """Remove HTML tags and collapse whitespace."""
@@ -14,34 +18,13 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-@mcp.tool()
-@api_tool("Get inbox")
-async def naukri_get_inbox(
+async def _fetch_inbox(
     limit: int = 20,
     unread_only: bool = False,
     mail_type: str = "",
     page: int = 1,
 ) -> dict:
-    """List recruiter messages and invitations from your Naukri inbox.
-
-    For reading a specific message, use naukri_read_message.
-
-    Supports filtering by mail type — pass mail_type="powerNvite" to see only
-    paid NVite invitations from recruiters.  Leave empty for all messages.
-
-    Args:
-        limit: Max messages to return (default 20)
-        unread_only: If True, only return unread messages
-        mail_type: Filter by message type (e.g. "powerNvite" for NVites only, "" for all)
-        page: Page number for pagination (default 1)
-
-    Returns:
-        - {status: "success", total, unread, count, total_power_nvite, unread_power_nvite,
-           messages: [{message_id, subject, sender, date, is_read, type, preview,
-                       vcard_id, unique_id, power_nvite, is_relevant, is_applied,
-                       applied_date, job_details, company_details}]}
-        - {status: "error", message}
-    """
+    """Fetch inbox messages from the API and return structured result."""
     body = {
         "pageSize": limit,
         "pageNo": page,
@@ -143,22 +126,8 @@ async def naukri_get_inbox(
     }
 
 
-@mcp.tool()
-@api_tool("Read message")
-async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
-    """Read a specific message from your Naukri inbox.
-
-    Requires: message_id, vcard_id, and unique_id from naukri_get_inbox results.
-
-    Args:
-        message_id: Message ID from inbox listing
-        vcard_id: VCard ID from inbox listing
-        unique_id: Unique ID from inbox listing
-
-    Returns:
-        - {status: "success", message_id, subject, content, date, type}
-        - {status: "error", message}
-    """
+async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
+    """Fetch a single message's full content from the API."""
     data = await api_get(MESSAGE_API, params={
         "vcardId": vcard_id,
         "messageId": message_id,
@@ -180,63 +149,8 @@ async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) ->
     }
 
 
-@mcp.tool()
-async def naukri_accept_nvite(
-    nvite_job_id: str,
-    answers: Optional[dict] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-) -> dict:
-    """Accept a recruiter NVite by applying to the associated job.
-
-    Get the nvite_job_id from naukri_get_inbox() → job_details.nvite_job_id.
-    NVites represent active recruiter interest — these are high-quality leads.
-
-    Args:
-        nvite_job_id: Job ID from the NVite message (job_details.nvite_job_id)
-        answers: Optional screening question answers {question_id: answer}
-        title: Job title from NVite job_details (optional, for tracking)
-        company: Company name from NVite company_details (optional, for tracking)
-
-    Returns:
-        - {status: "applied", job_id, message} — successfully accepted
-        - {status: "needs_input", job_id, questions} — screening questions pending
-        - {status: "already_applied", job_id} — already applied to this job
-        - {status: "error", message}
-    """
-    from naukri_server.tools.apply import _apply_single
-
-    result = await _apply_single(
-        job_id=nvite_job_id,
-        answers=answers,
-        title=title,
-        company=company,
-        tracking_extra={"source": "nvite"},
-    )
-    return result
-
-
-@mcp.tool()
-@api_tool("Mark interested")
-async def naukri_mark_interested(
-    mail_id: str,
-    conversation_id: str,
-    interested: bool = True,
-) -> dict:
-    """Mark an inbox message as interested or not interested.
-
-    This signals to recruiters whether you're interested in their opportunity.
-    Get mail_id and conversation_id from naukri_read_message response.
-
-    Args:
-        mail_id: Message ID from inbox
-        conversation_id: Conversation ID from message details
-        interested: True to mark interested, False for not interested
-
-    Returns:
-        - {status: "success", mail_id, interested}
-        - {status: "error", message}
-    """
+async def _mark_interested(mail_id: str, conversation_id: str, interested: bool) -> dict:
+    """Mark a message as interested/not interested via the API."""
     await api_post(
         INBOX_MARK_INTERESTED_API,
         body={
@@ -247,3 +161,117 @@ async def naukri_mark_interested(
     )
     action = "interested" if interested else "not interested"
     return {"status": "success", "mail_id": mail_id, "interested": interested, "message": f"Marked as {action}."}
+
+
+async def _accept_nvite(nvite_job_id: str, answers: Optional[dict], title: Optional[str], company: Optional[str]) -> dict:
+    """Accept a recruiter NVite by applying to the associated job."""
+    from naukri_server.tools.apply import _apply_single
+
+    return await _apply_single(
+        job_id=nvite_job_id,
+        answers=answers,
+        title=title,
+        company=company,
+        tracking_extra={"source": "nvite"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_inbox(
+    action: str = "list",
+    message_id: Optional[str] = None,
+    vcard_id: Optional[str] = None,
+    unique_id: Optional[str] = None,
+    mail_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    interested: bool = True,
+    nvite_job_id: Optional[str] = None,
+    answers: Optional[dict] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    limit: int = 20,
+    unread_only: bool = False,
+    mail_type: str = "",
+    page: int = 1,
+) -> dict:
+    """Unified inbox management — list messages, read, mark interest, accept NVites.
+
+    Actions:
+      - "list": Fetch inbox messages (use limit/page/unread_only/mail_type for filtering)
+      - "read": Read a specific message (requires message_id, vcard_id, unique_id)
+      - "mark_interested": Signal interest to recruiter (requires mail_id, conversation_id; optional interested)
+      - "accept_nvite": Accept recruiter NVite by applying (requires nvite_job_id; optional answers, title, company)
+
+    Args:
+        action: "list" | "read" | "mark_interested" | "accept_nvite"
+        message_id: Required for read — message ID from list results
+        vcard_id: Required for read — VCard ID from list results
+        unique_id: Required for read — unique ID from list results
+        mail_id: Required for mark_interested — mail ID from list/read results
+        conversation_id: Required for mark_interested — from read results
+        interested: For mark_interested — True=interested, False=not interested (default True)
+        nvite_job_id: Required for accept_nvite — from list → job_details.nvite_job_id
+        answers: For accept_nvite — screening question answers {question_id: answer}
+        title: For accept_nvite — job title for tracking
+        company: For accept_nvite — company name for tracking
+        limit: For list — max messages (default 20)
+        unread_only: For list — only unread messages (default False)
+        mail_type: For list — filter by type e.g. "powerNvite" (default "" for all)
+        page: For list — page number (default 1)
+
+    Returns:
+        - list: {status, total, unread, total_power_nvite, unread_power_nvite, count, messages: [...]}
+        - read: {status, message_id, subject, content, date, type, conversation_id}
+        - mark_interested: {status, mail_id, interested, message}
+        - accept_nvite: {status: "applied"|"needs_input"|"already_applied"|"error", ...}
+        - {status: "error", message} on failure
+    """
+    # ── list ───────────────────────────────────────────────────────────
+    if action == "list":
+        try:
+            return await _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get inbox failed: {type(e).__name__}: {e}"}
+
+    # ── read ───────────────────────────────────────────────────────────
+    elif action == "read":
+        if not message_id or not vcard_id or not unique_id:
+            return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id."}
+        try:
+            return await _read_message(message_id, vcard_id, unique_id)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Read message failed: {type(e).__name__}: {e}"}
+
+    # ── mark_interested ────────────────────────────────────────────────
+    elif action == "mark_interested":
+        if not mail_id or not conversation_id:
+            return {"status": "error", "message": "mark_interested requires mail_id and conversation_id."}
+        try:
+            return await _mark_interested(mail_id, conversation_id, interested)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}"}
+
+    # ── accept_nvite ──────────────────────────────────────────────────
+    elif action == "accept_nvite":
+        if not nvite_job_id:
+            return {"status": "error", "message": "accept_nvite requires nvite_job_id."}
+        try:
+            return await _accept_nvite(nvite_job_id, answers, title, company)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Accept NVite failed: {type(e).__name__}: {e}"}
+
+    # ── unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, read, mark_interested, accept_nvite"}

@@ -660,7 +660,7 @@ async def naukri_sync_saved_jobs(
 
     Pulls your saved jobs from Naukri and merges with local saved_jobs.json.
 
-    For just viewing local saved jobs, use naukri_get_saved_jobs instead.
+    For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.
 
     Args:
         force_browser: If True, skip REST API and use browser interception.

@@ -35,8 +35,7 @@ async def naukri_research_company(
         - {status: "error", message}
     """
     from naukri_server.tools.ambitionbox import (
-        naukri_get_company_salary, naukri_get_company_reviews,
-        naukri_get_interview_experiences,
+        _fetch_salary, _fetch_reviews, _fetch_interviews,
     )
 
     errors = []
@@ -97,12 +96,12 @@ async def naukri_research_company(
         gather_coros = []
         gather_labels = []
         if include_reviews:
-            gather_coros.append(naukri_get_company_salary(company_slug=slug))
+            gather_coros.append(_fetch_salary(company_slug=slug))
             gather_labels.append("salary")
-            gather_coros.append(naukri_get_company_reviews(company_slug=slug))
+            gather_coros.append(_fetch_reviews(company_slug=slug))
             gather_labels.append("reviews")
         if include_interviews:
-            gather_coros.append(naukri_get_interview_experiences(company_slug=slug))
+            gather_coros.append(_fetch_interviews(company_slug=slug))
             gather_labels.append("interviews")
 
         gather_results = await asyncio.gather(*gather_coros, return_exceptions=True)

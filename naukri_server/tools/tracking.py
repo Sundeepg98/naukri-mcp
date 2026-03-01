@@ -134,6 +134,10 @@ async def naukri_get_applications(
     }
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers for saved jobs (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
+
 async def _push_save_to_naukri(job_id: str) -> bool:
     """Attempt to save a job on Naukri's backend via discovered POST endpoint."""
     from naukri_server.config import SAVE_JOB_API
@@ -149,26 +153,25 @@ async def _push_save_to_naukri(job_id: str) -> bool:
         return False
 
 
-@mcp.tool()
-async def naukri_save_job(job_id: str, title: str = None, company: str = None,
-                           notes: Optional[str] = None,
-                           sync_to_naukri: bool = False) -> dict:
-    """Save/bookmark a job for later.
+async def _list_saved_jobs(limit: int = 50) -> dict:
+    """List saved/bookmarked jobs from local tracking."""
+    async with _saved_jobs_lock:
+        saved = _load_json(SAVED_JOBS_FILE)
 
-    Note: Saves locally by default. Set sync_to_naukri=True to also save on Naukri.com.
+    saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
 
-    Args:
-        job_id: Naukri job ID
-        title: Job title (optional, for display)
-        company: Company name (optional, for display)
-        notes: Personal notes about this job
-        sync_to_naukri: If True, also save the job on Naukri's backend
-            via the discovered SAVE_JOB_API endpoint.
+    return {
+        "status": "success",
+        "total": len(saved),
+        "count": min(len(saved), limit),
+        "saved_jobs": saved[:limit],
+    }
 
-    Returns:
-        - {status: "saved", job_id, total_saved, synced_remote}
-        - {status: "already_saved", job_id}
-    """
+
+async def _save_job(job_id: str, title: str = None, company: str = None,
+                    notes: Optional[str] = None,
+                    sync_to_naukri: bool = False) -> dict:
+    """Save/bookmark a job locally (and optionally on Naukri)."""
     async with _saved_jobs_lock:
         saved = _load_json(SAVED_JOBS_FILE)
 
@@ -192,43 +195,8 @@ async def naukri_save_job(job_id: str, title: str = None, company: str = None,
     return {"status": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
 
 
-@mcp.tool()
-async def naukri_get_saved_jobs(limit: int = 50) -> dict:
-    """Get saved/bookmarked jobs.
-
-    Args:
-        limit: Max results to return (default 50)
-
-    Returns:
-        - {status: "success", total, count, saved_jobs: [...]}
-    """
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
-
-    saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
-
-    return {
-        "status": "success",
-        "total": len(saved),
-        "count": min(len(saved), limit),
-        "saved_jobs": saved[:limit],
-    }
-
-
-@mcp.tool()
-@api_tool("Unsave job")
-async def naukri_unsave_job(job_id: str) -> dict:
-    """Unsave/unbookmark a previously saved job, both locally and on Naukri.
-
-    Args:
-        job_id: Naukri job ID to unsave
-
-    Returns:
-        - {status: "unsaved", job_id} if it was found and removed locally
-        - {status: "not_found", job_id} if it wasn't in local saved_jobs.json
-          (Naukri remote unsave is still attempted either way)
-        - {status: "error", message} on failure
-    """
+async def _unsave_job(job_id: str) -> dict:
+    """Unsave/unbookmark a job locally and on Naukri."""
     # Always attempt the remote unsave regardless of local state
     try:
         await api_post(UNSAVE_JOB_API + job_id, body={})
@@ -245,6 +213,65 @@ async def naukri_unsave_job(job_id: str) -> dict:
             return {"status": "unsaved", "job_id": job_id}
         else:
             return {"status": "not_found", "job_id": job_id}
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool for saved jobs
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_saved_jobs(
+    action: str = "list",
+    job_id: Optional[str] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    notes: Optional[str] = None,
+    sync_to_naukri: bool = False,
+    limit: int = 50,
+) -> dict:
+    """Unified saved/bookmarked jobs management — list, save, and unsave.
+
+    Actions:
+      - "list": Get saved/bookmarked jobs (use limit for pagination)
+      - "save": Save/bookmark a job for later (requires job_id)
+      - "unsave": Unsave/unbookmark a job (requires job_id)
+
+    Args:
+        action: "list" | "save" | "unsave"
+        job_id: Required for save/unsave — the Naukri job ID
+        title: Job title for display (optional, save only)
+        company: Company name for display (optional, save only)
+        notes: Personal notes about this job (optional, save only)
+        sync_to_naukri: If True, also save the job on Naukri's backend (save only)
+        limit: Max results for list action (default 50)
+
+    Returns:
+        - list: {status, total, count, saved_jobs: [...]}
+        - save: {status: "saved", job_id, total_saved, synced_remote}
+                or {status: "already_saved", job_id}
+        - unsave: {status: "unsaved", job_id}
+                  or {status: "not_found", job_id}
+        - {status: "error", message} on failure
+    """
+    # ── list ───────────────────────────────────────────────────────────
+    if action == "list":
+        return await _list_saved_jobs(limit=limit)
+
+    # ── save ───────────────────────────────────────────────────────────
+    elif action == "save":
+        if not job_id:
+            return {"status": "error", "message": "save requires job_id."}
+        return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
+
+    # ── unsave ─────────────────────────────────────────────────────────
+    elif action == "unsave":
+        if not job_id:
+            return {"status": "error", "message": "unsave requires job_id."}
+        return await _unsave_job(job_id)
+
+    # ── unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave"}
 
 
 @mcp.tool()

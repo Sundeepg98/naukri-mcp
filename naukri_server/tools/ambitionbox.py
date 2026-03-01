@@ -1,4 +1,4 @@
-"""AmbitionBox salary, review, and slug-bridge tools — scrapes __NEXT_DATA__ from SSR pages."""
+"""AmbitionBox company intel and slug-bridge tools — scrapes __NEXT_DATA__ from SSR pages."""
 
 import asyncio
 import logging
@@ -11,6 +11,9 @@ from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_salary_data, validate_review_data
 
 logger = logging.getLogger(__name__)
+
+# Valid intel_type values for naukri_company_intel
+_VALID_INTEL_TYPES = ("salary", "reviews", "interviews")
 
 
 def _ensure_slug(value: str) -> str:
@@ -195,24 +198,13 @@ async def _scrape_interview_data(page) -> dict | None:
     """)
 
 
-# ============================================================================
-# Tool: Get Company Salary Data from AmbitionBox
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — called by the unified tool + research.py)
+# ---------------------------------------------------------------------------
 
 
-@mcp.tool()
-async def naukri_get_company_salary(company_slug: str, designation: str = "") -> dict:
-    """Get salary data for a company from AmbitionBox — avg salary, ranges, and experience breakdowns.
-
-    Args:
-        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
-        designation: Optional job title slug (e.g., "software-engineer", "data-scientist")
-                     If provided, returns salary for that specific role.
-
-    Returns:
-        - {status: "success", company, salaries: [...], ...}
-        - {status: "error", message}
-    """
+async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
+    """Fetch salary data for a company from AmbitionBox."""
     async with browser.page_pool.acquire() as page:
         try:
             company_slug = _ensure_slug(company_slug)
@@ -424,23 +416,8 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
             }
 
 
-# ============================================================================
-# Tool: Get Company Reviews from AmbitionBox
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
-    """Get employee reviews for a company from AmbitionBox — ratings, pros, cons.
-
-    Args:
-        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
-        page: Page number for review pagination (default: 1)
-
-    Returns:
-        - {status: "success", company, overall_rating, review_count, reviews: [...], ...}
-        - {status: "error", message}
-    """
+async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
+    """Fetch employee reviews for a company from AmbitionBox."""
     async with browser.page_pool.acquire() as tab:
         try:
             company_slug = _ensure_slug(company_slug)
@@ -574,30 +551,8 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
             }
 
 
-# ============================================================================
-# Tool: Get Interview Experiences from AmbitionBox
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_get_interview_experiences(
-    company_slug: str,
-    page: int = 1,
-) -> dict:
-    """Get interview experiences for a company from AmbitionBox.
-
-    Returns interview questions, difficulty ratings, process details, and offer outcomes.
-
-    Args:
-        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
-        page: Page number for pagination (default 1)
-
-    Returns:
-        - {status: "success", company_name, total_interviews, overall_difficulty,
-           interview_experiences: [{designation, difficulty, outcome, experience_type,
-           duration, questions, date}]}
-        - {status: "error", message}
-    """
+async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
+    """Fetch interview experiences for a company from AmbitionBox."""
     company_slug = _ensure_slug(company_slug)
     url = f"{AMBITIONBOX_BASE}/interviews/{company_slug}-interview-questions"
     if page > 1:
@@ -711,9 +666,58 @@ async def naukri_get_interview_experiences(
             return {"status": "error", "message": f"Interview experiences failed: {type(e).__name__}: {e}"}
 
 
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def naukri_company_intel(
+    company: str,
+    intel_type: str = "salary",
+    designation: str = "",
+    page: int = 1,
+) -> dict:
+    """Unified company intelligence — salary data, employee reviews, or interview experiences from AmbitionBox.
+
+    Replaces separate salary/reviews/interviews tools. Accepts a company slug OR name.
+
+    Args:
+        company: AmbitionBox slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
+        intel_type: "salary" | "reviews" | "interviews"
+        designation: (salary only) Job title slug to filter (e.g., "software-engineer")
+        page: Page number for reviews/interviews pagination (default 1)
+
+    Returns:
+        - salary:     {status, company, avg_salary, salaries: [...], ...}
+        - reviews:    {status, company, overall_rating, reviews: [...], ...}
+        - interviews: {status, company_name, interview_experiences: [...], ...}
+        - {status: "error", message} on failure
+    """
+    if intel_type not in _VALID_INTEL_TYPES:
+        return {
+            "status": "error",
+            "message": f"Unknown intel_type '{intel_type}'. Use: {', '.join(_VALID_INTEL_TYPES)}",
+        }
+
+    slug = _ensure_slug(company)
+
+    # ── salary ─────────────────────────────────────────────────────────
+    if intel_type == "salary":
+        return await _fetch_salary(company_slug=slug, designation=designation)
+
+    # ── reviews ────────────────────────────────────────────────────────
+    elif intel_type == "reviews":
+        return await _fetch_reviews(company_slug=slug, page=page)
+
+    # ── interviews ─────────────────────────────────────────────────────
+    elif intel_type == "interviews":
+        return await _fetch_interviews(company_slug=slug, page=page)
+
+
+# ---------------------------------------------------------------------------
 # Tool: Convert Naukri group_id to AmbitionBox company slug
-# ============================================================================
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -721,14 +725,14 @@ async def naukri_get_company_slug(group_id: str) -> dict:
     """Convert a Naukri company group_id to an AmbitionBox company slug.
 
     Use this to bridge between Naukri company tools (which use group_id from
-    naukri_search_companies) and AmbitionBox tools (naukri_get_company_salary,
-    naukri_get_company_reviews) which require company_slug.
+    naukri_search_companies) and AmbitionBox tools (naukri_company_intel)
+    which require company slug.
 
     Requires: group_id from naukri_search_companies results.
 
-    Note: naukri_get_company_salary and naukri_get_company_reviews now auto-derive
-    slugs from company names. Use this tool only when you specifically need the
-    canonical AmbitionBox slug (e.g., for URL construction).
+    Note: naukri_company_intel auto-derives slugs from company names. Use this
+    tool only when you specifically need the canonical AmbitionBox slug (e.g.,
+    for URL construction).
 
     Args:
         group_id: Naukri company group ID (from naukri_search_companies)
@@ -852,7 +856,7 @@ async def naukri_get_company_slug(group_id: str) -> dict:
                     "company_slug": slug,
                     "company_name": company_name,
                     "derived": True,
-                    "_note": "Slug derived from company name — may not match AmbitionBox exactly. Verify with naukri_get_company_salary.",
+                    "_note": "Slug derived from company name — may not match AmbitionBox exactly. Verify with naukri_company_intel.",
                 }
 
             return {

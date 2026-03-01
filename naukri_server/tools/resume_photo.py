@@ -1,4 +1,4 @@
-"""Resume and photo management — unified tools for resume info/download/upload and photo info/upload/delete."""
+"""Profile media management — unified tool for resume and photo operations."""
 
 import asyncio
 from pathlib import Path
@@ -13,75 +13,81 @@ PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
 RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
 RESUME_MAX_SIZE_MB = 5
 
+_VALID_ACTIONS = {
+    "resume": {"info", "download", "upload"},
+    "photo": {"info", "upload", "delete"},
+}
+
 
 @mcp.tool()
-async def naukri_resume(
+async def naukri_profile_media(
+    media_type: str,
     action: str = "info",
     file_path: Optional[str] = None,
     save_path: Optional[str] = None,
 ) -> dict:
-    """Resume management — view info, download, or upload.
+    """Unified resume and photo management — info, download, upload, delete.
 
-    Actions:
+    Combines former naukri_resume + naukri_photo into one tool.
+
+    media_type="resume" actions:
       - "info": Get resume filename, upload date, download URL
       - "download": Save resume to local file (requires save_path)
       - "upload": Upload new resume (requires file_path; PDF/DOC/DOCX, max 5MB)
 
-    Args:
-        action: "info" | "download" | "upload"
-        file_path: Local file to upload (for upload action)
-        save_path: Local path to save downloaded resume (for download action)
-
-    Returns:
-        - info: {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}
-        - download: {status, file_path, file_size_bytes, message}
-        - upload: {status, file, size_mb, message}
-    """
-    if action == "info":
-        return await _resume_info()
-    elif action == "download":
-        if not save_path:
-            return {"status": "error", "message": "download requires save_path."}
-        return await _resume_download(save_path)
-    elif action == "upload":
-        if not file_path:
-            return {"status": "error", "message": "upload requires file_path."}
-        return await _resume_upload(file_path)
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: info, download, upload"}
-
-
-@mcp.tool()
-async def naukri_photo(
-    action: str = "info",
-    file_path: Optional[str] = None,
-) -> dict:
-    """Profile photo management — view info, upload, or delete.
-
-    Actions:
+    media_type="photo" actions:
       - "info": Get current photo URL and dimensions
       - "upload": Upload new profile photo (requires file_path; PNG/JPG/JPEG/GIF)
       - "delete": Remove current profile photo
 
     Args:
-        action: "info" | "upload" | "delete"
-        file_path: Local image file to upload (for upload action)
+        media_type: "resume" | "photo"
+        action: Depends on media_type — see above
+        file_path: Local file to upload (for upload actions)
+        save_path: Local path to save downloaded resume (for resume download)
 
     Returns:
-        - info: {status, has_photo, photo_url, format, status_label, upload_date, download_api}
-        - upload: {status, file, message}
-        - delete: {status, message}
+        - resume/info: {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}
+        - resume/download: {status, file_path, file_size_bytes, message}
+        - resume/upload: {status, file, size_mb, message}
+        - photo/info: {status, has_photo, photo_url, format, status_label, upload_date, download_api}
+        - photo/upload: {status, file, message}
+        - photo/delete: {status, message}
+        - {status: "error", message} on failure
     """
-    if action == "info":
-        return await _photo_info()
-    elif action == "upload":
-        if not file_path:
-            return {"status": "error", "message": "upload requires file_path."}
-        return await _photo_upload(file_path)
-    elif action == "delete":
-        return await _photo_delete()
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: info, upload, delete"}
+    # ── validate media_type ───────────────────────────────────────────
+    if media_type not in _VALID_ACTIONS:
+        valid_types = ", ".join(sorted(_VALID_ACTIONS))
+        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}"}
+
+    # ── validate action for the chosen media_type ─────────────────────
+    valid = _VALID_ACTIONS[media_type]
+    if action not in valid:
+        return {"status": "error", "message": f"Unknown action '{action}' for media_type '{media_type}'. Use: {', '.join(sorted(valid))}"}
+
+    # ── resume actions ────────────────────────────────────────────────
+    if media_type == "resume":
+        if action == "info":
+            return await _resume_info()
+        elif action == "download":
+            if not save_path:
+                return {"status": "error", "message": "download requires save_path."}
+            return await _resume_download(save_path)
+        elif action == "upload":
+            if not file_path:
+                return {"status": "error", "message": "upload requires file_path."}
+            return await _resume_upload(file_path)
+
+    # ── photo actions ─────────────────────────────────────────────────
+    elif media_type == "photo":
+        if action == "info":
+            return await _photo_info()
+        elif action == "upload":
+            if not file_path:
+                return {"status": "error", "message": "upload requires file_path."}
+            return await _photo_upload(file_path)
+        elif action == "delete":
+            return await _photo_delete()
 
 
 # ---------------------------------------------------------------------------

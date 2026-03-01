@@ -20,13 +20,13 @@ async def naukri_daily_brief() -> dict:
            recruiter_activity, activity_level, todays_applications, dashboard,
            due_reminders, stale_applications, errors}
     """
-    from naukri_server.tools.inbox import naukri_get_inbox
+    from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications
     from naukri_server.tools.search import naukri_get_recommendations
-    from naukri_server.tools.performance import naukri_get_recruiter_activity, naukri_get_activity_level
+    from naukri_server.tools.performance import _get_recruiter_activity, _get_activity_level
     from naukri_server.tools.tracking import naukri_get_applications
     from naukri_server.tools.profile import naukri_get_dashboard
-    from naukri_server.tools.early_access import naukri_get_early_access_roles
+    from naukri_server.tools.early_access import _list_early_access_roles
     from naukri_server.tools.subscription import naukri_get_subscription_status
     from naukri_server.tools.reminders import naukri_get_reminders
     from naukri_server.tools.tracking import naukri_get_stale_applications
@@ -35,14 +35,14 @@ async def naukri_daily_brief() -> dict:
     errors = []
 
     results = await asyncio.gather(
-        naukri_get_inbox(limit=5, unread_only=True),
+        _fetch_inbox(limit=5, unread_only=True),
         _fetch_notifications(limit=5),
         naukri_get_recommendations(limit=5),
-        naukri_get_recruiter_activity(size=5),
-        naukri_get_activity_level(),
+        _get_recruiter_activity(size=5),
+        _get_activity_level(),
         naukri_get_applications(date_from=today),
         naukri_get_dashboard(),
-        naukri_get_early_access_roles(limit=3),
+        _list_early_access_roles(limit=3),
         naukri_get_subscription_status(),
         naukri_get_reminders(include_past=True),
         naukri_get_stale_applications(days_threshold=14, min_stale_score=50),

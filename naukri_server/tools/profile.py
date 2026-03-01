@@ -1,3 +1,5 @@
+"""Profile tools — get, update, audit, boost, and dashboard."""
+
 import asyncio
 from typing import Optional
 
@@ -29,14 +31,16 @@ async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
         now = _time.monotonic()
         if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
             return _profile_cache["data"]
-        result = await naukri_get_profile()
+        result = await _get_profile()
         if isinstance(result, dict) and result.get("status") != "error":
             _profile_cache["data"] = result
             _profile_cache["ts"] = now
         return result
 
 
-# --- Browser helpers for profile update modals ---
+# ---------------------------------------------------------------------------
+# Browser helpers for profile update modals
+# ---------------------------------------------------------------------------
 
 _SAVE_MODAL_JS = """() => {
     const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
@@ -105,27 +109,94 @@ async def _click_save_modal(page) -> str | None:
     return await page.evaluate(_SAVE_MODAL_JS)
 
 
-# ============================================================================
-# Tool 6: Refresh Profile (Playwright — needs browser interaction)
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
+
+UPDATABLE_FIELDS = {
+    "resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc",
+    # These fields are accepted by the REST API but may not persist:
+    # "summary", "locationPrefId", "experience", "absoluteCtc", "absoluteExpectedCtc",
+    # "name", "gender", "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
+}
+
+BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
 
 
-@mcp.tool()
-async def naukri_boost_visibility(randomize: bool = False) -> dict:
-    """Boost your profile visibility by refreshing your headline — re-saves your current headline to bump your profile in recruiter searches.
+async def _get_profile() -> dict:
+    """Fetch full Naukri profile via API (internal helper)."""
+    try:
+        data = await api_get(
+            PROFILE_API,
+            {"expand_level": "4"},
+        )
 
-    Re-saves your resume headline via REST API to trigger Naukri's
-    'recently active' signal — recruiters see you first.
+        profile = data.get("profile", [{}])[0]
+        additional = data.get("profileAdditional", {})
 
-    Args:
-        randomize: If True, wait a random 0-300 seconds before refreshing
-                   (useful for scheduled/cron-based calls to look natural)
+        skills = []
+        for s in data.get("itskills", []):
+            exp_time = s.get("experienceTime", {})
+            skills.append({
+                "skill": s.get("skill"),
+                "experience_years": exp_time.get("year", 0),
+                "experience_months": exp_time.get("month", 0),
+            })
 
-    Returns:
-        - {status: "refreshed", method, message}
-        - {status: "partial", method, message}
-        - {status: "error", message}
-    """
+        employment = []
+        for emp in data.get("employments", []):
+            employment.append({
+                "designation": emp.get("designation"),
+                "organization": emp.get("organization"),
+                "description": emp.get("description"),
+                "start_date": emp.get("startDate"),
+                "end_date": emp.get("endDate") or "Present",
+            })
+
+        education = []
+        for edu in data.get("educations", []):
+            education.append({
+                "degree": edu.get("course", {}).get("value"),
+                "specialization": edu.get("specialisation", {}).get("value"),
+                "institute": edu.get("institute"),
+                "year": edu.get("yearOfCompletion"),
+            })
+
+        exp = profile.get("experience", {})
+
+        result = {
+            "status": "success",
+            "name": profile.get("name"),
+            "resume_headline": profile.get("resumeHeadline"),
+            "current_ctc": profile.get("absoluteCtc"),
+            "expected_ctc": profile.get("absoluteExpectedCtc"),
+            "notice_period": profile.get("noticePeriod", {}).get("value"),
+            "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
+            "current_location": profile.get("city", {}).get("value"),
+            "gender": {"M": "Male", "F": "Female"}.get(profile.get("gender"), profile.get("gender")),
+            "key_skills": profile.get("keySkills"),
+            "summary": profile.get("summary"),
+            "certifications": data.get("certifications", []),
+            "projects": data.get("projects", []),
+            "languages": data.get("languages", []),
+            "online_profiles": data.get("onlineProfiles", []),
+            "skills_with_experience": skills,
+            "employment": employment,
+            "education": education,
+            "profile_id": additional.get("profileId"),
+        }
+        warnings = validate_profile(result)
+        if warnings:
+            result["warnings"] = warnings
+        return result
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
+
+
+async def _boost_visibility(randomize: bool = False) -> dict:
+    """Boost profile visibility by re-saving headline (internal helper)."""
     if randomize:
         import random
         delay = random.randint(0, 300)
@@ -235,176 +306,13 @@ async def naukri_boost_visibility(randomize: bool = False) -> dict:
         return {"status": "error", "message": f"Browser fallback failed: {type(e).__name__}: {e}"}
 
 
-# ============================================================================
-# Tool 8: Get Profile (REST API)
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_get_profile() -> dict:
-    """Get your full Naukri profile via API.
-
-    Returns skills (with experience years), employment history, education,
-    current CTC, expected CTC, notice period, location -- everything needed
-    for Claude to auto-answer screening questions intelligently.
-
-    Returns:
-        - {status: "success", name, current_ctc, expected_ctc, notice_period, total_experience, skills_with_experience, employment, education, summary, certifications, projects, languages, online_profiles}
-        - {status: "error", message}
-    """
-    try:
-        data = await api_get(
-            PROFILE_API,
-            {"expand_level": "4"},
-        )
-
-        profile = data.get("profile", [{}])[0]
-        additional = data.get("profileAdditional", {})
-
-        skills = []
-        for s in data.get("itskills", []):
-            exp_time = s.get("experienceTime", {})
-            skills.append({
-                "skill": s.get("skill"),
-                "experience_years": exp_time.get("year", 0),
-                "experience_months": exp_time.get("month", 0),
-            })
-
-        employment = []
-        for emp in data.get("employments", []):
-            employment.append({
-                "designation": emp.get("designation"),
-                "organization": emp.get("organization"),
-                "description": emp.get("description"),
-                "start_date": emp.get("startDate"),
-                "end_date": emp.get("endDate") or "Present",
-            })
-
-        education = []
-        for edu in data.get("educations", []):
-            education.append({
-                "degree": edu.get("course", {}).get("value"),
-                "specialization": edu.get("specialisation", {}).get("value"),
-                "institute": edu.get("institute"),
-                "year": edu.get("yearOfCompletion"),
-            })
-
-        exp = profile.get("experience", {})
-
-        result = {
-            "status": "success",
-            "name": profile.get("name"),
-            "resume_headline": profile.get("resumeHeadline"),
-            "current_ctc": profile.get("absoluteCtc"),
-            "expected_ctc": profile.get("absoluteExpectedCtc"),
-            "notice_period": profile.get("noticePeriod", {}).get("value"),
-            "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
-            "current_location": profile.get("city", {}).get("value"),
-            "gender": {"M": "Male", "F": "Female"}.get(profile.get("gender"), profile.get("gender")),
-            "key_skills": profile.get("keySkills"),
-            "summary": profile.get("summary"),
-            "certifications": data.get("certifications", []),
-            "projects": data.get("projects", []),
-            "languages": data.get("languages", []),
-            "online_profiles": data.get("onlineProfiles", []),
-            "skills_with_experience": skills,
-            "employment": employment,
-            "education": education,
-            "profile_id": additional.get("profileId"),
-        }
-        warnings = validate_profile(result)
-        if warnings:
-            result["warnings"] = warnings
-        return result
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
-
-
-# ============================================================================
-# Tool: Get Dashboard (REST API)
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_get_dashboard() -> dict:
-    """Get your Naukri dashboard summary via API.
-
-    Returns profile views, recruiter activity, CTC, experience,
-    recruiter invites, and unread mail counts — a quick health check
-    of your Naukri presence.
-
-    Returns:
-        - {status: "success", profile_views, recruiter_activity_date, ctc_lpa, experience_years, unread_invites, total_invites, unread_relevant_mail, has_inbox, total_matches}
-        - {status: "error", message}
-    """
-    try:
-        data = await api_get(DASHBOARD_API)
-        db = data.get("dashBoard", {})
-
-        return {
-            "status": "success",
-            "profile_views": db.get("profileViewCount"),
-            "recruiter_activity_date": db.get("recruiterActionsLatestDate"),
-            "ctc_lpa": db.get("rawCtc"),
-            "experience_years": db.get("rawTotalExperience"),
-            "unread_invites": db.get("unreadPowerNvite"),
-            "total_invites": db.get("totalPowerNvite"),
-            "unread_relevant_mail": db.get("unreadMostRelevantMail"),
-            "has_inbox": db.get("hasInboxFlag") == "Y",
-            "total_matches": db.get("mrt"),
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}"}
-
-
-# ============================================================================
-# Tool: Update Profile (REST API — partial update)
-# ============================================================================
-
-UPDATABLE_FIELDS = {
-    "resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc",
-    # These fields are accepted by the REST API but may not persist:
-    # "summary", "locationPrefId", "experience", "absoluteCtc", "absoluteExpectedCtc",
-    # "name", "gender", "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
-}
-
-BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
-
-
-@mcp.tool()
-async def naukri_update_profile(
+async def _update_profile(
     fields: dict,
     notice_period: Optional[str] = None,
     expected_ctc: Optional[float] = None,
     current_ctc: Optional[float] = None,
 ) -> dict:
-    """Update your Naukri profile fields via browser UI automation.
-
-    Currently supported fields: resumeHeadline, keySkills, noticePeriod,
-    expectedCtc, currentCtc (browser-based update).
-    Other fields in UPDATABLE_FIELDS are accepted but may not persist —
-    Naukri's API support for direct field updates varies.
-
-    Use naukri_get_profile first to see current values.
-
-    Args:
-        fields: Dict of fields to update. Currently supported:
-            - resumeHeadline: str — your profile headline
-            - keySkills: str — comma-separated full skill set (replaces current skills, 250 char limit)
-            Other fields in UPDATABLE_FIELDS are accepted but may not persist.
-        notice_period: Notice period — "Serving Notice Period", "15 Days or less",
-            "1 Month", "2 Months", "3 Months", "More than 3 Months"
-        expected_ctc: Expected CTC in lakhs (e.g., 15 for 15 LPA)
-        current_ctc: Current CTC in lakhs (e.g., 12 for 12 LPA)
-
-    Returns:
-        - {status: "updated", updated_fields: [...], method, api_confirmed, message}
-        - {status: "error", message}
-    """
+    """Update Naukri profile fields via browser UI automation (internal helper)."""
     # Merge convenience parameters into fields dict
     if notice_period is not None:
         fields["noticePeriod"] = notice_period
@@ -425,7 +333,7 @@ async def naukri_update_profile(
 
     # The fullprofiles endpoint rejects all external API calls (405 from CDN).
     # Only the React app's own XHR works. Use the browser UI approach:
-    # navigate to profile → click edit → modify form fields → click save.
+    # navigate to profile -> click edit -> modify form fields -> click save.
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
@@ -912,30 +820,11 @@ async def naukri_update_profile(
             return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}
 
 
-# ============================================================================
-# Tool: Audit Profile — actionable improvement suggestions
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_audit_profile() -> dict:
-    """Audit your Naukri profile and get actionable improvement suggestions.
-
-    Checks profile completeness, identifies missing sections, and provides
-    specific tips to improve recruiter visibility.
-
-    For raw profile data, use naukri_get_profile instead.
-    For just the completeness percentage, use naukri_get_profile_completeness.
-
-    Returns:
-        - {status: "success", completeness_pct, grade,
-           strengths: [...], gaps: [{section, action, impact}, ...],
-           tips: [...]}
-        - {status: "error", message}
-    """
+async def _audit_profile() -> dict:
+    """Audit profile and return actionable improvement suggestions (internal helper)."""
     try:
         # Get profile data
-        profile_result = await naukri_get_profile()
+        profile_result = await _get_profile()
         if profile_result.get("status") != "success":
             return profile_result
 
@@ -1077,7 +966,7 @@ async def naukri_audit_profile() -> dict:
             tips.append("Update your skills regularly to match trending job requirements")
         else:
             tips.append("Profiles with 15+ skills appear in more search results")
-        tips.append("Use naukri_boost_visibility daily to stay in 'recently active' searches")
+        tips.append("Use naukri_profile(action='boost') daily to stay in 'recently active' searches")
         if gaps:
             high_impact = [g for g in gaps if g["impact"] == "high"]
             if high_impact:
@@ -1093,3 +982,105 @@ async def naukri_audit_profile() -> dict:
         }
     except Exception as e:
         return {"status": "error", "message": f"Profile audit failed: {type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_profile(
+    action: str = "get",
+    fields: Optional[dict] = None,
+    notice_period: Optional[str] = None,
+    expected_ctc: Optional[float] = None,
+    current_ctc: Optional[float] = None,
+    randomize: bool = False,
+) -> dict:
+    """Unified profile management — get, update, audit, or boost visibility.
+
+    Actions:
+      - "get": Fetch full profile (skills, employment, education, CTC, etc.)
+      - "update": Update profile fields via browser UI (requires fields dict)
+      - "audit": Audit profile completeness and get improvement suggestions
+      - "boost": Re-save headline to appear as 'recently active' in recruiter searches
+
+    Args:
+        action: "get" | "update" | "audit" | "boost"
+        fields: Required for update — dict of fields to change. Supported keys:
+            resumeHeadline, keySkills, noticePeriod, expectedCtc, currentCtc
+        notice_period: Shorthand for update — "Serving Notice Period", "15 Days or less",
+            "1 Month", "2 Months", "3 Months", "More than 3 Months"
+        expected_ctc: Shorthand for update — expected CTC in lakhs (e.g., 15)
+        current_ctc: Shorthand for update — current CTC in lakhs (e.g., 12)
+        randomize: For boost only — if True, wait random 0-300s before refreshing
+
+    Returns:
+        - get: {status, name, current_ctc, expected_ctc, skills_with_experience, employment, education, ...}
+        - update: {status: "updated", updated_fields, method, api_confirmed, message}
+        - audit: {status, completeness_pct, grade, strengths, gaps, tips}
+        - boost: {status: "refreshed", method, message}
+        - {status: "error", message} on failure
+    """
+    # ── get ─────────────────────────────────────────────────────────────
+    if action == "get":
+        return await _get_profile()
+
+    # ── update ──────────────────────────────────────────────────────────
+    elif action == "update":
+        return await _update_profile(
+            fields=fields or {},
+            notice_period=notice_period,
+            expected_ctc=expected_ctc,
+            current_ctc=current_ctc,
+        )
+
+    # ── audit ───────────────────────────────────────────────────────────
+    elif action == "audit":
+        return await _audit_profile()
+
+    # ── boost ───────────────────────────────────────────────────────────
+    elif action == "boost":
+        return await _boost_visibility(randomize=randomize)
+
+    # ── unknown action ──────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost"}
+
+
+# ---------------------------------------------------------------------------
+# Separate tool — different API, different purpose
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_get_dashboard() -> dict:
+    """Get your Naukri dashboard summary via API.
+
+    Returns profile views, recruiter activity, CTC, experience,
+    recruiter invites, and unread mail counts — a quick health check
+    of your Naukri presence.
+
+    Returns:
+        - {status: "success", profile_views, recruiter_activity_date, ctc_lpa, experience_years, unread_invites, total_invites, unread_relevant_mail, has_inbox, total_matches}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(DASHBOARD_API)
+        db = data.get("dashBoard", {})
+
+        return {
+            "status": "success",
+            "profile_views": db.get("profileViewCount"),
+            "recruiter_activity_date": db.get("recruiterActionsLatestDate"),
+            "ctc_lpa": db.get("rawCtc"),
+            "experience_years": db.get("rawTotalExperience"),
+            "unread_invites": db.get("unreadPowerNvite"),
+            "total_invites": db.get("totalPowerNvite"),
+            "unread_relevant_mail": db.get("unreadMostRelevantMail"),
+            "has_inbox": db.get("hasInboxFlag") == "Y",
+            "total_matches": db.get("mrt"),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}"}

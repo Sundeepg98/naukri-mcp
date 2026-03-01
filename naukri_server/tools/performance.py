@@ -3,26 +3,22 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API
 
 # Valid filter values for recruiter activity (from activityBucketCount keys)
 ACTIVITY_FILTERS = {"VIEWED", "MOBILE_VIEWED", "DOWNLOADED", "CONTACTED", "ADD_TO_FOLDER"}
 
+# Valid day ranges for impressions and recruiter_activity
+VALID_DAYS = {7, 30, 90}
 
-@mcp.tool()
-@api_tool("Get search impressions")
-async def naukri_get_search_impressions(days: int = 7) -> dict:
-    """Get your profile's search appearance stats — how many times recruiters found you,
-    which keywords they searched, and day-by-day timeline.
 
-    Args:
-        days: Time period in days (7, 30, or 90). Default 7.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool and daily_brief)
+# ---------------------------------------------------------------------------
 
-    Returns:
-        - {status: "success", total_appearances, recruiter_actions, daily_average, percentage_change, timeline: {date: count}, top_keywords: {keyword: count}}
-        - {status: "error", message}
-    """
+async def _get_search_impressions(days: int = 7) -> dict:
+    """Fetch search impression stats from the API and return structured result."""
     data = await api_get(
         SEARCH_IMPRESSIONS_API,
         params={"days": str(days), "totalAppearances": "1"},
@@ -39,36 +35,12 @@ async def naukri_get_search_impressions(days: int = 7) -> dict:
     }
 
 
-@mcp.tool()
-@api_tool("Get recruiter activity")
-async def naukri_get_recruiter_activity(
+async def _get_recruiter_activity(
     page: int = 1,
     size: int = 20,
     filter_by: Optional[str] = None,
 ) -> dict:
-    """Get detailed recruiter activity on your profile — who viewed, downloaded,
-    contacted you, or added you to their folder. Supports pagination and filtering.
-
-    The API returns a paginated list of recruiter actions (last 90 days).
-    Each page defaults to 20 items. Use filter_by to see only specific action types.
-
-    Args:
-        page: Page number (1-based). Default 1.
-        size: Items per page (default 20, max ~50).
-        filter_by: Filter by activity type. One of:
-                   "VIEWED" — recruiters who viewed your Naukri profile
-                   "MOBILE_VIEWED" — recruiters who viewed via mobile
-                   "DOWNLOADED" — recruiters who downloaded your resume
-                   "CONTACTED" — recruiters who sent you NVites/messages
-                   "ADD_TO_FOLDER" — recruiters who bookmarked your profile
-                   None — all actions (default)
-
-    Returns:
-        - {status: "success", page, size, filter_by, total_actions, percentage_change,
-           buckets: {VIEWED: {count, change}, ...}, activities: [{recruiter_name, company, action, date, designation, location, recruiter_id, previous_actions_count}],
-           has_more: bool}
-        - {status: "error", message}
-    """
+    """Fetch recruiter activity from the API and return structured result."""
     # Validate filter_by
     if filter_by is not None:
         filter_by = filter_by.upper()
@@ -133,18 +105,8 @@ async def naukri_get_recruiter_activity(
     }
 
 
-@mcp.tool()
-@api_tool("Get activity level")
-async def naukri_get_activity_level() -> dict:
-    """Check your profile's current activity level (HIGH, MEDIUM, or LOW).
-
-    A HIGH activity level means your profile is actively visible to recruiters.
-    Regular logins and profile updates keep it high.
-
-    Returns:
-        - {status: "success", level, logged_in, resume_updated, profile_updated}
-        - {status: "error", message}
-    """
+async def _get_activity_level() -> dict:
+    """Fetch profile activity level from the API and return structured result."""
     data = await api_get(ACTIVITY_LEVEL_API)
     return {
         "status": "success",
@@ -153,3 +115,74 @@ async def naukri_get_activity_level() -> dict:
         "resume_updated": data.get("rmjStatus", False),
         "profile_updated": data.get("updatedStatus", False),
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_performance(
+    metric: str,
+    days: int = 7,
+    page: int = 1,
+    size: int = 20,
+    filter_by: Optional[str] = None,
+) -> dict:
+    """Unified performance dashboard — impressions, recruiter activity, and activity level.
+
+    Metrics:
+      - "impressions": Search appearance stats — how many times recruiters found you,
+        which keywords they searched, and day-by-day timeline. Uses days param.
+      - "recruiter_activity": Who viewed, downloaded, contacted you, or added you to
+        their folder. Supports pagination (page/size) and filtering (filter_by).
+      - "activity_level": Current profile activity level (HIGH/MEDIUM/LOW).
+        No extra params needed.
+
+    Args:
+        metric: "impressions" | "recruiter_activity" | "activity_level"
+        days: Time period — must be 7, 30, or 90 (default 7). Used by impressions.
+        page: Page number for recruiter_activity (default 1).
+        size: Items per page for recruiter_activity (default 20).
+        filter_by: Filter recruiter_activity by type. One of:
+                   "VIEWED" | "MOBILE_VIEWED" | "DOWNLOADED" | "CONTACTED" | "ADD_TO_FOLDER"
+                   None = all actions (default).
+
+    Returns:
+        - impressions: {status, days, total_appearances, recruiter_actions, daily_average, percentage_change, timeline, top_keywords}
+        - recruiter_activity: {status, page, size, filter_by, total_actions, percentage_change, buckets, activities, has_more}
+        - activity_level: {status, level, logged_in, resume_updated, profile_updated}
+        - {status: "error", message} on failure
+    """
+    # ── impressions ───────────────────────────────────────────────────
+    if metric == "impressions":
+        if days not in VALID_DAYS:
+            return {"status": "error", "message": f"Invalid days={days}. Must be one of: {', '.join(str(d) for d in sorted(VALID_DAYS))}"}
+        try:
+            return await _get_search_impressions(days=days)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get search impressions failed: {type(e).__name__}: {e}"}
+
+    # ── recruiter_activity ────────────────────────────────────────────
+    elif metric == "recruiter_activity":
+        try:
+            return await _get_recruiter_activity(page=page, size=size, filter_by=filter_by)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get recruiter activity failed: {type(e).__name__}: {e}"}
+
+    # ── activity_level ────────────────────────────────────────────────
+    elif metric == "activity_level":
+        try:
+            return await _get_activity_level()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get activity level failed: {type(e).__name__}: {e}"}
+
+    # ── unknown metric ────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level"}
