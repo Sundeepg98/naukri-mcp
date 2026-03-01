@@ -93,8 +93,19 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
     external = bool(job.get("applyRedirectUrl"))
 
     match_score = None
+    match_details = {}
     if score_data:
         match_score = score_data.get("Keyskills")
+        skill_mismatch_str = score_data.get("skillMismatch") or ""
+        match_details = {
+            "skill_mismatch": [s.strip() for s in skill_mismatch_str.split(",") if s.strip()],
+            "early_applicant": score_data.get("earlyApplicant", False),
+            "dimensions": {
+                dim: (score_data.get(dim, {}).get("userMatching", False)
+                      if isinstance(score_data.get(dim), dict) else False)
+                for dim in ("education", "Experience", "Location", "Industry", "functionalArea")
+            },
+        }
 
     result = {
         "status": "success",
@@ -117,6 +128,7 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "description": job.get("description", ""),
         "skills": _extract_skills(job.get("keySkills", [])),
         "match_score": match_score,
+        "match_details": match_details if match_details else None,
         "is_applied": is_applied,
         "external_apply": external,
         "can_apply": not is_applied and not external,
@@ -138,8 +150,34 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         ),
         "role_category": job.get("roleCategory"),
         "education": _format_education(job.get("education")) or job.get("qualification"),
+        "job_role": job.get("jobRole"),
+        "employment_type": job.get("employmentType"),
+        "hybrid_detail": job.get("hybridWfhDetail"),
+        "saved": bool(job.get("savedJobFlag")),
+        "valid_through": job.get("validThrough") or job.get("expiryDate"),
+        "department": job.get("department") or job.get("functionalArea"),
         "url": page_url,
     }
+    # AmbitionBox enrichment from top-level v4 response
+    ab = details_data.get("ambitionBoxDetails", {})
+    if ab:
+        salaries = ab.get("salaries", {})
+        if salaries:
+            result["salary_benchmarks"] = {
+                "average": salaries.get("averageSalary"),
+                "min": salaries.get("minSalary"),
+                "max": salaries.get("maxSalary"),
+            }
+        benefits_data = ab.get("benefits", {})
+        if isinstance(benefits_data, dict) and benefits_data.get("benefitsList"):
+            result["benefits_list"] = benefits_data["benefitsList"]
+        reviews_list = ab.get("reviews", [])
+        if reviews_list:
+            result["top_reviews"] = [
+                {"rating": r.get("rating"), "role": r.get("role"), "title": r.get("title")}
+                for r in reviews_list[:3] if isinstance(r, dict)
+            ]
+
     warnings = validate_job_detail(result)
     if warnings:
         result["warnings"] = warnings

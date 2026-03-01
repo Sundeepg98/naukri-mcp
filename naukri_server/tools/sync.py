@@ -345,9 +345,20 @@ def _parse_applied_jobs(data) -> list:
 
         # Extract status — history API uses statusMsg or nested status list
         raw_status = item.get("statusMsg") or item.get("status") or item.get("applicationStatus")
-        if isinstance(raw_status, list) and raw_status:
+        status_list = []
+        if isinstance(raw_status, list):
+            status_list = raw_status
             # History API: status is a list of {statusMsg, statusDate, ...}
-            raw_status = raw_status[0].get("statusMsg") if isinstance(raw_status[0], dict) else raw_status
+            raw_status = raw_status[0].get("statusMsg") if raw_status and isinstance(raw_status[0], dict) else raw_status
+
+        # Extract view count from status array (statusId=4 = "Viewed")
+        view_count = None
+        last_viewed = None
+        for s in status_list:
+            if isinstance(s, dict) and s.get("statusId") == 4:
+                view_count = s.get("count", 0)
+                last_viewed = s.get("modifiedDate")
+                break
 
         jobs.append({
             "job_id": job_id,
@@ -362,6 +373,16 @@ def _parse_applied_jobs(data) -> list:
             "url": item.get("jdUrl") or item.get("url"),
             "apply_type": item.get("applyType"),
             "recruiter_active": item.get("isRecruiterActive"),
+            "ars_score": item.get("arsScore"),
+            "star_rating": item.get("starRating"),
+            "is_open": item.get("isOpen") == "true" if item.get("isOpen") is not None else None,
+            "job_activity": item.get("jobActivity"),
+            "job_activity_date": item.get("jobActivityDate"),
+            "apply_flow_type": item.get("applyFlowType"),
+            "is_crawled": item.get("isCrawled", False),
+            "company_rating": item.get("companyRating"),
+            "view_count": view_count,
+            "last_viewed": last_viewed,
         })
     return jobs
 

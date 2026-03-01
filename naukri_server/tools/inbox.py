@@ -119,6 +119,14 @@ async def naukri_get_inbox(
             "applied_date": msg.get("appliedDate", ""),
             "job_details": job_details,
             "company_details": company_details,
+            "job_description": (msg.get("miscJobDetails") or {}).get("jobDesc"),
+            "conversation_id": msg.get("conversationId"),
+            "mail_id": msg.get("mailId"),
+            "has_screening_questions": msg.get("questionairreAttached", False),
+            "recruiter_name": (msg.get("vCardInfo") or {}).get("name"),
+            "recruiter_designation": (msg.get("vCardInfo") or {}).get("designation"),
+            "is_interested": msg.get("interested"),
+            "salary": msg.get("salary"),
         })
 
         if len(messages) >= limit:

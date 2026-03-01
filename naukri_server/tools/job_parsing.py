@@ -36,7 +36,10 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "is_applied": job.get("isApplied", False),
             "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
             "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
-            "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
+            "url": (
+                f"https://www.naukri.com{job['jdURL']}" if job.get("jdURL")
+                else f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}"
+            ),
             "vacancies": job.get("vacancy") or job.get("vacany"),
             "apply_count": job.get("applyCount"),          # populated in detail only
             "function_area": job.get("functionArea"),       # populated in detail only
@@ -47,5 +50,15 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),
             "candidates_count": job.get("candidatesCount"), # populated in detail only
             "type_of_business": job.get("typeOfBusiness"),  # populated in detail only
+            "description_snippet": job.get("jobDescription"),
+            "jd_url": job.get("jdURL"),
+            "is_consultant": job.get("consultant", False),
+            "client_company": job.get("clientTitleString"),
+            "client_group_id": job.get("clientGroupId"),
+            "diversity_tags": job.get("diversityTagText"),
+            "logo_url": job.get("logoPathV3") or job.get("logoPath"),
+            "company_id": job.get("companyId"),
+            "is_exclusive": job.get("exclusive", False),
+            "freshness_color": job.get("footerPlaceholderColor"),
         })
     return jobs
