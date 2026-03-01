@@ -1,6 +1,7 @@
-"""Job alert tools — list, create, delete, and manage saved search alerts on Naukri."""
+"""Job alert tools — list, create, edit, delete, and manage saved search alerts on Naukri."""
 
 import asyncio
+import json
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -326,4 +327,197 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
             return {
                 "status": "error",
                 "message": f"Failed to delete job alert: {type(e).__name__}: {e}",
+            }
+
+
+@mcp.tool()
+async def naukri_update_job_alert(
+    alert_name: str,
+    keywords: Optional[str] = None,
+    location: Optional[str] = None,
+    experience: Optional[int] = None,
+    min_salary: Optional[int] = None,
+    new_name: Optional[str] = None,
+) -> dict:
+    """Edit an existing job alert via browser automation.
+
+    Naukri has no REST PUT endpoint for alerts (Akamai CDN returns 501).
+    This tool navigates to the legacy alert management page, finds the alert
+    by name, opens the modify form, updates fields, and submits.
+
+    Pass only the fields you want to change. Unchanged fields keep their values.
+
+    Args:
+        alert_name: Name of the alert to edit (case-insensitive partial match)
+        keywords: New search keywords (e.g., "python backend developer")
+        location: New location filter (e.g., "Bangalore, Hyderabad")
+        experience: New experience filter in years (0-30)
+        min_salary: New minimum salary in lakhs (e.g., 15 for 15 LPA)
+        new_name: Rename the alert
+
+    Returns:
+        - {status: "success", alert_name, updated_fields, message}
+        - {status: "error", message}
+    """
+    if all(v is None for v in (keywords, location, experience, min_salary, new_name)):
+        return {"status": "error", "message": "No fields to update. Pass at least one parameter."}
+
+    async with browser.page_pool.acquire() as page:
+        try:
+            # Step 1: Navigate to legacy alert management page
+            await page_goto(page, f"{NAUKRI_BASE}/alert/manage")
+            await asyncio.sleep(3)
+
+            if "/nlogin" in page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+
+            # Step 2: Scrape alert rows — extract names and modify link hrefs
+            alerts_data = await page.evaluate("""() => {
+                const results = [];
+                const modifyLinks = document.querySelectorAll('a[href*="/alert/modify"]');
+                for (const link of modifyLinks) {
+                    const row = link.closest('tr') || link.closest('div') || link.parentElement;
+                    if (!row) continue;
+                    results.push({
+                        name: row.textContent.trim(),
+                        href: link.getAttribute('href') || ''
+                    });
+                }
+                return results;
+            }""")
+
+            if not alerts_data:
+                return {
+                    "status": "error",
+                    "message": "No alerts found on the manage page.",
+                }
+
+            # Step 3: Match alert by name
+            alert_name_lower = alert_name.lower()
+            matched = None
+            for alert in alerts_data:
+                if alert_name_lower in alert.get("name", "").lower():
+                    matched = alert
+                    break
+
+            if not matched:
+                available = [a.get("name", "")[:80] for a in alerts_data]
+                return {
+                    "status": "error",
+                    "message": f"No alert matching '{alert_name}' found. "
+                               f"Available alerts: {available}",
+                }
+
+            # Step 4: Extract aId from modify link
+            modify_href = matched["href"]
+            parsed = urlparse(modify_href)
+            query_params = parse_qs(parsed.query)
+            aid_values = query_params.get("aId", [])
+            if not aid_values:
+                return {"status": "error", "message": f"Could not extract aId from modify link: {modify_href}"}
+            a_id = aid_values[0]
+
+            logger.info("Editing alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
+
+            # Step 5: Navigate to modify page — form loads via /intercept/alert POST
+            modify_url = f"{NAUKRI_BASE}/alert/modify?aId={a_id}"
+            await page_goto(page, modify_url)
+            await asyncio.sleep(4)
+
+            # Step 6: Wait for the form to appear
+            form_found = await page.evaluate("""() => {
+                // The form may take a moment to render via the intercept call
+                const form = document.getElementById('cjaFrm') || document.querySelector('form');
+                return !!form;
+            }""")
+
+            if not form_found:
+                # Wait a bit more for the intercept/alert POST to complete
+                await asyncio.sleep(3)
+                form_found = await page.evaluate("""() => {
+                    return !!(document.getElementById('cjaFrm') || document.querySelector('form'));
+                }""")
+
+            if not form_found:
+                return {"status": "error", "message": "Modify form did not load on the alert edit page."}
+
+            # Step 7: Fill in the fields that need updating
+            updates = {}
+            fill_script = ""
+
+            if keywords is not None:
+                updates["keywords"] = keywords
+                fill_script += f"""
+                    var kwdInput = document.getElementById('Sug_kwdsugg') || document.querySelector('input[name="keyskills"]');
+                    if (kwdInput) {{ kwdInput.value = {json.dumps(keywords)}; }}
+                """
+
+            if location is not None:
+                updates["location"] = location
+                fill_script += f"""
+                    var locInput = document.getElementById('Sug_locsugg') || document.querySelector('input[name="location"]');
+                    if (locInput) {{ locInput.value = {json.dumps(location)}; }}
+                """
+
+            if experience is not None:
+                updates["experience"] = experience
+                fill_script += f"""
+                    var expInput = document.getElementById('exp_dd_cjaHid') || document.querySelector('input[name="exp"]');
+                    if (expInput) {{ expInput.value = {json.dumps(str(experience))}; }}
+                """
+
+            if min_salary is not None:
+                updates["min_salary"] = min_salary
+                fill_script += f"""
+                    var salInput = document.getElementById('minsal_dd_cjaHid') || document.querySelector('input[name="minsal"]');
+                    if (salInput) {{ salInput.value = {json.dumps(str(min_salary))}; }}
+                """
+
+            if new_name is not None:
+                updates["name"] = new_name
+                fill_script += f"""
+                    var nameInput = document.querySelector('input[name="janame"]');
+                    if (nameInput) {{ nameInput.value = {json.dumps(new_name)}; }}
+                """
+
+            await page.evaluate(f"() => {{ {fill_script} }}")
+
+            # Step 8: Submit the form
+            submit_result = await page.evaluate("""() => {
+                // Try clicking the Update button first
+                const submitBtn = document.getElementById('cjaSubmit')
+                    || document.querySelector('button[type="submit"]')
+                    || document.querySelector('input[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.click();
+                    return 'button_clicked';
+                }
+                // Fallback: submit the form directly
+                const form = document.getElementById('cjaFrm') || document.querySelector('form');
+                if (form) {
+                    form.submit();
+                    return 'form_submitted';
+                }
+                return null;
+            }""")
+
+            if not submit_result:
+                return {"status": "error", "message": "Could not find submit button or form on the modify page."}
+
+            await asyncio.sleep(3)
+
+            display_name = new_name or alert_name
+            logger.info("Alert '%s' updated: %s", display_name, updates)
+            return {
+                "status": "success",
+                "alert_name": display_name,
+                "updated_fields": list(updates.keys()),
+                "message": f"Job alert '{display_name}' updated: {', '.join(updates.keys())}.",
+            }
+
+        except Exception as e:
+            logger.error("Failed to update job alert: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to update job alert: {type(e).__name__}: {e}",
             }
