@@ -6,6 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.scoring import parse_skills, normalize_skill
 
 # Common English stopwords to filter from keyword extraction
 _STOPWORDS = frozenset({
@@ -100,39 +101,40 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     job_title = job_result.get("title", "")
     job_company = job_result.get("company", "")
     job_desc = job_result.get("description", "")
-    job_skills = [s for s in job_result.get("skills", []) if isinstance(s, str)]
-    job_skills_lower = set(s.lower() for s in job_skills)
+    job_skills_raw = [s for s in job_result.get("skills", []) if isinstance(s, str)]
+    job_skills_lower = parse_skills(job_skills_raw)
 
-    # Extract profile data — key_skills may be comma-separated string or list
+    # Keep ordered list for reorder suggestions (preserve original casing)
     raw_profile_skills = profile_result.get("key_skills", [])
     if isinstance(raw_profile_skills, str):
         profile_skills = [s.strip() for s in raw_profile_skills.split(",") if s.strip()]
     else:
         profile_skills = [s for s in raw_profile_skills if isinstance(s, str)]
-    profile_skills_lower = set(s.lower() for s in profile_skills)
+    profile_skills_lower = parse_skills(profile_skills)
     headline = profile_result.get("resume_headline", "")
     employment = profile_result.get("employment", [])
 
     # --- Analysis ---
 
     # 1. Skills to add (in job but not in profile)
-    skills_to_add = [s for s in job_skills if s.lower() not in profile_skills_lower]
+    skills_to_add = [s for s in job_skills_raw if normalize_skill(s) not in profile_skills_lower]
 
     # 2. Skills to reorder (in profile but not near top, and required by job)
     skills_to_reorder = []
     if profile_skills:
-        top_5 = set(s.lower() for s in profile_skills[:5])
-        for s in job_skills:
-            if s.lower() in profile_skills_lower and s.lower() not in top_5:
+        top_5 = {normalize_skill(s) for s in profile_skills[:5]}
+        for s in job_skills_raw:
+            ns = normalize_skill(s)
+            if ns in profile_skills_lower and ns not in top_5:
                 # Find current position
                 for i, ps in enumerate(profile_skills):
-                    if ps.lower() == s.lower():
+                    if normalize_skill(ps) == ns:
                         skills_to_reorder.append(f"Move '{ps}' higher (currently #{i+1})")
                         break
 
     # 3. Headline suggestion
     headline_lower = headline.lower() if headline else ""
-    headline_missing = [s for s in job_skills[:5] if s.lower() not in headline_lower]
+    headline_missing = [s for s in job_skills_raw[:5] if normalize_skill(s) not in headline_lower and s.lower() not in headline_lower]
     headline_suggestion = None
     if headline_missing:
         # Suggest incorporating top missing skills
@@ -163,7 +165,10 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     ]).lower()
     profile_keywords = _extract_keywords(profile_text)
     jd_phrases = _extract_phrases(job_desc)
-    keyword_gaps = sorted(list((job_keywords - profile_keywords - _STOPWORDS) - job_skills_lower))
+    # Normalize keyword gaps through alias map to avoid "js" gap when profile has "javascript"
+    raw_gaps = (job_keywords - profile_keywords - _STOPWORDS) - job_skills_lower
+    normalized_profile = {normalize_skill(k) for k in profile_keywords}
+    keyword_gaps = sorted([k for k in raw_gaps if normalize_skill(k) not in normalized_profile])
     # Filter to only meaningful gaps (3+ chars, appear significant)
     keyword_gaps = [k for k in keyword_gaps if len(k) >= 3][:20]
 

@@ -20,8 +20,9 @@ async def naukri_auto_hunt(
     """Automated job hunting — search, score against your profile, return ranked matches.
 
     Searches for jobs matching your criteria, then scores each against your profile
-    for skill overlap and experience match. Returns only jobs above the minimum
-    fit score, ranked from best to worst match.
+    for skill overlap, experience match, and location/salary/work-mode bonuses.
+    Skills are alias-normalized (JS = JavaScript, k8s = Kubernetes).
+    Returns only jobs above the minimum fit score, ranked from best to worst match.
 
     Does NOT auto-apply — use naukri_smart_apply or naukri_apply for that.
 
@@ -66,6 +67,8 @@ async def naukri_auto_hunt(
 
     profile_skills = parse_skills(profile_result.get("key_skills", []))
     profile_exp = profile_result.get("total_experience")
+    profile_location = profile_result.get("current_location")
+    profile_expected_ctc = profile_result.get("expected_ctc")
 
     # Score each job
     ranked = []
@@ -75,6 +78,11 @@ async def naukri_auto_hunt(
             job_skills, profile_skills,
             job.get("experience", ""),
             profile_exp,
+            job_location=job.get("location"),
+            profile_location=profile_location,
+            job_work_mode=job.get("work_mode"),
+            job_salary=job.get("salary"),
+            profile_expected_ctc=profile_expected_ctc,
         )
 
         if fit["overall_score"] >= min_fit_score:
@@ -91,6 +99,7 @@ async def naukri_auto_hunt(
                 "matched_skills": fit["skill_match"]["matched"],
                 "missing_skills": fit["skill_match"]["missing"],
                 "recommendation": fit["recommendation"],
+                "bonuses": fit.get("bonuses"),
             })
 
     # Sort by fit score descending

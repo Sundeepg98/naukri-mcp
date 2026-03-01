@@ -17,8 +17,9 @@ async def naukri_smart_apply(
     """Assess job fit before applying — compares your profile against the job.
 
     Fetches job details and your profile in parallel, then computes:
-    - Skill overlap (matched vs missing)
+    - Skill overlap with alias normalization (JS = JavaScript, k8s = Kubernetes)
     - Experience match
+    - Location, work mode, and salary bonuses
     - Overall recommendation
 
     Args:
@@ -27,8 +28,8 @@ async def naukri_smart_apply(
         answers: Optional screening question answers (for auto-apply)
 
     Returns:
-        - {status: "success", fit_assessment: {score, skill_match, experience_match,
-           recommendation}, job_summary, applied}
+        - {status: "success", fit_assessment: {overall_score, skill_match,
+           experience_match, bonuses, recommendation}, job_summary, applied}
         - {status: "error", message}
     """
     from naukri_server.tools.jobs import naukri_get_job
@@ -50,13 +51,18 @@ async def naukri_smart_apply(
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
         return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
 
-    # Compute fit
-    job_skills = parse_skills(job_result.get("skills", []))
+    # Compute fit — use tags-or-skills fallback, pass enrichment data
+    job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
     profile_skills = parse_skills(profile_result.get("key_skills", []))
     fit = compute_fit_score(
         job_skills, profile_skills,
         job_result.get("experience", ""),
         profile_result.get("total_experience"),
+        job_location=job_result.get("location"),
+        profile_location=profile_result.get("current_location"),
+        job_work_mode=job_result.get("work_mode"),
+        job_salary=job_result.get("salary"),
+        profile_expected_ctc=profile_result.get("expected_ctc"),
     )
 
     result = {
@@ -82,5 +88,9 @@ async def naukri_smart_apply(
         )
         result["applied"] = apply_result.get("status") == "applied"
         result["apply_result"] = apply_result
+        # Quota warning
+        daily = apply_result.get("daily_applied")
+        if daily is not None and daily >= 45:
+            result["quota_warning"] = f"Daily quota: {daily}/50 used. {50 - daily} remaining."
 
     return result
