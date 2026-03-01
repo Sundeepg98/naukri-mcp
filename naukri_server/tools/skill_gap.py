@@ -36,7 +36,7 @@ async def naukri_skill_gap_analysis(
     sample_size = min(sample_size, 50)
 
     from naukri_server.tools.search import naukri_search_jobs, naukri_get_recommendations
-    from naukri_server.tools.profile import naukri_get_profile
+    from naukri_server.tools.profile import get_cached_profile
 
     # Parallel: fetch jobs + profile
     if use_recommendations:
@@ -46,7 +46,7 @@ async def naukri_skill_gap_analysis(
 
     jobs_result, profile_result = await asyncio.gather(
         jobs_coro,
-        naukri_get_profile(),
+        get_cached_profile(),
         return_exceptions=True,
     )
 

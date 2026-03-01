@@ -31,12 +31,12 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
         return {"status": "error", "message": "Maximum 5 jobs for comparison."}
 
     from naukri_server.tools.jobs import naukri_get_job
-    from naukri_server.tools.profile import naukri_get_profile
+    from naukri_server.tools.profile import get_cached_profile
 
     # Parallel fetch all jobs + profile
     all_results = await asyncio.gather(
         *[naukri_get_job(job_id_or_url=jid) for jid in job_ids],
-        naukri_get_profile(),
+        get_cached_profile(),
         return_exceptions=True,
     )
 
@@ -101,6 +101,8 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
             "group_id": r.get("group_id"),
             "vacancies": r.get("vacancies"),
             "is_applied": r.get("is_applied") or jid in local_applied_ids,
+            "external_apply": r.get("external_apply"),
+            "external_apply_url": r.get("external_apply_url"),
         }
 
         if profile_ok:

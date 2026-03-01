@@ -35,13 +35,13 @@ async def naukri_smart_apply(
         - {status: "error", message}
     """
     from naukri_server.tools.jobs import naukri_get_job
-    from naukri_server.tools.profile import naukri_get_profile
+    from naukri_server.tools.profile import get_cached_profile
     from naukri_server.tools.apply import _apply_single
 
     # Parallel fetch job + profile
     job_result, profile_result = await asyncio.gather(
         naukri_get_job(job_id_or_url=job_id),
-        naukri_get_profile(),
+        get_cached_profile(),
         return_exceptions=True,
     )
 

@@ -105,6 +105,9 @@ async def naukri_mark_all_notifications_read() -> dict:
         unread = [n for n in notifications if not n.get("is_read")]
         total_read += len(notifications) - len(unread)
 
+        if not unread:
+            break
+
         if unread:
             # Parallel mark-read
             mark_tasks = [

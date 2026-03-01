@@ -16,6 +16,9 @@ async def naukri_auto_hunt(
     limit: int = 20,
     freshness: Optional[int] = 7,
     work_mode: Optional[str] = None,
+    experience: Optional[int] = None,
+    salary_min: Optional[int] = None,
+    salary_max: Optional[int] = None,
 ) -> dict:
     """Automated job hunting — search, score against your profile, return ranked matches.
 
@@ -33,6 +36,9 @@ async def naukri_auto_hunt(
         limit: Max jobs to search and score (default 20)
         freshness: Only jobs posted in last N days (default 7)
         work_mode: "wfh" (remote), "hybrid", "wfo" (office) — optional
+        experience: Filter by years of experience (optional)
+        salary_min: Minimum salary in lakhs (optional)
+        salary_max: Maximum salary in lakhs (optional)
 
     Returns:
         - {status: "success", jobs_found, jobs_matched, ranked_jobs: [{job_id, title,
@@ -41,15 +47,16 @@ async def naukri_auto_hunt(
         - {status: "error", message}
     """
     from naukri_server.tools.search import naukri_search_jobs
-    from naukri_server.tools.profile import naukri_get_profile
+    from naukri_server.tools.profile import get_cached_profile
 
     # Parallel: search jobs + fetch profile
     search_result, profile_result = await asyncio.gather(
         naukri_search_jobs(
             keywords=keywords, location=location, limit=limit,
             freshness=freshness, work_mode=work_mode,
+            experience=experience, salary_min=salary_min, salary_max=salary_max,
         ),
-        naukri_get_profile(),
+        get_cached_profile(),
         return_exceptions=True,
     )
 

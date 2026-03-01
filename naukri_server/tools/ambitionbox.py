@@ -17,16 +17,7 @@ def _ensure_slug(value: str) -> str:
     """Accept either a slug (lowercase-dashed) or a company name; return a slug."""
     if re.match(r'^[a-z0-9][a-z0-9-]*$', value):
         return value  # Already a slug
-    # Derive from company name
-    name = value.strip()
-    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd",
-                   "Limited", "Inc.", "Inc", "Corp.", "Corp", "Corporation",
-                   "LLP", "LLC", "Technologies", "Technology", "Solutions",
-                   "Services", "India"):
-        if name.lower().endswith(suffix.lower()):
-            name = name[:len(name) - len(suffix)].strip()
-    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
-    return re.sub(r'-+', '-', slug)
+    return derive_slug(value)
 
 
 async def _extract_next_data(page) -> dict | None:

@@ -7,6 +7,28 @@ from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, logger
 from naukri_server.validation import validate_profile
 
+import time as _time
+
+# --- Profile TTL cache (30s) for composite tools ---
+_profile_cache: dict = {}
+_PROFILE_TTL = 30  # seconds
+
+
+async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
+    """Return cached profile if fresh, otherwise fetch and cache.
+
+    Used by composite tools (smart_apply, auto_hunt, compare, skill_gap,
+    resume_tailor, daily_brief) to avoid redundant profile API calls.
+    """
+    now = _time.monotonic()
+    if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
+        return _profile_cache["data"]
+    result = await naukri_get_profile()
+    if isinstance(result, dict) and result.get("status") != "error":
+        _profile_cache["data"] = result
+        _profile_cache["ts"] = now
+    return result
+
 
 # ============================================================================
 # Tool 6: Refresh Profile (Playwright — needs browser interaction)
@@ -201,7 +223,7 @@ async def naukri_get_profile() -> dict:
             "notice_period": profile.get("noticePeriod", {}).get("value"),
             "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
             "current_location": profile.get("city", {}).get("value"),
-            "gender": "Male" if profile.get("gender") == "M" else "Female",
+            "gender": {"M": "Male", "F": "Female"}.get(profile.get("gender"), profile.get("gender")),
             "key_skills": profile.get("keySkills"),
             "summary": profile.get("summary"),
             "certifications": data.get("certifications", []),

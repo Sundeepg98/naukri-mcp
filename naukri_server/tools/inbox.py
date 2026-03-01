@@ -46,7 +46,7 @@ async def naukri_get_inbox(
         "pageSize": limit,
         "pageNo": page,
         "mailType": mail_type,
-        "isUnRead": False,
+        "isUnRead": unread_only,
     }
     data = await api_post(INBOX_API, body=body)
 
@@ -175,6 +175,8 @@ async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) ->
 async def naukri_accept_nvite(
     nvite_job_id: str,
     answers: Optional[dict] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
 ) -> dict:
     """Accept a recruiter NVite by applying to the associated job.
 
@@ -184,6 +186,8 @@ async def naukri_accept_nvite(
     Args:
         nvite_job_id: Job ID from the NVite message (job_details.nvite_job_id)
         answers: Optional screening question answers {question_id: answer}
+        title: Job title from NVite job_details (optional, for tracking)
+        company: Company name from NVite company_details (optional, for tracking)
 
     Returns:
         - {status: "applied", job_id, message} — successfully accepted
@@ -196,6 +200,8 @@ async def naukri_accept_nvite(
     result = await _apply_single(
         job_id=nvite_job_id,
         answers=answers,
+        title=title,
+        company=company,
         tracking_extra={"source": "nvite"},
     )
     return result

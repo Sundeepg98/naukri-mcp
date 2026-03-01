@@ -11,8 +11,9 @@ from naukri_server.config import logger
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 7 checks in parallel: unread messages, notifications, new recommendations,
-    recruiter activity, profile activity level, today's applications, and dashboard stats.
+    Runs 8 checks in parallel: unread messages, notifications, new recommendations,
+    recruiter activity, profile activity level, today's applications, dashboard stats,
+    and early access roles.
 
     Returns:
         - {status: "success", unread_messages, notifications, recommendations,
@@ -24,6 +25,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.performance import naukri_get_recruiter_activity, naukri_get_activity_level
     from naukri_server.tools.tracking import naukri_get_applications
     from naukri_server.tools.profile import naukri_get_dashboard
+    from naukri_server.tools.early_access import naukri_get_early_access_roles
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors = []
@@ -36,6 +38,7 @@ async def naukri_daily_brief() -> dict:
         naukri_get_activity_level(),
         naukri_get_applications(date_from=today),
         naukri_get_dashboard(),
+        naukri_get_early_access_roles(limit=3),
         return_exceptions=True,
     )
 
@@ -56,6 +59,7 @@ async def naukri_daily_brief() -> dict:
     activity = _extract(4, "Activity level")
     apps = _extract(5, "Applications")
     dashboard = _extract(6, "Dashboard")
+    early_access = _extract(7, "Early access")
 
     brief = {
         "status": "success",
@@ -86,6 +90,10 @@ async def naukri_daily_brief() -> dict:
             "profile_views": dashboard.get("profile_views", 0) if dashboard else 0,
             "total_matches": dashboard.get("total_matches", 0) if dashboard else 0,
             "unread_invites": dashboard.get("unread_invites", 0) if dashboard else 0,
+        },
+        "early_access_roles": {
+            "count": early_access.get("count", 0) if early_access else 0,
+            "roles": early_access.get("roles", []) if early_access else [],
         },
     }
 

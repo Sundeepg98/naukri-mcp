@@ -44,6 +44,57 @@ async def naukri_get_resume_info() -> dict:
 
 
 @mcp.tool()
+async def naukri_download_resume(save_path: str) -> dict:
+    """Download your uploaded resume to a local file.
+
+    Fetches the resume binary from Naukri's API using your auth credentials
+    and saves it to the specified path.
+
+    Args:
+        save_path: Absolute file path to save the resume (e.g., "C:/Users/me/resume.pdf")
+
+    Returns:
+        - {status: "success", file_path, file_size_bytes, message}
+        - {status: "error", message}
+    """
+    from naukri_server.api import get_session
+    from naukri_server.config import API_HEADERS
+
+    try:
+        token = await browser.token_manager.ensure_token()
+        cookie_str = browser.token_manager.get_cookies()
+
+        session = await get_session()
+        headers = {
+            **API_HEADERS,
+            "Authorization": f"Bearer {token}",
+            "cookie": cookie_str,
+        }
+
+        url = f"{NAUKRI_BASE}{RESUME_DOWNLOAD_API}"
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                return {"status": "error", "message": f"Download failed with HTTP {resp.status}"}
+
+            data = await resp.read()
+            if not data:
+                return {"status": "error", "message": "Empty response — no resume data received."}
+
+            save = Path(save_path)
+            save.parent.mkdir(parents=True, exist_ok=True)
+            save.write_bytes(data)
+
+            return {
+                "status": "success",
+                "file_path": str(save.resolve()),
+                "file_size_bytes": len(data),
+                "message": f"Resume saved to {save.resolve()} ({len(data)} bytes).",
+            }
+    except Exception as e:
+        return {"status": "error", "message": f"Resume download failed: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
 @api_tool("Get photo info")
 async def naukri_get_photo_info() -> dict:
     """Get your profile photo details — URL, dimensions, and upload status.

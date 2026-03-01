@@ -34,9 +34,15 @@ class NaukriAPIError(Exception):
 def api_tool(context: str = None):
     """Decorator: wraps async MCP tool with standardized error handling.
 
-    Catches NaukriAPIError and Exception, returns {status: "error", message}.
+    Catches NaukriAPIError and Exception, returns {status: "error", message, http_status}.
     Use only on tools with a single top-level try/except pattern.
-    Tools with custom error handling (apply, get_job, sync) should NOT use this.
+    Tools with custom error handling should NOT use this:
+    apply, batch_apply, get_job, sync_applications, sync_saved_jobs,
+    boost_visibility, get_profile, update_profile, audit_profile,
+    upload_photo, delete_photo, accept_nvite, update_job_alert,
+    delete_job_alert, get_company_slug, smart_apply, compare_jobs,
+    auto_hunt, skill_gap_analysis, resume_tailor, daily_brief,
+    research_company, export_data.
     """
     def decorator(func):
         @wraps(func)

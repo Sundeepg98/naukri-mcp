@@ -1,4 +1,5 @@
 """Unified company research — combines job search, salary, and reviews in one call."""
+import asyncio
 
 from naukri_server import mcp
 from naukri_server.config import logger
@@ -90,32 +91,33 @@ async def naukri_research_company(
 
     # Step 2: Get AmbitionBox salary + reviews (if requested)
     if include_reviews:
-        # Try the derived slug first; common company names work directly
-        try:
-            salary_result = await naukri_get_company_salary(company_slug=slug)
-            if salary_result.get("status") == "success":
-                result["salary"] = {
-                    k: v for k, v in salary_result.items()
-                    if k not in ("status", "url", "_debug_page_props_keys")
-                }
-            else:
-                errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
-        except Exception as e:
-            errors.append(f"Salary: {type(e).__name__}: {e}")
-            logger.warning("Research company salary failed: %s", e)
+        salary_result, reviews_result = await asyncio.gather(
+            naukri_get_company_salary(company_slug=slug),
+            naukri_get_company_reviews(company_slug=slug),
+            return_exceptions=True,
+        )
 
-        try:
-            reviews_result = await naukri_get_company_reviews(company_slug=slug)
-            if reviews_result.get("status") == "success":
-                result["reviews"] = {
-                    k: v for k, v in reviews_result.items()
-                    if k not in ("status", "url")
-                }
-            else:
-                errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
-        except Exception as e:
-            errors.append(f"Reviews: {type(e).__name__}: {e}")
-            logger.warning("Research company reviews failed: %s", e)
+        if isinstance(salary_result, Exception):
+            errors.append(f"Salary: {type(salary_result).__name__}: {salary_result}")
+            logger.warning("Research company salary failed: %s", salary_result)
+        elif salary_result.get("status") == "success":
+            result["salary"] = {
+                k: v for k, v in salary_result.items()
+                if k not in ("status", "url", "_debug_page_props_keys")
+            }
+        else:
+            errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
+
+        if isinstance(reviews_result, Exception):
+            errors.append(f"Reviews: {type(reviews_result).__name__}: {reviews_result}")
+            logger.warning("Research company reviews failed: %s", reviews_result)
+        elif reviews_result.get("status") == "success":
+            result["reviews"] = {
+                k: v for k, v in reviews_result.items()
+                if k not in ("status", "url")
+            }
+        else:
+            errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
 
     if errors:
         result["errors"] = errors

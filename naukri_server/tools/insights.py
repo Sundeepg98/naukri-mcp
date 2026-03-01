@@ -59,7 +59,7 @@ async def naukri_get_application_insights(days: int = 30) -> dict:
         # Location distribution
         location_counts = Counter()
         for a in recent:
-            loc = a.get("location") or a.get("extra", {}).get("location") if isinstance(a.get("extra"), dict) else None
+            loc = a.get("location") or (a.get("extra", {}).get("location") if isinstance(a.get("extra"), dict) else None)
             if loc:
                 location_counts[loc] += 1
         top_locations = [{"location": l, "count": n} for l, n in location_counts.most_common(10)]
@@ -132,7 +132,7 @@ async def naukri_review_cached_answers() -> dict:
                     "key": key,
                     "question": question_name,
                     "answer": entry.get("answer"),
-                    "type": entry.get("type"),
+                    "type": entry.get("questionType"),
                     "cached_at": entry.get("cached_at"),
                 })
             else:

@@ -3,7 +3,6 @@
 import asyncio
 import json
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
@@ -146,7 +145,6 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
 
 
 @mcp.tool()
-@api_tool("Delete job alert")
 async def naukri_delete_job_alert(alert_id: str) -> dict:
     """Delete a job alert by its ID. Uses browser automation since no REST API exists.
 
@@ -274,7 +272,7 @@ async def naukri_delete_job_alert(alert_id: str) -> dict:
 
 @mcp.tool()
 async def naukri_update_job_alert(
-    alert_name: str,
+    alert_id: str,
     keywords: Optional[str] = None,
     location: Optional[str] = None,
     experience: Optional[int] = None,
@@ -284,13 +282,14 @@ async def naukri_update_job_alert(
     """Edit an existing job alert via browser automation.
 
     Naukri has no REST PUT endpoint for alerts (Akamai CDN returns 501).
-    This tool navigates to the legacy alert management page, finds the alert
-    by name, opens the modify form, updates fields, and submits.
+    This tool looks up the alert by ID, then navigates to the legacy modify
+    form, updates fields, and submits.
 
+    Use naukri_get_job_alerts first to get alert IDs.
     Pass only the fields you want to change. Unchanged fields keep their values.
 
     Args:
-        alert_name: Name of the alert to edit (case-insensitive partial match)
+        alert_id: The alert ID to edit (from naukri_get_job_alerts results)
         keywords: New search keywords (e.g., "python backend developer")
         location: New location filter (e.g., "Bangalore, Hyderabad")
         experience: New experience filter in years (0-30)
@@ -304,61 +303,19 @@ async def naukri_update_job_alert(
     if all(v is None for v in (keywords, location, experience, min_salary, new_name)):
         return {"status": "error", "message": "No fields to update. Pass at least one parameter."}
 
+    # Look up alert name for logging
+    alerts_result = await naukri_get_job_alerts()
+    alert_name = str(alert_id)  # fallback
+    if alerts_result.get("status") == "success":
+        for alert in alerts_result.get("alerts", []):
+            if str(alert.get("alert_id")) == str(alert_id):
+                alert_name = alert.get("name", str(alert_id))
+                break
+
+    a_id = str(alert_id)
+
     async with browser.page_pool.acquire() as page:
         try:
-            # Step 1: Navigate to legacy alert management page
-            await page_goto(page, f"{NAUKRI_BASE}/alert/manage")
-            await asyncio.sleep(3)
-
-            if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
-
-            # Step 2: Scrape alert rows — extract names and modify link hrefs
-            alerts_data = await page.evaluate("""() => {
-                const results = [];
-                const modifyLinks = document.querySelectorAll('a[href*="/alert/modify"]');
-                for (const link of modifyLinks) {
-                    const row = link.closest('tr') || link.closest('div') || link.parentElement;
-                    if (!row) continue;
-                    results.push({
-                        name: row.textContent.trim(),
-                        href: link.getAttribute('href') || ''
-                    });
-                }
-                return results;
-            }""")
-
-            if not alerts_data:
-                return {
-                    "status": "error",
-                    "message": "No alerts found on the manage page.",
-                }
-
-            # Step 3: Match alert by name
-            alert_name_lower = alert_name.lower()
-            matched = None
-            for alert in alerts_data:
-                if alert_name_lower in alert.get("name", "").lower():
-                    matched = alert
-                    break
-
-            if not matched:
-                available = [a.get("name", "")[:80] for a in alerts_data]
-                return {
-                    "status": "error",
-                    "message": f"No alert matching '{alert_name}' found. "
-                               f"Available alerts: {available}",
-                }
-
-            # Step 4: Extract aId from modify link
-            modify_href = matched["href"]
-            parsed = urlparse(modify_href)
-            query_params = parse_qs(parsed.query)
-            aid_values = query_params.get("aId", [])
-            if not aid_values:
-                return {"status": "error", "message": f"Could not extract aId from modify link: {modify_href}"}
-            a_id = aid_values[0]
-
             logger.info("Editing alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
 
             # Step 5: Navigate to modify page — form loads via /intercept/alert POST
