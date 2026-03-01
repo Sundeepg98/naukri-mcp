@@ -22,6 +22,15 @@ naukri_config.json
 # Plan docs (local only)
 docs/plans/
 
+# Sync state
+sync_state.json
+
+# Exported data
+exports/
+
+# Tracking backups
+*.backup
+
 # OS
 .DS_Store
 Thumbs.db

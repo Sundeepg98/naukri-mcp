@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
+from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API, LAKHS_MULTIPLIER
 
 
 @mcp.tool()
@@ -33,8 +33,8 @@ async def naukri_get_job_alerts() -> dict:
             "keywords": alert.get("keywords"),
             "location": alert.get("location"),
             "experience": alert.get("experience"),
-            "min_ctc": round(alert.get("minCTC", 0) / 100000, 2) if alert.get("minCTC") else None,
-            "max_ctc": round(alert.get("maxCTC", 0) / 100000, 2) if alert.get("maxCTC") else None,
+            "min_ctc": round(alert.get("minCTC", 0) / LAKHS_MULTIPLIER, 2) if alert.get("minCTC") else None,
+            "max_ctc": round(alert.get("maxCTC", 0) / LAKHS_MULTIPLIER, 2) if alert.get("maxCTC") else None,
             "ctc_unit": "lakhs",
             "alert_type": alert.get("alertType"),  # "ssa" or "cja"
             "function_area_id": alert.get("functionAreaId"),
@@ -86,9 +86,9 @@ async def naukri_create_job_alert(
     if experience is not None:
         body["experience"] = str(experience)
     if min_ctc is not None:
-        body["minCTC"] = str(min_ctc * 100000)
+        body["minCTC"] = str(min_ctc * LAKHS_MULTIPLIER)
     if max_ctc is not None:
-        body["maxCTC"] = str(max_ctc * 100000)
+        body["maxCTC"] = str(max_ctc * LAKHS_MULTIPLIER)
     if function_area_id is not None:
         body["functionAreaId"] = function_area_id
     if role_id is not None:
@@ -135,8 +135,8 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
             "keywords": a.get("keywords", ""),
             "location": a.get("location", ""),
             "experience": a.get("experience"),
-            "min_ctc": round(a.get("minCTC", 0) / 100000, 2) if a.get("minCTC") else None,
-            "max_ctc": round(a.get("maxCTC", 0) / 100000, 2) if a.get("maxCTC") else None,
+            "min_ctc": round(a.get("minCTC", 0) / LAKHS_MULTIPLIER, 2) if a.get("minCTC") else None,
+            "max_ctc": round(a.get("maxCTC", 0) / LAKHS_MULTIPLIER, 2) if a.get("maxCTC") else None,
             "ctc_unit": "lakhs",
             "alert_type": a.get("alertType", ""),
             "function_area_id": a.get("functionAreaId"),

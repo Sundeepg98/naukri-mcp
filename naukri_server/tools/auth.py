@@ -74,8 +74,7 @@ async def naukri_login(
                 current_url = page.url
                 if "/nlogin" not in current_url and "accounts.google" not in current_url:
                     await browser.token_manager.extract()
-                    browser.token = browser.token_manager._token
-                    if not browser.token:
+                    if not browser.token_manager._token:
                         return {"status": "error", "message": "Login redirect completed but token not found. Try again."}
                     name = await browser.get_profile_name()
                     return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}

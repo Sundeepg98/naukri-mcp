@@ -11,9 +11,9 @@ from naukri_server.config import logger
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 8 checks in parallel: unread messages, notifications, new recommendations,
+    Runs 9 checks in parallel: unread messages, notifications, new recommendations,
     recruiter activity, profile activity level, today's applications, dashboard stats,
-    and early access roles.
+    early access roles, and subscription status.
 
     Returns:
         - {status: "success", unread_messages, notifications, recommendations,
@@ -26,6 +26,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.tracking import naukri_get_applications
     from naukri_server.tools.profile import naukri_get_dashboard
     from naukri_server.tools.early_access import naukri_get_early_access_roles
+    from naukri_server.tools.subscription import naukri_get_subscription_status
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors = []
@@ -39,6 +40,7 @@ async def naukri_daily_brief() -> dict:
         naukri_get_applications(date_from=today),
         naukri_get_dashboard(),
         naukri_get_early_access_roles(limit=3),
+        naukri_get_subscription_status(),
         return_exceptions=True,
     )
 
@@ -60,6 +62,7 @@ async def naukri_daily_brief() -> dict:
     apps = _extract(5, "Applications")
     dashboard = _extract(6, "Dashboard")
     early_access = _extract(7, "Early access")
+    subscription = _extract(8, "Subscription")
 
     brief = {
         "status": "success",
@@ -95,6 +98,7 @@ async def naukri_daily_brief() -> dict:
             "count": early_access.get("count", 0) if early_access else 0,
             "roles": early_access.get("roles", []) if early_access else [],
         },
+        "subscription": subscription if subscription else None,
     }
 
     if errors:

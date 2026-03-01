@@ -11,9 +11,10 @@ async def naukri_research_company(
     keyword: str,
     include_jobs: bool = True,
     include_reviews: bool = True,
+    include_interviews: bool = True,
     jobs_limit: int = 5,
 ) -> dict:
-    """Research a company comprehensively — jobs, salary data, and employee reviews.
+    """Research a company comprehensively — jobs, salary data, reviews, and interview experiences.
 
     Searches for jobs at the company on Naukri, then fetches AmbitionBox
     salary and review data. Handles partial failures gracefully.
@@ -22,6 +23,7 @@ async def naukri_research_company(
         keyword: Company name (e.g., "Google", "Infosys", "TCS")
         include_jobs: Include open job listings (default True)
         include_reviews: Include AmbitionBox salary/review data (default True)
+        include_interviews: Include AmbitionBox interview experiences (default True)
         jobs_limit: Max jobs to include (default 5)
 
     Returns:
@@ -34,6 +36,7 @@ async def naukri_research_company(
     """
     from naukri_server.tools.ambitionbox import (
         naukri_get_company_salary, naukri_get_company_reviews,
+        naukri_get_interview_experiences,
     )
 
     errors = []
@@ -89,35 +92,61 @@ async def naukri_research_company(
             errors.append(f"Jobs: {type(e).__name__}: {e}")
             logger.warning("Research company jobs failed: %s", e)
 
-    # Step 2: Get AmbitionBox salary + reviews (if requested)
-    if include_reviews:
-        salary_result, reviews_result = await asyncio.gather(
-            naukri_get_company_salary(company_slug=slug),
-            naukri_get_company_reviews(company_slug=slug),
-            return_exceptions=True,
-        )
+    # Step 2: Get AmbitionBox salary + reviews + interviews (if requested)
+    if include_reviews or include_interviews:
+        gather_coros = []
+        gather_labels = []
+        if include_reviews:
+            gather_coros.append(naukri_get_company_salary(company_slug=slug))
+            gather_labels.append("salary")
+            gather_coros.append(naukri_get_company_reviews(company_slug=slug))
+            gather_labels.append("reviews")
+        if include_interviews:
+            gather_coros.append(naukri_get_interview_experiences(company_slug=slug))
+            gather_labels.append("interviews")
 
-        if isinstance(salary_result, Exception):
-            errors.append(f"Salary: {type(salary_result).__name__}: {salary_result}")
-            logger.warning("Research company salary failed: %s", salary_result)
-        elif salary_result.get("status") == "success":
-            result["salary"] = {
-                k: v for k, v in salary_result.items()
-                if k not in ("status", "url", "_debug_page_props_keys")
-            }
-        else:
-            errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
+        gather_results = await asyncio.gather(*gather_coros, return_exceptions=True)
+        results_map = dict(zip(gather_labels, gather_results))
 
-        if isinstance(reviews_result, Exception):
-            errors.append(f"Reviews: {type(reviews_result).__name__}: {reviews_result}")
-            logger.warning("Research company reviews failed: %s", reviews_result)
-        elif reviews_result.get("status") == "success":
-            result["reviews"] = {
-                k: v for k, v in reviews_result.items()
-                if k not in ("status", "url")
-            }
-        else:
-            errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
+        salary_result = results_map.get("salary")
+        reviews_result = results_map.get("reviews")
+        interviews_result = results_map.get("interviews")
+
+        if salary_result is not None:
+            if isinstance(salary_result, Exception):
+                errors.append(f"Salary: {type(salary_result).__name__}: {salary_result}")
+                logger.warning("Research company salary failed: %s", salary_result)
+            elif salary_result.get("status") == "success":
+                result["salary"] = {
+                    k: v for k, v in salary_result.items()
+                    if k not in ("status", "url", "_debug_page_props_keys")
+                }
+            else:
+                errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
+
+        if reviews_result is not None:
+            if isinstance(reviews_result, Exception):
+                errors.append(f"Reviews: {type(reviews_result).__name__}: {reviews_result}")
+                logger.warning("Research company reviews failed: %s", reviews_result)
+            elif reviews_result.get("status") == "success":
+                result["reviews"] = {
+                    k: v for k, v in reviews_result.items()
+                    if k not in ("status", "url")
+                }
+            else:
+                errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
+
+        if interviews_result is not None:
+            if isinstance(interviews_result, Exception):
+                errors.append(f"Interviews: {type(interviews_result).__name__}: {interviews_result}")
+                logger.warning("Research company interviews failed: %s", interviews_result)
+            elif interviews_result.get("status") == "success":
+                result["interviews"] = {
+                    k: v for k, v in interviews_result.items()
+                    if k not in ("status",)
+                }
+            else:
+                errors.append(f"Interviews: {interviews_result.get('message', 'unknown error')}")
 
     if errors:
         result["errors"] = errors

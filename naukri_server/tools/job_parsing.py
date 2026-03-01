@@ -1,6 +1,6 @@
 """Shared job-list parsing helpers used by search and company tools."""
 
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.config import NAUKRI_BASE, LAKHS_MULTIPLIER
 
 
 def _parse_job_list(job_details: list, limit: int) -> list:
@@ -12,7 +12,7 @@ def _parse_job_list(job_details: list, limit: int) -> list:
         sal_max = salary.get("maximumSalary", 0)
         sal_label = salary.get("label", "")
         salary_str = sal_label if sal_label else (
-            f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+            f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
         )
 
         placeholders = job.get("placeholders", [])
@@ -31,6 +31,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "salary": salary_str,
             "location": loc_label,
             "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
+            "experience_min": job.get("minimumExperience"),
+            "experience_max": job.get("maximumExperience"),
             "is_applied": job.get("isApplied", False),
             "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
             "job_age": job.get("jobAge"),

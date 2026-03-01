@@ -38,6 +38,7 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
             "date": notif.get("createdAt", ""),
             "is_read": bool(notif.get("readStatus")),
             "url": notif.get("url", ""),
+            "metadata": notif.get("metadata", {}),
         })
 
     return {

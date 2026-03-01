@@ -183,6 +183,9 @@ def compute_fit_score(
     job_work_mode: Optional[str] = None,
     job_salary: Optional[str] = None,
     profile_expected_ctc=None,
+    # Numeric experience fields (avoid regex round-trip when available)
+    experience_min: Optional[int] = None,
+    experience_max: Optional[int] = None,
 ) -> dict:
     """Compute fit score between a job and a candidate profile.
 
@@ -210,14 +213,25 @@ def compute_fit_score(
     missing_skills = job_skills - profile_skills
     skill_score = (len(matched_skills) / len(job_skills) * 100) if job_skills else 50
 
-    # ── Experience match (unchanged) ──
+    # ── Experience match ──
     exp_score = 50  # Default if can't determine
-    if profile_exp is not None and job_exp_str:
-        exp_nums = re.findall(r'(\d+)', str(job_exp_str))
+    if profile_exp is not None and (job_exp_str or experience_min is not None):
         p_exp_match = re.findall(r'(\d+)', str(profile_exp))
         p_exp = float(p_exp_match[0]) if p_exp_match else 0
-        if len(exp_nums) >= 2:
-            min_exp, max_exp = float(exp_nums[0]), float(exp_nums[1])
+
+        # Prefer numeric fields (avoid regex round-trip), fall back to regex
+        if experience_min is not None and experience_max is not None:
+            min_exp, max_exp = float(experience_min), float(experience_max)
+        elif job_exp_str:
+            exp_nums = re.findall(r'(\d+)', str(job_exp_str))
+            if len(exp_nums) >= 2:
+                min_exp, max_exp = float(exp_nums[0]), float(exp_nums[1])
+            else:
+                min_exp = max_exp = None
+        else:
+            min_exp = max_exp = None
+
+        if min_exp is not None and max_exp is not None:
             if min_exp <= p_exp <= max_exp:
                 exp_score = 100
             elif p_exp < min_exp:

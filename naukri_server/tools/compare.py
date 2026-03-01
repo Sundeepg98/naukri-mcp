@@ -103,6 +103,9 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
             "is_applied": r.get("is_applied") or jid in local_applied_ids,
             "external_apply": r.get("external_apply"),
             "external_apply_url": r.get("external_apply_url"),
+            "posted_date": r.get("posted_date"),
+            "apply_count": r.get("apply_count"),
+            "candidates_count": r.get("candidates_count"),
         }
 
         if profile_ok:
@@ -114,6 +117,8 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
                 job_work_mode=r.get("work_mode"),
                 job_salary=r.get("salary"),
                 profile_expected_ctc=profile_expected_ctc,
+                experience_min=r.get("experience_min"),
+                experience_max=r.get("experience_max"),
             )
             job_entry["fit_score"] = fit["overall_score"]
             job_entry["matched_skills"] = fit["skill_match"]["matched"]

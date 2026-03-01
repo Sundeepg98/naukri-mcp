@@ -72,9 +72,20 @@ async def naukri_auto_hunt(
     if not jobs:
         return {"status": "success", "jobs_found": 0, "jobs_matched": 0, "ranked_jobs": []}
 
-    # Filter out already-applied jobs
+    # Filter out already-applied jobs (API + local tracking)
     pre_filter_count = len(jobs)
     jobs = [j for j in jobs if not j.get("is_applied")]
+
+    # Cross-reference with local applications tracking
+    try:
+        from naukri_server.tools.tracking import _load_json, APPLICATIONS_FILE, _applications_lock
+        async with _applications_lock:
+            local_apps = _load_json(APPLICATIONS_FILE)
+            local_applied_ids = {str(a.get("job_id")) for a in local_apps}
+        jobs = [j for j in jobs if str(j.get("job_id")) not in local_applied_ids]
+    except Exception:
+        pass  # Non-critical — local tracking unavailable
+
     if not jobs:
         return {"status": "success", "jobs_found": pre_filter_count,
                 "jobs_matched": 0, "ranked_jobs": [],
@@ -98,6 +109,8 @@ async def naukri_auto_hunt(
             job_work_mode=job.get("work_mode"),
             job_salary=job.get("salary"),
             profile_expected_ctc=profile_expected_ctc,
+            experience_min=job.get("experience_min"),
+            experience_max=job.get("experience_max"),
         )
 
         if fit["overall_score"] >= min_fit_score:

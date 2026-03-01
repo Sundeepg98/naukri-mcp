@@ -209,6 +209,7 @@ async def naukri_accept_nvite(
 
 
 @mcp.tool()
+@api_tool("Mark interested")
 async def naukri_mark_interested(
     mail_id: str,
     conversation_id: str,
@@ -228,18 +229,13 @@ async def naukri_mark_interested(
         - {status: "success", mail_id, interested}
         - {status: "error", message}
     """
-    try:
-        await api_post(
-            INBOX_MARK_INTERESTED_API,
-            body={
-                "mailId": str(mail_id),
-                "conversationId": str(conversation_id),
-                "interested": interested,
-            },
-        )
-        action = "interested" if interested else "not interested"
-        return {"status": "success", "mail_id": mail_id, "interested": interested, "message": f"Marked as {action}."}
-    except NaukriAPIError as e:
-        return {"status": "error", "message": f"Mark interested failed: {e}"}
-    except Exception as e:
-        return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}"}
+    await api_post(
+        INBOX_MARK_INTERESTED_API,
+        body={
+            "mailId": str(mail_id),
+            "conversationId": str(conversation_id),
+            "interested": interested,
+        },
+    )
+    action = "interested" if interested else "not interested"
+    return {"status": "success", "mail_id": mail_id, "interested": interested, "message": f"Marked as {action}."}

@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import JOB_DETAIL_API, NAUKRI_BASE, REPORT_FRAUD_API, logger
+from naukri_server.config import JOB_DETAIL_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, logger
 from naukri_server.validation import validate_job_detail
 
 
@@ -55,7 +55,7 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
     sal_min = salary.get("minimumSalary", 0)
     sal_max = salary.get("maximumSalary", 0)
     salary_str = sal_label if sal_label else (
-        f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
+        f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
     )
 
     company = job.get("companyDetail", {})
@@ -76,6 +76,9 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "company_reviews_count": ambition.get("ReviewsCount"),
         "salary": salary_str,
         "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
+        "experience_min": job.get("minimumExperience"),
+        "experience_max": job.get("maximumExperience"),
+        "candidates_count": job.get("candidatesCount"),
         "location": job.get("cityName") or job.get("citySuburb"),
         "description": job.get("description", ""),
         "skills": _extract_skills(job.get("keySkills", [])),

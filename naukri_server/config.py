@@ -132,3 +132,6 @@ RESUME_BUILDER_STATUS_API = "/cloudgateway-naukri360/jobseeker-order-management-
 
 # AmbitionBox (used by ambitionbox.py and health.py)
 AMBITIONBOX_BASE = "https://www.ambitionbox.com"
+
+# Conversion constants
+LAKHS_MULTIPLIER = 100_000  # 1 lakh = 100,000 — used for CTC conversion across alerts, jobs, parsing, insights

@@ -273,8 +273,6 @@ class NaukriBrowser:
     def __init__(self):
         self.pw = None
         self.context: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None  # Backward compat — first page reference
-        self.token: Optional[str] = None  # Backward compat — use token_manager instead
         self.token_manager = TokenManager()
         self.page_pool: Optional[PagePool] = None
 
@@ -293,8 +291,6 @@ class NaukriBrowser:
 
         # Initialize page pool with first page
         first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        self.page = first_page  # Backward compat
-        self.token = self.token_manager._token  # Backward compat
 
         self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
         await self.page_pool.initialize(first_page)
@@ -306,9 +302,10 @@ class NaukriBrowser:
         if self.token_manager._token:
             try:
                 from naukri_server.api import api_get
+                from naukri_server.config import PROFILE_API as _PROFILE_API
                 await asyncio.wait_for(
                     api_get(
-                        "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+                        _PROFILE_API,
                         {"expand_level": "1"},
                     ),
                     timeout=5,
@@ -319,7 +316,6 @@ class NaukriBrowser:
             except Exception as e:
                 logger.warning("Token found but invalid: %s. Call naukri_login.", e)
                 self.token_manager.invalidate()
-                self.token = None
 
     async def stop(self):
         from naukri_server.api import close_session
@@ -337,7 +333,7 @@ class NaukriBrowser:
         from naukri_server.api import api_get
         try:
             data = await api_get(
-                "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self",
+                PROFILE_API,
                 {"expand_level": "4"},
             )
             profiles = data.get("profile") or []

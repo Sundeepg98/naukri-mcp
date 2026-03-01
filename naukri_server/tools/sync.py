@@ -590,7 +590,22 @@ async def naukri_sync_applications(
 
         async with _applications_lock:
             local_apps = _load_json(APPLICATIONS_FILE)
+            # Snapshot old statuses for change detection
+            old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
             stats = _merge_applications(local_apps, remote_jobs)
+            # Detect status changes
+            status_changes = []
+            for app in local_apps:
+                jid = app.get("job_id")
+                old_s = old_status_map.get(jid)
+                new_s = app.get("status")
+                if old_s and new_s and old_s != new_s:
+                    status_changes.append({
+                        "job_id": jid,
+                        "title": app.get("title"),
+                        "old_status": old_s,
+                        "new_status": new_s,
+                    })
             _save_json(APPLICATIONS_FILE, local_apps)
 
         # Record sync metadata
@@ -600,7 +615,7 @@ async def naukri_sync_applications(
         state["last_applications_count"] = len(remote_jobs)
         _save_sync_state(state)
 
-        return {
+        result = {
             "status": "success",
             "method": method,
             "total_remote": len(remote_jobs),
@@ -609,6 +624,9 @@ async def naukri_sync_applications(
             "last_sync": state.get("last_applications_sync"),
             "applications": local_apps[:20],
         }
+        if status_changes:
+            result["status_changes"] = status_changes
+        return result
     except Exception as e:
         return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
 

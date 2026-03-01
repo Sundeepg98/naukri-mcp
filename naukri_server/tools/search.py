@@ -100,6 +100,7 @@ async def naukri_search_jobs(
                 "page": page_no,
                 "total": data.get("noOfJobs"),
                 "count": len(jobs),
+                "clusters": data.get("clusters", {}),
                 "filters": {k: v for k, v in {
                     "experience": experience,
                     "salary_min": salary_min,

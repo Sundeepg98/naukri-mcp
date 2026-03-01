@@ -36,6 +36,75 @@ async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
         return result
 
 
+# --- Browser helpers for profile update modals ---
+
+_SAVE_MODAL_JS = """() => {
+    const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+    if (modal) {
+        const btn = Array.from(modal.querySelectorAll('button')).find(
+            b => b.textContent.trim().toLowerCase() === 'save'
+        );
+        if (btn) { btn.click(); return 'modal_save'; }
+    }
+    const exactSave = Array.from(document.querySelectorAll('button')).find(
+        b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+    );
+    if (exactSave) { exactSave.click(); return 'exact_save'; }
+    return null;
+}"""
+
+
+def _ctc_find_js(field_key: str, label_text: str) -> str:
+    """Generate JS to find a CTC input field by name/id selectors or label fallback."""
+    return f"""() => {{
+        const selectors = [
+            'input[name*="{field_key}"]', 'input[name*="{field_key[0].upper() + field_key[1:]}"]',
+            'input[name*="{field_key.replace("Ctc", "_ctc")}"]', 'input[id*="{field_key}"]',
+            'input[id*="{field_key[0].upper() + field_key[1:]}"]', 'input[id*="{field_key.replace("Ctc", "_ctc")}"]',
+        ];
+        for (const sel of selectors) {{
+            const el = document.querySelector(sel);
+            if (el) return sel;
+        }}
+        const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
+            el.textContent.trim().toLowerCase().includes('{label_text.lower()}') &&
+            el.children.length <= 2
+        );
+        for (const label of labels) {{
+            const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
+            if (container) {{
+                const input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                if (input) {{
+                    input.setAttribute('data-ctc-found', '{field_key}');
+                    return 'input[data-ctc-found="{field_key}"]';
+                }}
+            }}
+        }}
+        return null;
+    }}"""
+
+
+async def _fill_ctc_input(page, field_key: str, value: str, label_text: str) -> str | None:
+    """Find and fill a CTC input field in a modal. Returns field_key on success, None on failure."""
+    ctc_input = await page.evaluate(_ctc_find_js(field_key, label_text))
+    if not ctc_input:
+        return None
+    input_el = await page.query_selector(ctc_input)
+    if not input_el:
+        return None
+    await input_el.click(click_count=3)
+    await input_el.fill("")
+    await input_el.fill(value)
+    await input_el.dispatch_event("change")
+    await asyncio.sleep(0.5)
+    return field_key
+
+
+async def _click_save_modal(page) -> str | None:
+    """Click Save in the current modal. Returns save method or None."""
+    return await page.evaluate(_SAVE_MODAL_JS)
+
+
 # ============================================================================
 # Tool 6: Refresh Profile (Playwright — needs browser interaction)
 # ============================================================================
@@ -419,21 +488,7 @@ async def naukri_update_profile(
                         return {"status": "error", "message": "Edit modal opened but textarea not found"}
 
                     # Click save
-                    save_result = await page.evaluate("""() => {
-                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-                        if (modal) {
-                            const btn = Array.from(modal.querySelectorAll('button')).find(
-                                b => b.textContent.trim().toLowerCase() === 'save'
-                            );
-                            if (btn) { btn.click(); return 'modal_save'; }
-                        }
-                        const exactSave = Array.from(document.querySelectorAll('button')).find(
-                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
-                        );
-                        if (exactSave) { exactSave.click(); return 'exact_save'; }
-                        return null;
-                    }""")
-
+                    save_result = await _click_save_modal(page)
                     if not save_result:
                         return {"status": "error", "message": "Edit modal opened but Save button not found"}
 
@@ -806,125 +861,27 @@ async def naukri_update_profile(
                     # --- Current CTC ---
                     if "currentCtc" in career_fields:
                         try:
-                            ctc_val = str(career_fields["currentCtc"])
-                            ctc_input = await page.evaluate("""() => {
-                                // Try specific selectors for current CTC input
-                                const selectors = [
-                                    'input[name*="currentCtc"]', 'input[name*="CurrentCtc"]',
-                                    'input[name*="current_ctc"]', 'input[id*="currentCtc"]',
-                                    'input[id*="CurrentCtc"]', 'input[id*="current_ctc"]',
-                                ];
-                                for (const sel of selectors) {
-                                    const el = document.querySelector(sel);
-                                    if (el) return sel;
-                                }
-
-                                // Fallback: find label "Current CTC" and get nearby input
-                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
-                                    el.textContent.trim().toLowerCase().includes('current ctc') &&
-                                    el.children.length <= 2
-                                );
-                                for (const label of labels) {
-                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
-                                    if (container) {
-                                        const input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
-                                        if (input) {
-                                            input.setAttribute('data-ctc-found', 'current');
-                                            return 'input[data-ctc-found="current"]';
-                                        }
-                                    }
-                                }
-                                return null;
-                            }""")
-
-                            if ctc_input:
-                                input_el = await page.query_selector(ctc_input)
-                                if input_el:
-                                    await input_el.click(click_count=3)  # Select all existing text
-                                    await input_el.fill("")
-                                    await input_el.fill(ctc_val)
-                                    await input_el.dispatch_event("change")
-                                    await asyncio.sleep(0.5)
-                                    ui_updated.append("currentCtc")
-                                else:
-                                    return {"status": "error", "message": "Current CTC input found in DOM but not queryable"}
+                            filled = await _fill_ctc_input(page, "currentCtc", str(career_fields["currentCtc"]), "current ctc")
+                            if filled:
+                                ui_updated.append("currentCtc")
                             else:
                                 return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal"}
                         except Exception as e:
-                            return {
-                                "status": "error",
-                                "message": f"Failed to update currentCtc: {type(e).__name__}: {e}",
-                            }
+                            return {"status": "error", "message": f"Failed to update currentCtc: {type(e).__name__}: {e}"}
 
                     # --- Expected CTC ---
                     if "expectedCtc" in career_fields:
                         try:
-                            ctc_val = str(career_fields["expectedCtc"])
-                            ctc_input = await page.evaluate("""() => {
-                                // Try specific selectors for expected CTC input
-                                const selectors = [
-                                    'input[name*="expectedCtc"]', 'input[name*="ExpectedCtc"]',
-                                    'input[name*="expected_ctc"]', 'input[id*="expectedCtc"]',
-                                    'input[id*="ExpectedCtc"]', 'input[id*="expected_ctc"]',
-                                ];
-                                for (const sel of selectors) {
-                                    const el = document.querySelector(sel);
-                                    if (el) return sel;
-                                }
-
-                                // Fallback: find label "Expected CTC" and get nearby input
-                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
-                                    el.textContent.trim().toLowerCase().includes('expected ctc') &&
-                                    el.children.length <= 2
-                                );
-                                for (const label of labels) {
-                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
-                                    if (container) {
-                                        const input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
-                                        if (input) {
-                                            input.setAttribute('data-ctc-found', 'expected');
-                                            return 'input[data-ctc-found="expected"]';
-                                        }
-                                    }
-                                }
-                                return null;
-                            }""")
-
-                            if ctc_input:
-                                input_el = await page.query_selector(ctc_input)
-                                if input_el:
-                                    await input_el.click(click_count=3)  # Select all existing text
-                                    await input_el.fill("")
-                                    await input_el.fill(ctc_val)
-                                    await input_el.dispatch_event("change")
-                                    await asyncio.sleep(0.5)
-                                    ui_updated.append("expectedCtc")
-                                else:
-                                    return {"status": "error", "message": "Expected CTC input found in DOM but not queryable"}
+                            filled = await _fill_ctc_input(page, "expectedCtc", str(career_fields["expectedCtc"]), "expected ctc")
+                            if filled:
+                                ui_updated.append("expectedCtc")
                             else:
                                 return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal"}
                         except Exception as e:
-                            return {
-                                "status": "error",
-                                "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}",
-                            }
+                            return {"status": "error", "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}"}
 
                     # Click save on the Career Profile modal
-                    save_result = await page.evaluate("""() => {
-                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-                        if (modal) {
-                            const btn = Array.from(modal.querySelectorAll('button')).find(
-                                b => b.textContent.trim().toLowerCase() === 'save'
-                            );
-                            if (btn) { btn.click(); return 'modal_save'; }
-                        }
-                        const exactSave = Array.from(document.querySelectorAll('button')).find(
-                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
-                        );
-                        if (exactSave) { exactSave.click(); return 'exact_save'; }
-                        return null;
-                    }""")
-
+                    save_result = await _click_save_modal(page)
                     if not save_result:
                         return {"status": "error", "message": "Career Profile modal opened but Save button not found"}
 

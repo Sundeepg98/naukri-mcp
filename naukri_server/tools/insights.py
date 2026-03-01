@@ -7,6 +7,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.cache import _load_cache, _cache_lock
+from naukri_server.config import LAKHS_MULTIPLIER
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 
 
@@ -218,7 +219,7 @@ def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
     # If values are in thousands (e.g., 1000000), convert to LPA
     factor = 1
     if any(v > 200 for v in vals):
-        factor = 1 / 100000  # Convert to lakhs
+        factor = 1 / LAKHS_MULTIPLIER  # Convert to lakhs
 
     if len(vals) == 2:
         return round(vals[0] * factor, 1), round(vals[1] * factor, 1)
