@@ -135,73 +135,12 @@ async def naukri_get_company_jobs(
             return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}"}
 
 
-@mcp.tool()
-@api_tool("Company follow")
-async def naukri_follow_company(
-    group_id: str,
-    action: str = "status",
-) -> dict:
-    """Check follow status, follow, or unfollow a company on Naukri.com.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified follow tool)
+# ---------------------------------------------------------------------------
 
-    Requires: group_id from naukri_search_companies results.
-
-    Args:
-        group_id: Company group ID (from naukri_search_companies results)
-        action: One of "status" (check if followed), "follow", or "unfollow"
-
-    Returns:
-        - action="status": {status: "success", group_id, is_followed}
-        - action="follow"/"unfollow": {status: "success", group_id, action: "followed"/"unfollowed"}
-        - {status: "error", message}
-    """
-    if action == "status":
-        data = await api_get(
-            COMPANY_FOLLOW_STATUS_API,
-            params={"query": group_id},
-        )
-        followed = data.get("followedGroups", [])
-        is_followed = any(
-            str(g.get("id", g) if isinstance(g, dict) else g) == str(group_id)
-            for g in followed
-        )
-        return {
-            "status": "success",
-            "group_id": group_id,
-            "is_followed": is_followed,
-        }
-
-    elif action in ("follow", "unfollow"):
-        await api_post(
-            COMPANY_FOLLOW_STATUS_API,
-            body={"groupId": group_id, "action": action},
-        )
-        return {
-            "status": "success",
-            "group_id": group_id,
-            "action": f"{action}ed",
-        }
-
-    else:
-        return {
-            "status": "error",
-            "message": f"Invalid action '{action}'. Use 'status', 'follow', or 'unfollow'.",
-        }
-
-
-@mcp.tool()
-@api_tool("Check follow status")
-async def naukri_get_company_follow_status(group_ids: list[str]) -> dict:
-    """Check follow status for multiple companies at once.
-
-    Requires: group_ids from naukri_search_companies results.
-
-    Args:
-        group_ids: List of company group IDs to check
-
-    Returns:
-        - {status: "success", followed: [...ids...], not_followed: [...ids...]}
-        - {status: "error", message}
-    """
+async def _get_follow_status(group_ids: list[str]) -> dict:
+    """Check follow status for one or more companies via the API."""
     query = ",".join(group_ids)
     data = await api_get(
         COMPANY_FOLLOW_STATUS_API,
@@ -221,3 +160,83 @@ async def naukri_get_company_follow_status(group_ids: list[str]) -> dict:
         "followed": followed,
         "not_followed": not_followed,
     }
+
+
+async def _follow_or_unfollow(group_ids: list[str], action: str) -> dict:
+    """Follow or unfollow one or more companies via the API."""
+    results = []
+    errors = []
+    for group_id in group_ids:
+        try:
+            await api_post(
+                COMPANY_FOLLOW_STATUS_API,
+                body={"groupId": group_id, "action": action},
+            )
+            results.append(group_id)
+        except NaukriAPIError as e:
+            errors.append({"group_id": group_id, "message": str(e), "http_status": e.status})
+        except Exception as e:
+            errors.append({"group_id": group_id, "message": f"{type(e).__name__}: {e}"})
+
+    result = {
+        "status": "success" if not errors else ("partial_success" if results else "error"),
+        "action": f"{action}ed",
+        f"{action}ed": results,
+    }
+    if errors:
+        result["errors"] = errors
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_company_follow(
+    action: str,
+    group_ids: list[str] = [],
+) -> dict:
+    """Unified company follow management — check status, follow, or unfollow.
+
+    Requires: group_ids from naukri_search_companies results.
+
+    Actions:
+      - "status": Check follow status for given company IDs
+      - "follow": Follow one or more companies
+      - "unfollow": Unfollow one or more companies
+
+    Args:
+        action: "status" | "follow" | "unfollow"
+        group_ids: List of company group IDs (from naukri_search_companies results)
+
+    Returns:
+        - status: {status, followed: [...ids...], not_followed: [...ids...]}
+        - follow/unfollow: {status, action, followed/unfollowed: [...ids...], errors?}
+        - {status: "error", message} on failure
+    """
+    # ── validate group_ids ────────────────────────────────────────────
+    if not group_ids:
+        return {"status": "error", "message": "group_ids is required and must not be empty."}
+
+    # ── status ────────────────────────────────────────────────────────
+    if action == "status":
+        try:
+            return await _get_follow_status(group_ids)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}"}
+
+    # ── follow / unfollow ─────────────────────────────────────────────
+    elif action in ("follow", "unfollow"):
+        try:
+            return await _follow_or_unfollow(group_ids, action)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}"}
+
+    # ── unknown action ────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: status, follow, unfollow"}

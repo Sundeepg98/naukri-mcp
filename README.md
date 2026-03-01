@@ -129,7 +129,7 @@ JWT authentication token (`nauk_at` cookie) is extracted from the Playwright bro
 | Resume & Photo | 5 | `naukri_get_resume_info`, `naukri_download_resume`, `naukri_get_photo_info`, `naukri_upload_photo`, `naukri_delete_photo` |
 | Settings | 4 | `naukri_get_settings`, `naukri_update_settings`, `naukri_get_blocked_companies`, `naukri_check_email_verification` |
 | Alerts | 5 | `naukri_create_job_alert`, `naukri_get_job_alerts`, `naukri_get_alert_detail`, `naukri_delete_job_alert`, `naukri_update_job_alert` |
-| Companies | 4 | `naukri_search_companies`, `naukri_get_company_jobs`, `naukri_follow_company`, `naukri_get_company_follow_status` |
+| Companies | 3 | `naukri_search_companies`, `naukri_get_company_jobs`, `naukri_company_follow` |
 | Inbox | 4 | `naukri_get_inbox`, `naukri_read_message`, `naukri_accept_nvite`, `naukri_mark_interested` |
 | Notifications | 4 | `naukri_get_notifications`, `naukri_mark_notification_read`, `naukri_mark_all_notifications_read`, `naukri_get_notification_count` |
 | Performance | 3 | `naukri_get_search_impressions`, `naukri_get_recruiter_activity`, `naukri_get_activity_level` |

@@ -1,22 +1,16 @@
-"""Resume builder tools — templates, status, and AI resume features."""
+"""Resume builder tools — templates and AI resume builder status."""
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError, api_tool
+from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.config import RESUME_BUILDER_CONFIG_API, RESUME_BUILDER_STATUS_API
 
 
-@mcp.tool()
-@api_tool("Get resume templates")
-async def naukri_get_resume_templates() -> dict:
-    """List available resume builder templates — free and pro templates with preview images.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
 
-    Returns 12 templates (3 free, 9 pro/paid). Each includes name, ID, type (free/pro),
-    and preview image URL.
-
-    Returns:
-        - {status: "success", count, free_count, pro_count, templates: [{id, name, type, preview_url}]}
-        - {status: "error", message}
-    """
+async def _get_templates() -> dict:
+    """Fetch available resume builder templates."""
     data = await api_get(RESUME_BUILDER_CONFIG_API, params={"source": "rmLandingPage"})
 
     # Response: {statusCode, message, data: {templateConfiguration: {filters, templateDetails}}}
@@ -50,15 +44,8 @@ async def naukri_get_resume_templates() -> dict:
     }
 
 
-@mcp.tool()
-@api_tool("Get resume builder status")
-async def naukri_get_resume_builder_status() -> dict:
-    """Get your resume builder service status — AI rewrite attempts left, subscription tier, and features.
-
-    Returns:
-        - {status: "success", attempts_left, is_paid, show_genai, ...}
-        - {status: "error", message}
-    """
+async def _get_status() -> dict:
+    """Fetch resume builder service status."""
     data = await api_get(RESUME_BUILDER_STATUS_API, params={"service": "resumeBuilder"})
 
     # Response may be wrapped in data envelope
@@ -77,3 +64,48 @@ async def naukri_get_resume_builder_status() -> dict:
         "show_rewrite": rb.get("showRewrite", False),
         "experiment_variant": rb.get("attachResumeExperimentVariant", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_resume_builder(
+    action: str = "templates",
+) -> dict:
+    """Unified resume builder — browse templates and check builder status.
+
+    Actions:
+      - "templates": List available resume builder templates (free and pro with preview images)
+      - "status": Get resume builder service status (AI rewrite attempts left, subscription tier, features)
+
+    Args:
+        action: "templates" | "status"
+
+    Returns:
+        - templates: {status, count, free_count, pro_count, templates: [{id, name, type, preview_url}]}
+        - status: {status, attempts_left, is_paid, show_genai_features, ...}
+        - {status: "error", message} on failure
+    """
+    # -- templates ──────────────────────────────────────────────────────
+    if action == "templates":
+        try:
+            return await _get_templates()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get resume templates failed: {type(e).__name__}: {e}"}
+
+    # -- status ─────────────────────────────────────────────────────────
+    elif action == "status":
+        try:
+            return await _get_status()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get resume builder status failed: {type(e).__name__}: {e}"}
+
+    # -- unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status"}

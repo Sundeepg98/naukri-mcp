@@ -1,20 +1,16 @@
 """Assessment tools — skill test scores and profile completeness metrics."""
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError, api_tool
+from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.config import DASHBOARD_API
 
 
-@mcp.tool()
-@api_tool("Get assessments")
-async def naukri_get_assessments() -> dict:
-    """Get your Naukri skill assessment results — DoSelect test scores for
-    SQL, Python, JavaScript, AWS, Linux, HTML, etc.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
 
-    Returns:
-        - {status: "success", count, assessments: [{skill, level, badge, score, rank, accuracy, status, max_marks, passing_marks, test_id}]}
-        - {status: "error", message}
-    """
+async def _list_assessments() -> dict:
+    """Fetch skill assessment results from the dashboard API."""
     data = await api_get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
     assessments_raw = dashboard.get("assessments", [])
@@ -52,16 +48,8 @@ async def naukri_get_assessments() -> dict:
     }
 
 
-@mcp.tool()
-@api_tool("Get profile completeness")
-async def naukri_get_profile_completeness() -> dict:
-    """Get your profile completeness score and key metrics — completion percentage,
-    search appearances, recruiter views, and service eligibility flags.
-
-    Returns:
-        - {status: "success", completeness_percent, search_appearances, recruiter_views, is_paid, is_premium, ai_resume_eligible, mock_interview_eligible, job_search_status}
-        - {status: "error", message}
-    """
+async def _get_profile_completeness() -> dict:
+    """Fetch profile completeness score and key metrics from the dashboard API."""
     data = await api_get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
 
@@ -84,3 +72,48 @@ async def naukri_get_profile_completeness() -> dict:
         "mock_interview_eligible": dashboard.get("eligibleFlagForAIMockInterview", False),
         "job_search_status": job_search,
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_assessments(action: str = "list") -> dict:
+    """Unified assessment & profile completeness tool — skill tests and profile metrics.
+
+    Actions:
+      - "list": Get your Naukri skill assessment results — DoSelect test scores for
+        SQL, Python, JavaScript, AWS, Linux, HTML, etc.
+      - "completeness": Get your profile completeness score and key metrics — completion
+        percentage, search appearances, recruiter views, and service eligibility flags.
+
+    Args:
+        action: "list" | "completeness"
+
+    Returns:
+        - list: {status, count, assessments: [{skill, level, badge_url, score, rank, accuracy, status, max_marks, passing_marks, test_id}]}
+        - completeness: {status, completeness_percent, search_appearances, recruiter_views, is_paid, is_premium, ai_resume_eligible, mock_interview_eligible, job_search_status}
+        - {status: "error", message} on failure
+    """
+    # ── list ───────────────────────────────────────────────────────────
+    if action == "list":
+        try:
+            return await _list_assessments()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get assessments failed: {type(e).__name__}: {e}"}
+
+    # ── completeness ──────────────────────────────────────────────────
+    elif action == "completeness":
+        try:
+            return await _get_profile_completeness()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get profile completeness failed: {type(e).__name__}: {e}"}
+
+    # ── unknown action ────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, completeness"}

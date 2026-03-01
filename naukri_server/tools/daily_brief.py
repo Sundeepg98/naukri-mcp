@@ -28,7 +28,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.profile import naukri_get_dashboard
     from naukri_server.tools.early_access import _list_early_access_roles
     from naukri_server.tools.subscription import naukri_get_subscription_status
-    from naukri_server.tools.reminders import naukri_get_reminders
+    from naukri_server.tools.reminders import _list_reminders
     from naukri_server.tools.tracking import naukri_get_stale_applications
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -44,7 +44,7 @@ async def naukri_daily_brief() -> dict:
         naukri_get_dashboard(),
         _list_early_access_roles(limit=3),
         naukri_get_subscription_status(),
-        naukri_get_reminders(include_past=True),
+        _list_reminders(include_past=True),
         naukri_get_stale_applications(days_threshold=14, min_stale_score=50),
         return_exceptions=True,
     )

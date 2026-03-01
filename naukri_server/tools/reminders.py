@@ -42,30 +42,18 @@ def _save_reminders(data: list):
     os.replace(str(tmp), str(REMINDERS_FILE))
 
 
-@mcp.tool()
-async def naukri_set_reminder(
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool + daily_brief)
+# ---------------------------------------------------------------------------
+
+async def _set_reminder(
     job_id: str,
     days: int = 7,
     note: Optional[str] = None,
     title: Optional[str] = None,
     company: Optional[str] = None,
 ) -> dict:
-    """Set a follow-up reminder for a job application.
-
-    Creates a reminder that appears in your daily brief when due.
-    Use after applying to track follow-up timing.
-
-    Args:
-        job_id: Job ID to set reminder for
-        days: Remind after N days from now (default 7)
-        note: Optional note (e.g., "Follow up with recruiter", "Check status")
-        title: Job title (for display in reminders list)
-        company: Company name (for display)
-
-    Returns:
-        - {status: "success", job_id, remind_at, note, message}
-        - {status: "error", message}
-    """
+    """Set a follow-up reminder for a job application."""
     if days < 1 or days > 365:
         return {"status": "error", "message": "days must be between 1 and 365"}
 
@@ -113,23 +101,8 @@ async def naukri_set_reminder(
     }
 
 
-@mcp.tool()
-async def naukri_get_reminders(
-    include_past: bool = True,
-) -> dict:
-    """Get all follow-up reminders, highlighting due ones.
-
-    Returns all reminders with is_due flag. Due reminders have passed
-    their remind_at date. Also surfaced in naukri_daily_brief.
-
-    Args:
-        include_past: Include already-due reminders (default True)
-
-    Returns:
-        - {status: "success", total, due_count,
-           reminders: [{job_id, title, company, remind_at, note,
-           is_due, days_until_due, created_at}]}
-    """
+async def _list_reminders(include_past: bool = True) -> dict:
+    """Get all follow-up reminders, highlighting due ones."""
     async with _reminders_lock:
         reminders = _load_reminders()
 
@@ -173,3 +146,59 @@ async def naukri_get_reminders(
         "due_count": due_count,
         "reminders": result_list,
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_reminders(
+    action: str = "list",
+    job_id: Optional[str] = None,
+    days: int = 7,
+    note: Optional[str] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    include_past: bool = True,
+) -> dict:
+    """Unified reminder management — list reminders or set a follow-up.
+
+    Actions:
+      - "list": Get all reminders with is_due flag (use include_past to filter)
+      - "set": Create/update a follow-up reminder (requires job_id)
+
+    Args:
+        action: "list" | "set"
+        job_id: Required for set — the job ID to set reminder for
+        days: For set — remind after N days from now (default 7, range 1-365)
+        note: For set — optional note (e.g., "Follow up with recruiter")
+        title: For set — job title (for display)
+        company: For set — company name (for display)
+        include_past: For list — include already-due reminders (default True)
+
+    Returns:
+        - list: {status, total, due_count, reminders: [{job_id, title, company,
+          remind_at, note, is_due, days_until_due, created_at}]}
+        - set: {status, job_id, remind_at, note, message}
+        - {status: "error", message} on failure
+    """
+    # -- list ---------------------------------------------------------------
+    if action == "list":
+        try:
+            return await _list_reminders(include_past=include_past)
+        except Exception as e:
+            return {"status": "error", "message": f"List reminders failed: {type(e).__name__}: {e}"}
+
+    # -- set ----------------------------------------------------------------
+    elif action == "set":
+        if not job_id:
+            return {"status": "error", "message": "set requires job_id."}
+        try:
+            return await _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company)
+        except Exception as e:
+            return {"status": "error", "message": f"Set reminder failed: {type(e).__name__}: {e}"}
+
+    # -- unknown action -----------------------------------------------------
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, set"}

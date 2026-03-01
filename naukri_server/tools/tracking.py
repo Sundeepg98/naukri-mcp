@@ -90,7 +90,7 @@ async def naukri_get_applications(
 ) -> dict:
     """List your tracked job applications with filtering and summary stats.
 
-    Reads from local applications tracking file. Use naukri_sync_applications first to fetch latest data from Naukri.com.
+    Reads from local applications tracking file. Use naukri_sync(entity="applications") first to fetch latest data from Naukri.com.
 
     Lists applications from local tracking. For detailed status of ONE specific
     application, use naukri_get_application_status instead.
@@ -405,7 +405,7 @@ async def naukri_get_stale_applications(
     recruiter activity, no views, low match scores, and age. Returns ranked
     list with stale scores and recommended actions.
 
-    Run naukri_sync_applications first to ensure fresh data.
+    Run naukri_sync(entity="applications") first to ensure fresh data.
 
     Args:
         days_threshold: Consider apps older than N days for staleness (default 14)

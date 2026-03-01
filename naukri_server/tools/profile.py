@@ -829,8 +829,8 @@ async def _audit_profile() -> dict:
             return profile_result
 
         # Get completeness percentage
-        from naukri_server.tools.assessments import naukri_get_profile_completeness
-        completeness_result = await naukri_get_profile_completeness()
+        from naukri_server.tools.assessments import _get_profile_completeness
+        completeness_result = await _get_profile_completeness()
         completeness_pct = None
         if completeness_result.get("status") == "success":
             completeness_pct = completeness_result.get("completeness_percent")

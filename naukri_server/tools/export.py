@@ -66,7 +66,7 @@ async def naukri_export_data(
     if data_type == "applications":
         apps_file = _PACKAGE_ROOT / "applications.json"
         if not apps_file.exists():
-            return {"status": "error", "message": "No applications data found. Run naukri_sync_applications first."}
+            return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first."}
         try:
             records = json.loads(apps_file.read_text(encoding="utf-8"))
         except Exception as e:
@@ -75,7 +75,7 @@ async def naukri_export_data(
     elif data_type == "saved_jobs":
         saved_file = _PACKAGE_ROOT / "saved_jobs.json"
         if not saved_file.exists():
-            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync_saved_jobs first."}
+            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first."}
         try:
             records = json.loads(saved_file.read_text(encoding="utf-8"))
         except Exception as e:

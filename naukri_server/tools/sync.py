@@ -537,181 +537,198 @@ def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# MCP Tools
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
+
+async def _sync_applications(force_browser: bool = False, days_back: int = 365) -> dict:
+    """Sync applied jobs from Naukri.com into local tracking.
+
+    Pulls application history from Naukri's backend and merges
+    with local applications.json. Preserves local-only fields. New jobs
+    from Naukri are added with source="naukri_sync".
+    """
+    remote_data = None
+    remote_jobs = None
+    method = "unknown"
+
+    # Strategy 1: Paginated REST API (fetches all pages, returns raw entries)
+    if not force_browser:
+        rest_entries = await _fetch_applied_jobs_rest(days_back=days_back)
+        if rest_entries is not None:
+            remote_data = {"applyDetails": rest_entries}
+            method = "rest_api"
+
+    # Strategy 2: Browser JSON intercept (only if URL pattern known)
+    if remote_data is None and _APPLIED_JOBS_URL_PATTERN:
+        remote_data = await _fetch_via_browser(
+            APPLIED_JOBS_PAGE,
+            url_pattern=_APPLIED_JOBS_URL_PATTERN,
+        )
+        if remote_data is not None:
+            method = "browser_intercept"
+
+    # Strategy 3: HTML scraping (server-rendered page)
+    if remote_data is None and remote_jobs is None:
+        scraped = await _fetch_via_html_scrape(APPLIED_JOBS_PAGE)
+        if scraped is not None:
+            remote_jobs = scraped  # already normalized, skip _parse_applied_jobs
+            method = "html_scrape"
+
+    # Parse JSON strategies through the parser
+    if remote_data is not None and remote_jobs is None:
+        remote_jobs = _parse_applied_jobs(remote_data)
+
+    if remote_jobs is None:
+        return {
+            "status": "error",
+            "message": ("Could not fetch applied jobs. "
+                        "All strategies failed (REST, browser intercept, HTML scrape). "
+                        "You may need to log in first via naukri_login."),
+        }
+
+    # Normalize status labels
+    for job in remote_jobs:
+        if job.get("status"):
+            job["status"] = _map_naukri_status(job["status"])
+        else:
+            job["status"] = "applied"
+
+    async with _applications_lock:
+        local_apps = _load_json(APPLICATIONS_FILE)
+        # Snapshot old statuses for change detection
+        old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
+        stats = _merge_applications(local_apps, remote_jobs)
+        # Detect status changes
+        status_changes = []
+        for app in local_apps:
+            jid = app.get("job_id")
+            old_s = old_status_map.get(jid)
+            new_s = app.get("status")
+            if old_s and new_s and old_s != new_s:
+                status_changes.append({
+                    "job_id": jid,
+                    "title": app.get("title"),
+                    "old_status": old_s,
+                    "new_status": new_s,
+                })
+        _save_json(APPLICATIONS_FILE, local_apps)
+
+    # Record sync metadata
+    state = _load_sync_state()
+    state["last_applications_sync"] = datetime.now(timezone.utc).isoformat()
+    state["last_applications_method"] = method
+    state["last_applications_count"] = len(remote_jobs)
+    _save_sync_state(state)
+
+    result = {
+        "status": "success",
+        "method": method,
+        "total_remote": len(remote_jobs),
+        **stats,
+        "days_back": days_back,
+        "last_sync": state.get("last_applications_sync"),
+        "applications": local_apps[:20],
+    }
+    if status_changes:
+        result["status_changes"] = status_changes
+    return result
+
+
+async def _sync_saved_jobs(force_browser: bool = False) -> dict:
+    """Sync saved/bookmarked jobs from Naukri.com into local tracking.
+
+    Pulls saved jobs from Naukri and merges with local saved_jobs.json.
+    """
+    remote_data = None
+    method = "unknown"
+
+    if not force_browser:
+        remote_data = await _fetch_via_rest(SAVED_JOBS_API)
+        if remote_data is not None:
+            method = "rest_api"
+
+    if remote_data is None:
+        remote_data = await _fetch_via_browser(
+            SAVED_JOBS_PAGE,
+            url_pattern=_SAVED_JOBS_URL_PATTERN,
+        )
+        method = "browser_intercept"
+
+    if remote_data is None:
+        return {
+            "status": "error",
+            "message": "Could not fetch saved jobs. Run naukri_debug(action='discover') to find the API endpoint.",
+        }
+
+    remote_jobs = _parse_saved_jobs(remote_data)
+
+    async with _saved_jobs_lock:
+        local_saved = _load_json(SAVED_JOBS_FILE)
+        stats = _merge_saved_jobs(local_saved, remote_jobs)
+        _save_json(SAVED_JOBS_FILE, local_saved)
+
+    # Record sync metadata
+    state = _load_sync_state()
+    state["last_saved_jobs_sync"] = datetime.now(timezone.utc).isoformat()
+    state["last_saved_jobs_method"] = method
+    state["last_saved_jobs_count"] = len(remote_jobs)
+    _save_sync_state(state)
+
+    return {
+        "status": "success",
+        "method": method,
+        "total_remote": len(remote_jobs),
+        **stats,
+        "last_sync": state.get("last_saved_jobs_sync"),
+        "saved_jobs": local_saved[:20],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def naukri_sync_applications(
+async def naukri_sync(
+    entity: str = "applications",
     force_browser: bool = False,
     days_back: int = 365,
 ) -> dict:
-    """Sync applied jobs from Naukri.com into local tracking.
+    """Unified sync — pull applied jobs or saved jobs from Naukri.com into local tracking.
 
-    Pulls your application history from Naukri's backend and merges
-    with local applications.json. Preserves local-only fields. New jobs
-    from Naukri are added with source="naukri_sync".
-
-    For just viewing local applications, use naukri_get_applications instead.
+    Entities:
+      - "applications": Sync applied jobs (3-tier fallback: REST API → browser intercept → HTML scrape).
+                        Merges with local applications.json, preserves local-only fields.
+                        For just viewing local applications, use naukri_get_applications instead.
+      - "saved_jobs": Sync saved/bookmarked jobs (REST API → browser intercept).
+                     Merges with local saved_jobs.json.
+                     For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.
 
     Args:
+        entity: "applications" | "saved_jobs"
         force_browser: If True, skip REST API and use browser strategies.
-        days_back: Fetch applications from the last N days (default 365).
+        days_back: (applications only) Fetch from last N days (default 365).
                   Use smaller values (e.g., 7 or 30) for faster incremental syncs.
 
     Returns:
-        - {status: "success", method, total_remote, new_added, updated, unchanged, local_only, days_back, last_sync, applications: [...first 20...]}
-        - {status: "error", message}
+        - applications: {status, method, total_remote, new_added, updated, unchanged, local_only, days_back, last_sync, applications: [...first 20...]}
+        - saved_jobs: {status, method, total_remote, new_added, already_local, local_only, last_sync, saved_jobs: [...first 20...]}
+        - {status: "error", message} on failure
     """
-    try:
-        remote_data = None
-        remote_jobs = None
-        method = "unknown"
+    # ── applications ──────────────────────────────────────────────────
+    if entity == "applications":
+        try:
+            return await _sync_applications(force_browser=force_browser, days_back=days_back)
+        except Exception as e:
+            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
 
-        # Strategy 1: Paginated REST API (fetches all pages, returns raw entries)
-        if not force_browser:
-            rest_entries = await _fetch_applied_jobs_rest(days_back=days_back)
-            if rest_entries is not None:
-                remote_data = {"applyDetails": rest_entries}
-                method = "rest_api"
+    # ── saved_jobs ────────────────────────────────────────────────────
+    elif entity == "saved_jobs":
+        try:
+            return await _sync_saved_jobs(force_browser=force_browser)
+        except Exception as e:
+            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
 
-        # Strategy 2: Browser JSON intercept (only if URL pattern known)
-        if remote_data is None and _APPLIED_JOBS_URL_PATTERN:
-            remote_data = await _fetch_via_browser(
-                APPLIED_JOBS_PAGE,
-                url_pattern=_APPLIED_JOBS_URL_PATTERN,
-            )
-            if remote_data is not None:
-                method = "browser_intercept"
-
-        # Strategy 3: HTML scraping (server-rendered page)
-        if remote_data is None and remote_jobs is None:
-            scraped = await _fetch_via_html_scrape(APPLIED_JOBS_PAGE)
-            if scraped is not None:
-                remote_jobs = scraped  # already normalized, skip _parse_applied_jobs
-                method = "html_scrape"
-
-        # Parse JSON strategies through the parser
-        if remote_data is not None and remote_jobs is None:
-            remote_jobs = _parse_applied_jobs(remote_data)
-
-        if remote_jobs is None:
-            return {
-                "status": "error",
-                "message": ("Could not fetch applied jobs. "
-                            "All strategies failed (REST, browser intercept, HTML scrape). "
-                            "You may need to log in first via naukri_login."),
-            }
-
-        # Normalize status labels
-        for job in remote_jobs:
-            if job.get("status"):
-                job["status"] = _map_naukri_status(job["status"])
-            else:
-                job["status"] = "applied"
-
-        async with _applications_lock:
-            local_apps = _load_json(APPLICATIONS_FILE)
-            # Snapshot old statuses for change detection
-            old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
-            stats = _merge_applications(local_apps, remote_jobs)
-            # Detect status changes
-            status_changes = []
-            for app in local_apps:
-                jid = app.get("job_id")
-                old_s = old_status_map.get(jid)
-                new_s = app.get("status")
-                if old_s and new_s and old_s != new_s:
-                    status_changes.append({
-                        "job_id": jid,
-                        "title": app.get("title"),
-                        "old_status": old_s,
-                        "new_status": new_s,
-                    })
-            _save_json(APPLICATIONS_FILE, local_apps)
-
-        # Record sync metadata
-        state = _load_sync_state()
-        state["last_applications_sync"] = datetime.now(timezone.utc).isoformat()
-        state["last_applications_method"] = method
-        state["last_applications_count"] = len(remote_jobs)
-        _save_sync_state(state)
-
-        result = {
-            "status": "success",
-            "method": method,
-            "total_remote": len(remote_jobs),
-            **stats,
-            "days_back": days_back,
-            "last_sync": state.get("last_applications_sync"),
-            "applications": local_apps[:20],
-        }
-        if status_changes:
-            result["status_changes"] = status_changes
-        return result
-    except Exception as e:
-        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
-
-
-@mcp.tool()
-async def naukri_sync_saved_jobs(
-    force_browser: bool = False,
-) -> dict:
-    """Sync saved/bookmarked jobs from Naukri.com into local tracking.
-
-    Pulls your saved jobs from Naukri and merges with local saved_jobs.json.
-
-    For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.
-
-    Args:
-        force_browser: If True, skip REST API and use browser interception.
-
-    Returns:
-        - {status: "success", method, total_remote, new_added, already_local, local_only, saved_jobs: [...first 20...]}
-        - {status: "error", message}
-    """
-    try:
-        remote_data = None
-        method = "unknown"
-
-        if not force_browser:
-            remote_data = await _fetch_via_rest(SAVED_JOBS_API)
-            if remote_data is not None:
-                method = "rest_api"
-
-        if remote_data is None:
-            remote_data = await _fetch_via_browser(
-                SAVED_JOBS_PAGE,
-                url_pattern=_SAVED_JOBS_URL_PATTERN,
-            )
-            method = "browser_intercept"
-
-        if remote_data is None:
-            return {
-                "status": "error",
-                "message": "Could not fetch saved jobs. Run naukri_debug(action='discover') to find the API endpoint.",
-            }
-
-        remote_jobs = _parse_saved_jobs(remote_data)
-
-        async with _saved_jobs_lock:
-            local_saved = _load_json(SAVED_JOBS_FILE)
-            stats = _merge_saved_jobs(local_saved, remote_jobs)
-            _save_json(SAVED_JOBS_FILE, local_saved)
-
-        # Record sync metadata
-        state = _load_sync_state()
-        state["last_saved_jobs_sync"] = datetime.now(timezone.utc).isoformat()
-        state["last_saved_jobs_method"] = method
-        state["last_saved_jobs_count"] = len(remote_jobs)
-        _save_sync_state(state)
-
-        return {
-            "status": "success",
-            "method": method,
-            "total_remote": len(remote_jobs),
-            **stats,
-            "last_sync": state.get("last_saved_jobs_sync"),
-            "saved_jobs": local_saved[:20],
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
+    # ── unknown entity ────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs"}
