@@ -6,7 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API
+from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API, PROFILE_API
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
 
@@ -268,3 +268,29 @@ async def naukri_get_blocked_companies() -> dict:
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get blocked companies: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_check_email_verification() -> dict:
+    """Check if your Naukri account email is verified.
+
+    Returns:
+        - {status: "success", is_verified, email, ...}
+        - {status: "error", message}
+    """
+    try:
+        # The /mail-verification endpoint returns 405. Email/mobile verification
+        # status is available in the profile API's user object instead.
+        data = await api_get(PROFILE_API, params={"expand_level": "1"})
+        user = data.get("user", {})
+        return {
+            "status": "success",
+            "is_email_verified": user.get("isEmailVerified", None),
+            "is_mobile_verified": user.get("isMobileVerified", None),
+            "email": user.get("email", user.get("username", "")),
+            "mobile": user.get("mobile", ""),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to check email verification: {type(e).__name__}: {e}"}

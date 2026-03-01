@@ -6,7 +6,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
-from naukri_server.tools.search import _parse_job_list
+from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_company_list, validate_job_list
 
 _COMPANY_HEADERS = {"appid": "103"}

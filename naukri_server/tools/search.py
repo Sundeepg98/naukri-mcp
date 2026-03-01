@@ -4,6 +4,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API, logger
+from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_list
 
 
@@ -70,43 +71,6 @@ async def naukri_search_jobs(
             return result
         except Exception as e:
             return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}"}
-
-
-def _parse_job_list(job_details: list, limit: int) -> list:
-    """Parse Naukri's jobDetails array into a clean list of job dicts."""
-    jobs = []
-    for job in job_details[:limit]:
-        salary = job.get("salaryDetail", {})
-        sal_min = salary.get("minimumSalary", 0)
-        sal_max = salary.get("maximumSalary", 0)
-        sal_label = salary.get("label", "")
-        salary_str = sal_label if sal_label else (
-            f"{sal_min/100000:.1f}-{sal_max/100000:.1f} LPA" if sal_max else "Not Disclosed"
-        )
-
-        placeholders = job.get("placeholders", [])
-        loc_label = None
-        for ph in placeholders:
-            if ph.get("type") == "location":
-                loc_label = ph.get("label")
-                break
-        if not loc_label and placeholders:
-            loc_label = placeholders[0].get("label")
-
-        jobs.append({
-            "job_id": job.get("jobId"),
-            "title": job.get("title"),
-            "company": job.get("companyName"),
-            "salary": salary_str,
-            "location": loc_label,
-            "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
-            "is_applied": job.get("isApplied", False),
-            "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
-            "job_age": job.get("jobAge"),
-            "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
-            "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
-        })
-    return jobs
 
 
 @mcp.tool()

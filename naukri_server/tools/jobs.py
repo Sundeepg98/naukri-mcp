@@ -3,9 +3,9 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import JOB_DETAIL_API, NAUKRI_BASE, logger
+from naukri_server.config import JOB_DETAIL_API, NAUKRI_BASE, REPORT_FRAUD_API, logger
 from naukri_server.validation import validate_job_detail
 
 
@@ -155,3 +155,31 @@ async def naukri_get_job(job_id_or_url: str) -> dict:
             return _parse_job_detail(details_data, job_id, page_url, captured.get("score"))
         except Exception as e:
             return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}"}
+
+
+@mcp.tool()
+async def naukri_report_fraud_job(job_id: str, reason: str) -> dict:
+    """Report a job posting as fraudulent or suspicious on Naukri.
+
+    Args:
+        job_id: The job ID to report
+        reason: Description of why this job seems fraudulent
+
+    Returns:
+        - {status: "success", job_id, message}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_post(
+            REPORT_FRAUD_API,
+            body={"jobId": job_id, "reason": reason},
+        )
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "message": "Job reported as fraudulent.",
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to report job: {type(e).__name__}: {e}"}

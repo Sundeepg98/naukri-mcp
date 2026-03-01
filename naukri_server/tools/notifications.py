@@ -2,7 +2,7 @@
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API
+from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
 
 
 @mcp.tool()
@@ -120,3 +120,23 @@ async def naukri_mark_all_notifications_read() -> dict:
         }
     except Exception as e:
         return {"status": "error", "message": f"Failed to mark all notifications read: {type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def naukri_get_notification_count() -> dict:
+    """Get the count of unread notifications. Lightweight alternative to fetching the full notification feed.
+
+    Returns:
+        - {status: "success", count: N}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_get(NOTIFICATION_COUNT_API)
+        return {
+            "status": "success",
+            "count": data.get("count", 0),
+        }
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to get notification count: {type(e).__name__}: {e}"}
