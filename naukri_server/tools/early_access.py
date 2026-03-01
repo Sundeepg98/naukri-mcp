@@ -1,8 +1,8 @@
 """Early access tools — pre-posted roles from top companies."""
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError, api_tool
-from naukri_server.config import EARLY_ACCESS_API
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API
 
 
 @mcp.tool()
@@ -49,3 +49,53 @@ async def naukri_get_early_access_roles(page: int = 1, limit: int = 20) -> dict:
         "count": len(roles),
         "roles": roles,
     }
+
+
+@mcp.tool()
+async def naukri_share_interest(job_id: str) -> dict:
+    """Express interest in an early access (pre-posted) role.
+
+    Early access roles are jobs from top companies before they go live.
+    Sharing interest is instant — no screening questions.
+    Get job_ids from naukri_get_early_access_roles.
+
+    Args:
+        job_id: Early access role job ID
+
+    Returns:
+        - {status: "success", job_id, message, quota}
+        - {status: "error", message}
+    """
+    try:
+        data = await api_post(
+            APPLY_WORKFLOW_API,
+            body={
+                "strJobsarr": [str(job_id)],
+                "applySrc": "----F-0-1---",
+                "applytype": "single",
+            },
+        )
+
+        jobs = data.get("jobs", [])
+        if not jobs:
+            return {"status": "error", "message": "No response from apply endpoint."}
+
+        job_result = jobs[0]
+        if job_result.get("status") == 200:
+            quota = data.get("quotaDetails", {})
+            return {
+                "status": "success",
+                "job_id": job_id,
+                "message": job_result.get("message", "Interest shared successfully."),
+                "quota": {
+                    "daily_applied": quota.get("dailyApplied", 0),
+                    "daily_quota": quota.get("dailyQuota", 50),
+                },
+            }
+        else:
+            return {"status": "error", "message": job_result.get("message", f"Failed with status {job_result.get('status')}")}
+
+    except NaukriAPIError as e:
+        return {"status": "error", "message": f"Share interest failed: {e}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Share interest failed: {type(e).__name__}: {e}"}

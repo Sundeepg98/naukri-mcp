@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server v8 (81 tools) — package entry point.
+"""Naukri.com Job Automation MCP Server v9 (86 tools) — package entry point.
 
 Quick Start for AI consumers:
   1. naukri_login / naukri_get_login_status (authenticate first)
@@ -11,6 +11,9 @@ Quick Start for AI consumers:
   8. naukri_research_company / naukri_get_interview_experiences (company intel)
   9. naukri_resume_tailor → naukri_update_profile (optimize profile)
  10. naukri_download_resume (download your resume to disk)
+ 11. naukri_start_mock_interview → naukri_answer_mock_question (AI interview practice)
+ 12. naukri_share_interest (early access roles)
+ 13. naukri_purge_applications (clean up old local tracking data)
 
 For automation: naukri_auto_hunt, naukri_skill_gap_analysis, naukri_batch_apply
 For analytics: naukri_get_application_insights, naukri_analyze_salary_position

@@ -19,8 +19,8 @@ async def naukri_get_job_alerts() -> dict:
 
     Returns:
         - {status: "success", count, alerts: [{alert_id, name, keywords, location,
-          experience, min_ctc, max_ctc, alert_type, function_area_id, role_id,
-          industry_type_id}]}
+          experience, min_ctc, max_ctc, ctc_unit (always "lakhs"), alert_type,
+          function_area_id, role_id, industry_type_id}]}
         - {status: "error", message}
     """
     data = await api_get(JOB_ALERTS_LIST_API)
@@ -33,8 +33,9 @@ async def naukri_get_job_alerts() -> dict:
             "keywords": alert.get("keywords"),
             "location": alert.get("location"),
             "experience": alert.get("experience"),
-            "min_ctc": alert.get("minCTC"),
-            "max_ctc": alert.get("maxCTC"),
+            "min_ctc": round(alert.get("minCTC", 0) / 100000, 2) if alert.get("minCTC") else None,
+            "max_ctc": round(alert.get("maxCTC", 0) / 100000, 2) if alert.get("maxCTC") else None,
+            "ctc_unit": "lakhs",
             "alert_type": alert.get("alertType"),  # "ssa" or "cja"
             "function_area_id": alert.get("functionAreaId"),
             "role_id": alert.get("roleId"),
@@ -68,8 +69,8 @@ async def naukri_create_job_alert(
         keyword: Search keywords (e.g., "python developer")
         location: City filter (e.g., "Bangalore", "Remote")
         experience: Years of experience filter (e.g., 5)
-        min_ctc: Minimum CTC in lakhs (e.g., 15 for 15 LPA)
-        max_ctc: Maximum CTC in lakhs (e.g., 30 for 30 LPA)
+        min_ctc: Minimum CTC in lakhs per annum (e.g., 15 for 15 LPA)
+        max_ctc: Maximum CTC in lakhs per annum (e.g., 30 for 30 LPA)
         function_area_id: Functional area ID (from Naukri taxonomy)
         role_id: Role ID (from Naukri taxonomy)
         industry_type_id: Industry type ID (from Naukri taxonomy)
@@ -134,8 +135,9 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
             "keywords": a.get("keywords", ""),
             "location": a.get("location", ""),
             "experience": a.get("experience"),
-            "min_ctc": a.get("minCTC"),
-            "max_ctc": a.get("maxCTC"),
+            "min_ctc": round(a.get("minCTC", 0) / 100000, 2) if a.get("minCTC") else None,
+            "max_ctc": round(a.get("maxCTC", 0) / 100000, 2) if a.get("maxCTC") else None,
+            "ctc_unit": "lakhs",
             "alert_type": a.get("alertType", ""),
             "function_area_id": a.get("functionAreaId"),
             "role_id": a.get("roleId"),

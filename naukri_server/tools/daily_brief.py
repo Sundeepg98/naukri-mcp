@@ -98,6 +98,7 @@ async def naukri_daily_brief() -> dict:
     }
 
     if errors:
+        brief["status"] = "partial_success"
         brief["errors"] = errors
 
     return brief

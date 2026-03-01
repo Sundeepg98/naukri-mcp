@@ -62,6 +62,7 @@ APPLICATION_STATUS_API = "/cloudgateway-apply/whtma-services/v0/applyapi/v3/hist
 # Inbox & messaging
 INBOX_API = "/cloudgateway-nc-js/nc-services/v0/template/ni-inboxusermails-svc-tmpl_v0"
 MESSAGE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/inbox/users/self/mail"
+INBOX_MARK_INTERESTED_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/inbox/users/self/markInterested"
 
 # Recommended jobs
 RECOMMENDED_JOBS_API = "/jobapi/v2/search/recom-jobs"
@@ -111,6 +112,9 @@ N360_CONFIG_API = "/n360-services/v1/config-n360-pro"
 MOCK_INTERVIEW_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/topics"
 MOCK_INTERVIEW_HISTORY_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/previousInterview"
 MOCK_INTERVIEW_ROLE_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/role"
+MOCK_INTERVIEW_OTHER_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/other-topics"
+MOCK_INTERVIEW_QUESTION_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/question"
+MOCK_INTERVIEW_CONFIG_API = "/n360-services/v1/config-mock-interview"
 
 # Resume & Photo
 RESUME_DOWNLOAD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/resume"

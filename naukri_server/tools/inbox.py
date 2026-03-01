@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
-from naukri_server.config import logger, INBOX_API, MESSAGE_API
+from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API
 
 
 def _strip_html(html: str) -> str:
@@ -168,6 +168,7 @@ async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) ->
         "content": content,
         "date": mail.get("dateTime") or mail.get("date", ""),
         "type": mail.get("messageType") or mail.get("type", ""),
+        "conversation_id": mail.get("conversationId"),
     }
 
 
@@ -205,3 +206,40 @@ async def naukri_accept_nvite(
         tracking_extra={"source": "nvite"},
     )
     return result
+
+
+@mcp.tool()
+async def naukri_mark_interested(
+    mail_id: str,
+    conversation_id: str,
+    interested: bool = True,
+) -> dict:
+    """Mark an inbox message as interested or not interested.
+
+    This signals to recruiters whether you're interested in their opportunity.
+    Get mail_id and conversation_id from naukri_read_message response.
+
+    Args:
+        mail_id: Message ID from inbox
+        conversation_id: Conversation ID from message details
+        interested: True to mark interested, False for not interested
+
+    Returns:
+        - {status: "success", mail_id, interested}
+        - {status: "error", message}
+    """
+    try:
+        await api_post(
+            INBOX_MARK_INTERESTED_API,
+            body={
+                "mailId": str(mail_id),
+                "conversationId": str(conversation_id),
+                "interested": interested,
+            },
+        )
+        action = "interested" if interested else "not interested"
+        return {"status": "success", "mail_id": mail_id, "interested": interested, "message": f"Marked as {action}."}
+    except NaukriAPIError as e:
+        return {"status": "error", "message": f"Mark interested failed: {e}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}"}

@@ -15,7 +15,7 @@ SKILL_ALIASES: dict[str, set[str]] = {
     "java": {"core java", "java8", "java11", "java17"},
     "c#": {"csharp", "c sharp"},
     "c++": {"cpp", "cplusplus"},
-    "golang": {"go lang"},
+    "golang": {"go lang", "go"},
     "ruby": {"rb"},
     "rust": {"rustlang"},
     "react": {"reactjs", "react.js", "react js"},
@@ -67,6 +67,13 @@ SKILL_ALIASES: dict[str, set[str]] = {
     "apache spark": {"spark", "pyspark"},
     "hadoop": {"hdfs", "mapreduce"},
     "snowflake": {"snowflake db"},
+    "nestjs": {"nest", "nest.js", "nest js"},
+    "react native": {"reactnative", "react-native"},
+    "maven": {"apache maven"},
+    "gradle": {"gradle build"},
+    "pytest": {"py.test"},
+    "junit": {"junit5", "junit4"},
+    "k3s": {"k3"},
 }
 
 # Reverse lookup built once at import time
@@ -141,13 +148,13 @@ def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
         return 0
     # Parse profile CTC to float if string
     if isinstance(profile_expected_ctc, str):
-        ctc_nums = re.findall(r'([\d.]+)', profile_expected_ctc)
+        ctc_nums = re.findall(r'(\d+(?:\.\d+)?)', profile_expected_ctc)
         if not ctc_nums:
             return 0
         profile_expected_ctc = float(ctc_nums[0])
     elif not isinstance(profile_expected_ctc, (int, float)):
         return 0
-    nums = re.findall(r'([\d.]+)', job_salary)
+    nums = re.findall(r'(\d+(?:\.\d+)?)', job_salary)
     if len(nums) < 2:
         return 0
     try:

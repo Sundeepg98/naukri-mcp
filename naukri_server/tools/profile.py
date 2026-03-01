@@ -12,6 +12,7 @@ import time as _time
 # --- Profile TTL cache (30s) for composite tools ---
 _profile_cache: dict = {}
 _PROFILE_TTL = 30  # seconds
+_profile_lock = asyncio.Lock()
 
 
 async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
@@ -23,11 +24,16 @@ async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
     now = _time.monotonic()
     if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
         return _profile_cache["data"]
-    result = await naukri_get_profile()
-    if isinstance(result, dict) and result.get("status") != "error":
-        _profile_cache["data"] = result
-        _profile_cache["ts"] = now
-    return result
+    async with _profile_lock:
+        # Double-check after acquiring lock (another caller may have fetched)
+        now = _time.monotonic()
+        if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
+            return _profile_cache["data"]
+        result = await naukri_get_profile()
+        if isinstance(result, dict) and result.get("status") != "error":
+            _profile_cache["data"] = result
+            _profile_cache["ts"] = now
+        return result
 
 
 # ============================================================================
@@ -71,6 +77,7 @@ async def naukri_boost_visibility(randomize: bool = False) -> dict:
                     try:
                         endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
                         await api_post(endpoint, {"resumeHeadline": headline})
+                        _profile_cache.clear()
                         return {
                             "status": "refreshed",
                             "method": f"rest_api_{version}",
@@ -147,6 +154,7 @@ async def naukri_boost_visibility(randomize: bool = False) -> dict:
             finally:
                 page.remove_listener("response", on_response)
 
+            _profile_cache.clear()
             return {
                 "status": "refreshed",
                 "method": f"browser_{edit_clicked}",
@@ -935,6 +943,7 @@ async def naukri_update_profile(
             finally:
                 page.remove_listener("response", on_response)
 
+            _profile_cache.clear()
             return {
                 "status": "updated",
                 "method": "browser_ui",

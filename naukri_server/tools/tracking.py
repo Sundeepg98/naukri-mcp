@@ -319,3 +319,49 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
         "field_breakdown": data.get("relevantFieldMatch"),
         "user_details": data.get("userDetails"),
     }
+
+
+@mcp.tool()
+async def naukri_purge_applications(
+    before_date: str,
+    dry_run: bool = True,
+) -> dict:
+    """Delete old applications from local tracking before a given date.
+
+    This only affects the local tracking file — it does NOT withdraw applications on Naukri.
+    Use dry_run=True (default) to preview what would be deleted.
+
+    Args:
+        before_date: ISO date (YYYY-MM-DD). Delete applications applied before this date.
+        dry_run: If True (default), only preview — don't actually delete.
+
+    Returns:
+        - {status: "success", purged_count, remaining_count, dry_run, sample_purged}
+        - {status: "error", message}
+    """
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+        if not apps:
+            return {"status": "success", "purged_count": 0, "remaining_count": 0, "dry_run": dry_run, "sample_purged": []}
+
+        keep = []
+        purge = []
+        for a in apps:
+            applied_at = (a.get("applied_at") or a.get("appliedDate") or "")[:10]
+            if applied_at and applied_at < before_date:
+                purge.append(a)
+            else:
+                keep.append(a)
+
+        if not dry_run and purge:
+            _save_json(APPLICATIONS_FILE, keep)
+
+        sample = [{"job_id": a.get("job_id"), "title": a.get("title"), "applied_at": a.get("applied_at", "")[:10]} for a in purge[:5]]
+
+        return {
+            "status": "success",
+            "purged_count": len(purge),
+            "remaining_count": len(keep),
+            "dry_run": dry_run,
+            "sample_purged": sample,
+        }
