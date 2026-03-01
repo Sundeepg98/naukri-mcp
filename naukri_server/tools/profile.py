@@ -176,6 +176,7 @@ async def naukri_get_profile() -> dict:
             employment.append({
                 "designation": emp.get("designation"),
                 "organization": emp.get("organization"),
+                "description": emp.get("description"),
                 "start_date": emp.get("startDate"),
                 "end_date": emp.get("endDate") or "Present",
             })
@@ -194,6 +195,7 @@ async def naukri_get_profile() -> dict:
         result = {
             "status": "success",
             "name": profile.get("name"),
+            "resume_headline": profile.get("resumeHeadline"),
             "current_ctc": profile.get("absoluteCtc"),
             "expected_ctc": profile.get("absoluteExpectedCtc"),
             "notice_period": profile.get("noticePeriod", {}).get("value"),

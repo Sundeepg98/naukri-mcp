@@ -69,7 +69,7 @@ async def naukri_skill_gap_analysis(
     missing_jobs = {}  # skill -> list of job titles where it's missing
 
     for job in jobs:
-        job_skills = set(s.lower() for s in (job.get("skills") or []))
+        job_skills = set(s.lower() for s in (job.get("tags") or job.get("skills") or []))
         if not job_skills:
             continue
 

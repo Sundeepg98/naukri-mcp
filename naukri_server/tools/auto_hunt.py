@@ -70,7 +70,7 @@ async def naukri_auto_hunt(
     # Score each job
     ranked = []
     for job in jobs:
-        job_skills = set(s.lower() for s in (job.get("skills") or []))
+        job_skills = set(s.lower() for s in (job.get("tags") or job.get("skills") or []))
         fit = compute_fit_score(
             job_skills, profile_skills,
             job.get("experience", ""),

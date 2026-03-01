@@ -140,7 +140,7 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     for emp in employment:
         emp_desc = emp.get("description", "") or ""
         emp_designation = emp.get("designation", "") or ""
-        emp_company = emp.get("company", "") or ""
+        emp_company = emp.get("organization", "") or ""
         emp_keywords = _extract_keywords(emp_desc)
         overlap = job_keywords & emp_keywords
         if overlap and len(overlap) >= 3:
