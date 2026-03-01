@@ -1,32 +1,38 @@
-"""Naukri.com Job Automation MCP Server v10 (73 tools) — package entry point.
+"""Naukri.com Job Automation MCP Server — Tier 13 (49 tools)
 
 Quick Start for AI consumers:
-  1. naukri_login / naukri_get_login_status (authenticate first)
-  2. naukri_daily_brief (morning dashboard — 11 checks including stale detection + reminders)
-  3. naukri_auto_hunt (one-call job hunting with fit scoring)
-  4. naukri_smart_apply (fit assessment) → naukri_apply (apply)
-  5. naukri_compare_jobs (side-by-side comparison with fit scores)
-  6. naukri_inbox(action="accept_nvite") (respond to recruiter NVites)
-  7. naukri_sync(entity="applications") → naukri_get_stale_applications (track + detect stale)
-  8. naukri_reminders(action="list|set") (follow-up scheduling)
-  9. naukri_research_company / naukri_company_intel (company intel)
- 10. naukri_resume_tailor → naukri_update_profile (optimize profile)
- 11. naukri_profile_media(media_type="resume", action="download") (download your resume)
+  1. naukri_login / naukri_get_login_status → authenticate first
+  2. naukri_daily_brief → morning dashboard (inbox, notifications, recommendations, activity)
+  3. naukri_search_jobs / naukri_get_recommendations → find jobs
+  4. naukri_smart_apply(job_id) → fit assessment before applying
+  5. naukri_apply / naukri_batch_apply → apply to jobs
+  6. naukri_compare_jobs([id1, id2]) → side-by-side comparison
+  7. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages
+  8. naukri_sync(entity="applications|saved_jobs") → sync tracking data
+  9. naukri_get_applications / naukri_saved_jobs(action="list|save|unsave") → track
+  10. naukri_research_company / naukri_company_intel(intel_type="salary|reviews|interviews") → company intel
+  11. naukri_profile(action="get|update|audit|boost") → profile management
+  12. naukri_get_dashboard → profile analytics
 
-Consolidated tools (use action/intel_type parameter):
+Consolidated tools (action-parameter pattern):
+  - naukri_profile(action="get|update|audit|boost")
   - naukri_inbox(action="list|read|mark_interested|accept_nvite")
-  - naukri_notifications(action="list|count|mark_read|mark_all_read")
-  - naukri_job_alerts(action="list|detail|create|update|delete")
+  - naukri_performance(metric="impressions|recruiter_activity|activity_level")
+  - naukri_mock_interview(action="topics|history|start|answer")
+  - naukri_company_intel(company, intel_type="salary|reviews|interviews")
+  - naukri_saved_jobs(action="list|save|unsave")
+  - naukri_early_access(action="list|share")
+  - naukri_profile_media(media_type="resume|photo", action="info|upload|download|delete")
   - naukri_insights(insight_type="applications|salary|cached_answers")
-  - naukri_profile_media(media_type="resume|photo", action="info|download|upload|delete")
-  - naukri_settings(action="get|update|blocked_companies|check_email")
-  - naukri_company_intel(intel_type="salary|reviews|interviews")
+  - naukri_company_follow(action="status|follow|unfollow")
   - naukri_reminders(action="list|set")
   - naukri_sync(entity="applications|saved_jobs")
+  - naukri_resume_builder(action="templates|status")
+  - naukri_assessments(action="list|completeness")
+  - naukri_notifications(action="list|count|mark_read|mark_all_read")
+  - naukri_settings(action="get|update|blocked_companies|check_email")
+  - naukri_job_alerts(action="list|detail|create|update|delete")
 
-For automation: naukri_auto_hunt, naukri_skill_gap_analysis, naukri_batch_apply
-For analytics: naukri_insights(insight_type="applications|salary")
-For export: naukri_export_data (JSON/CSV)
 For debugging: naukri_health_check, naukri_debug_browser/api/discovery
 """
 
