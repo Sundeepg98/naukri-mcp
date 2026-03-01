@@ -290,7 +290,7 @@ async def naukri_update_profile(
     Args:
         fields: Dict of fields to update. Currently supported:
             - resumeHeadline: str — your profile headline
-            - keySkills: str — comma-separated skills
+            - keySkills: str — comma-separated full skill set (replaces current skills, 250 char limit)
             Other fields in UPDATABLE_FIELDS are accepted but may not persist.
         notice_period: Notice period — "Serving Notice Period", "15 Days or less",
             "1 Month", "2 Months", "3 Months", "More than 3 Months"
@@ -426,40 +426,183 @@ async def naukri_update_profile(
 
                     await asyncio.sleep(2)
 
-                    # Find the skills input and update
-                    skills_input = await page.query_selector(
-                        '[class*="modal"] input[type="text"], [class*="dialog"] input, '
-                        '[role="dialog"] input[type="text"], input[class*="skill"]'
-                    )
-                    if skills_input:
-                        await skills_input.click()
-                        await skills_input.fill("")
-                        await skills_input.fill(fields["keySkills"])
-                        await asyncio.sleep(0.5)
-                        ui_updated.append("keySkills")
-                    else:
-                        return {"status": "error", "message": "Skills edit opened but input not found"}
-
-                    # Click save
-                    save_result = await page.evaluate("""() => {
-                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-                        if (modal) {
-                            const btn = Array.from(modal.querySelectorAll('button')).find(
-                                b => b.textContent.trim().toLowerCase() === 'save'
-                            );
-                            if (btn) { btn.click(); return 'modal_save'; }
+                    # Dismiss any chat/notification overlays blocking interaction
+                    await page.evaluate("""() => {
+                        for (const sel of ['.ltLayer', '.ltCont', '[class*="chatWidget"]',
+                                           '[class*="ChatWidget"]', '[class*="livechat"]']) {
+                            const el = document.querySelector(sel);
+                            if (el) el.style.display = 'none';
                         }
-                        const exactSave = Array.from(document.querySelectorAll('button')).find(
-                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
-                        );
-                        if (exactSave) { exactSave.click(); return 'exact_save'; }
-                        return null;
+                    }""")
+                    await asyncio.sleep(0.5)
+
+                    # Read current skills from the hidden #chipsVal input
+                    current_skills_str = await page.evaluate("""() => {
+                        const hidden = document.querySelector('#chipsVal');
+                        return hidden ? hidden.value : '';
+                    }""")
+                    current_skills = [s.strip() for s in (current_skills_str or "").split(",") if s.strip()]
+                    current_lower = {s.lower(): s for s in current_skills}
+
+                    # Parse desired skills (full replacement set)
+                    desired_skills = [s.strip() for s in fields["keySkills"].split(",") if s.strip()]
+                    desired_lower = {s.lower(): s for s in desired_skills}
+
+                    # Validate 250 character limit before doing anything
+                    new_csv = ",".join(desired_skills)
+                    if len(new_csv) > 250:
+                        # Cancel the editor
+                        await page.evaluate("""() => {
+                            const lb = document.querySelector('.keySkillsEdit');
+                            if (lb) {
+                                const cancel = lb.querySelector('a');
+                                if (cancel && cancel.textContent.trim() === 'Cancel') cancel.click();
+                            }
+                        }""")
+                        return {
+                            "status": "error",
+                            "message": f"keySkills total length is {len(new_csv)} chars, exceeds 250 char limit. "
+                                       f"Reduce skills or shorten names. Current CSV: {new_csv}",
+                        }
+
+                    # Determine removals and additions
+                    to_remove = [current_lower[k] for k in current_lower if k not in desired_lower]
+                    to_add = [desired_lower[k] for k in desired_lower if k not in current_lower]
+
+                    logger.info(f"Skills update: current={current_skills}, desired={desired_skills}, "
+                                f"removing={to_remove}, adding={to_add}")
+
+                    # Remove skills: click the X on each chip to remove
+                    for skill in to_remove:
+                        removed = await page.evaluate("""(skillName) => {
+                            const container = document.querySelector('.chipsContainer');
+                            if (!container) return 'no_container';
+                            const chips = container.querySelectorAll('.chip');
+                            for (const chip of chips) {
+                                const txt = chip.querySelector('span.tagTxt');
+                                if (txt && txt.textContent.trim().toLowerCase() === skillName.toLowerCase()) {
+                                    const closeBtn = chip.querySelector('a.close');
+                                    if (closeBtn) { closeBtn.click(); return 'removed'; }
+                                }
+                            }
+                            return 'not_found';
+                        }""", skill)
+                        logger.info(f"Remove skill '{skill}': {removed}")
+                        await asyncio.sleep(0.3)
+
+                    # Add skills: create chip DOM elements and update #chipsVal
+                    if to_add:
+                        add_result = await page.evaluate("""(newSkills) => {
+                            const container = document.querySelector('.chipsContainer');
+                            if (!container) return 'no_container';
+                            const hiddenInput = document.querySelector('#chipsVal');
+                            if (!hiddenInput) return 'no_hidden_input';
+
+                            // Add chip DOM elements for each new skill
+                            for (const skill of newSkills) {
+                                const chip = document.createElement('div');
+                                chip.className = 'waves-effect chip';
+                                const dataId = skill + '_' + skill.toLowerCase().replace(/\\s+/g, '_');
+                                chip.setAttribute('data-id', dataId);
+                                chip.setAttribute('title', skill);
+
+                                const span = document.createElement('span');
+                                span.className = 'tagTxt';
+                                span.textContent = skill;
+                                chip.appendChild(span);
+
+                                const closeLink = document.createElement('a');
+                                closeLink.className = 'material-icons close';
+                                closeLink.href = 'javascript:void(0)';
+                                closeLink.textContent = 'Cross';
+                                chip.appendChild(closeLink);
+
+                                // Insert before the input wrapper
+                                const inputWrap = container.querySelector('.input-wrap, .inputWrap, [class*="input"]');
+                                if (inputWrap) {
+                                    container.insertBefore(chip, inputWrap);
+                                } else {
+                                    container.appendChild(chip);
+                                }
+                            }
+
+                            // Read current chips from DOM to rebuild the CSV
+                            const allChips = container.querySelectorAll('.chip span.tagTxt');
+                            const allSkills = [];
+                            for (const c of allChips) {
+                                const t = c.textContent.trim();
+                                if (t) allSkills.push(t);
+                            }
+                            const newValue = allSkills.join(',');
+
+                            // Use native setter to trigger React change detection
+                            const nativeSetter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            ).set;
+                            nativeSetter.call(hiddenInput, newValue);
+                            hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+                            hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+                            return 'added_' + newSkills.length;
+                        }""", to_add)
+                        logger.info(f"Add skills result: {add_result}")
+                    else:
+                        # Even if no additions, update #chipsVal to reflect removals
+                        if to_remove:
+                            await page.evaluate("""(newCsv) => {
+                                const hiddenInput = document.querySelector('#chipsVal');
+                                if (!hiddenInput) return;
+                                const nativeSetter = Object.getOwnPropertyDescriptor(
+                                    window.HTMLInputElement.prototype, 'value'
+                                ).set;
+                                nativeSetter.call(hiddenInput, newCsv);
+                                hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            }""", new_csv)
+
+                    # Set form chk attribute to "true" so save is accepted
+                    await page.evaluate("""() => {
+                        const form = document.querySelector('form[name="keySkillsForm"]');
+                        if (form) form.setAttribute('chk', 'true');
                     }""")
 
-                    if not save_result:
-                        return {"status": "error", "message": "Skills edit opened but Save button not found"}
+                    if to_remove or to_add:
+                        ui_updated.append("keySkills")
+
+                    # Click Save inside the .keySkillsEdit lightbox
+                    save_result = await page.evaluate("""() => {
+                        const lightbox = document.querySelector('.keySkillsEdit');
+                        if (!lightbox) return 'no_lightbox';
+                        const btns = lightbox.querySelectorAll('button');
+                        for (const btn of btns) {
+                            if (btn.textContent.trim() === 'Save') {
+                                btn.click();
+                                return 'save_clicked';
+                            }
+                        }
+                        return 'no_save_button';
+                    }""")
+
+                    if save_result != "save_clicked":
+                        return {"status": "error", "message": f"Skills updated in DOM but Save failed: {save_result}"}
 
                     await asyncio.sleep(3)
+
+                    # Verify: check if the editor closed (success) or validation error appeared
+                    post_save = await page.evaluate("""() => {
+                        const lightbox = document.querySelector('.keySkillsEdit');
+                        if (!lightbox) return 'closed';
+                        const style = window.getComputedStyle(lightbox);
+                        if (style.display === 'none') return 'closed';
+                        // Check for validation error message
+                        const errEl = lightbox.querySelector('.error, .errorMsg, [class*="error"]');
+                        if (errEl && errEl.textContent.trim()) return 'error: ' + errEl.textContent.trim();
+                        return 'still_open';
+                    }""")
+                    logger.info(f"Skills save post-check: {post_save}")
+
+                    if post_save.startswith("error:"):
+                        return {"status": "error", "message": f"Skills save validation failed: {post_save}"}
 
                 # --- Notice Period / Expected CTC / Current CTC (Career Profile section) ---
                 # These three fields share the same "Career profile" edit modal on Naukri.
