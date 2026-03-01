@@ -17,6 +17,8 @@ from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICA
 
 async def _application_insights(days: int = 30) -> dict:
     """Analyze application history for patterns and insights."""
+    if days < 1:
+        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
@@ -128,24 +130,24 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
 
     elif action == "update":
         if not key or new_answer is None:
-            return {"status": "error", "message": "update requires key and new_answer."}
+            return {"status": "error", "message": "update requires key and new_answer.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.cache import update_cached_answer
         updated = await update_cached_answer(key, new_answer)
         if updated:
             return {"status": "success", "key": key, "new_answer": new_answer, "message": f"Answer updated."}
-        return {"status": "error", "message": f"Key '{key}' not found in cache."}
+        return {"status": "error", "message": f"Key '{key}' not found in cache.", "error_code": "NOT_FOUND"}
 
     elif action == "delete":
         if not key:
-            return {"status": "error", "message": "delete requires key."}
+            return {"status": "error", "message": "delete requires key.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.cache import delete_cached_answer
         deleted = await delete_cached_answer(key)
         if deleted:
             return {"status": "success", "key": key, "message": f"Cached answer '{key}' deleted."}
-        return {"status": "error", "message": f"Key '{key}' not found in cache."}
+        return {"status": "error", "message": f"Key '{key}' not found in cache.", "error_code": "NOT_FOUND"}
 
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, update, delete"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, update, delete", "error_code": "VALIDATION_ERROR"}
 
 
 def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
@@ -281,22 +283,22 @@ async def naukri_insights(
         try:
             return await _application_insights(days=days)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to analyze applications: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to analyze applications: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── salary ────────────────────────────────────────────────────────
     elif insight_type == "salary":
         try:
             return await _salary_position(designation=designation)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to analyze salary position: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to analyze salary position: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── cached_answers ────────────────────────────────────────────────
     elif insight_type == "cached_answers":
         try:
             return await _cached_answers(action=action or "list", key=key, new_answer=new_answer)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to manage cached answers: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to manage cached answers: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers", "error_code": "API_ERROR"}

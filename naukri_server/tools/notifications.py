@@ -14,6 +14,9 @@ from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_REA
 
 async def _fetch_notifications(limit: int = 20, page: int = 1) -> dict:
     """Fetch notifications from the API and return structured result."""
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_get(NOTIFICATION_FEED_API, params={
         "page": str(page),
         "limit": str(limit),
@@ -94,9 +97,9 @@ async def naukri_notifications(
         try:
             return await _fetch_notifications(limit=limit, page=page)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get notifications failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get notifications failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── count ──────────────────────────────────────────────────────────
     elif action == "count":
@@ -107,20 +110,20 @@ async def naukri_notifications(
                 "count": data.get("count", 0),
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get notification count failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get notification count failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── mark_read ──────────────────────────────────────────────────────
     elif action == "mark_read":
         if not notification_id or not date:
-            return {"status": "error", "message": "mark_read requires notification_id and date."}
+            return {"status": "error", "message": "mark_read requires notification_id and date.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _mark_single_read(notification_id, date)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Mark notification read failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Mark notification read failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── mark_all_read ──────────────────────────────────────────────────
     elif action == "mark_all_read":
@@ -174,10 +177,10 @@ async def naukri_notifications(
                 "errors": all_errors if all_errors else None,
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Mark all notifications read failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Mark all notifications read failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read", "error_code": "VALIDATION_ERROR"}

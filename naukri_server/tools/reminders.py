@@ -55,7 +55,7 @@ async def _set_reminder(
 ) -> dict:
     """Set a follow-up reminder for a job application."""
     if days < 1 or days > 365:
-        return {"status": "error", "message": "days must be between 1 and 365"}
+        return {"status": "error", "message": "days must be between 1 and 365", "error_code": "VALIDATION_ERROR"}
 
     now = datetime.now(timezone.utc)
     remind_at = (now + timedelta(days=days)).isoformat()
@@ -188,17 +188,17 @@ async def naukri_reminders(
         try:
             return await _list_reminders(include_past=include_past)
         except Exception as e:
-            return {"status": "error", "message": f"List reminders failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"List reminders failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- set ----------------------------------------------------------------
     elif action == "set":
         if not job_id:
-            return {"status": "error", "message": "set requires job_id."}
+            return {"status": "error", "message": "set requires job_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company)
         except Exception as e:
-            return {"status": "error", "message": f"Set reminder failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Set reminder failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- unknown action -----------------------------------------------------
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, set"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, set", "error_code": "VALIDATION_ERROR"}

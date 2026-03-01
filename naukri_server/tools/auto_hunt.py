@@ -46,6 +46,10 @@ async def naukri_auto_hunt(
            missing_skills, recommendation}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if not 0 <= min_fit_score <= 100:
+        return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
+
     from naukri_server.tools.search import naukri_search_jobs
     from naukri_server.tools.profile import get_cached_profile
 
@@ -62,11 +66,11 @@ async def naukri_auto_hunt(
 
     if isinstance(search_result, Exception) or search_result.get("status") == "error":
         msg = str(search_result) if isinstance(search_result, Exception) else search_result.get("message")
-        return {"status": "error", "message": f"Search failed: {msg}"}
+        return {"status": "error", "message": f"Search failed: {msg}", "error_code": "API_ERROR"}
 
     if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Profile fetch failed: {msg}"}
+        return {"status": "error", "message": f"Profile fetch failed: {msg}", "error_code": "API_ERROR"}
 
     jobs = search_result.get("jobs", [])
     if not jobs:

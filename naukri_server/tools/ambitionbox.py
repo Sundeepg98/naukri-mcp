@@ -219,7 +219,7 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
 
             # Check for 404 / invalid page
             if "404" in (await page.title() or ""):
-                return {"status": "error", "message": f"Page not found for company slug '{company_slug}'."}
+                return {"status": "error", "message": f"Page not found for company slug '{company_slug}'.", "error_code": "NOT_FOUND"}
 
             # Extract __NEXT_DATA__
             next_data = await _extract_next_data(page)
@@ -239,6 +239,7 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 return {
                     "status": "error",
                     "message": "Could not extract salary data from the page.",
+                    "error_code": "BROWSER_ERROR",
                 }
 
             page_props = next_data.get("props", {}).get("pageProps", {})
@@ -246,6 +247,7 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 return {
                     "status": "error",
                     "message": "pageProps is empty — the company slug may be invalid or the page didn't load correctly.",
+                    "error_code": "BROWSER_ERROR",
                 }
 
             # Extract company info — check multiple possible keys
@@ -413,11 +415,14 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
             return {
                 "status": "error",
                 "message": f"Failed to get salary data: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
             }
 
 
 async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
     """Fetch employee reviews for a company from AmbitionBox."""
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     async with browser.page_pool.acquire() as tab:
         try:
             company_slug = _ensure_slug(company_slug)
@@ -428,7 +433,7 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
 
             # Check for 404 / invalid page
             if "404" in (await tab.title() or ""):
-                return {"status": "error", "message": f"Page not found for company slug '{company_slug}'."}
+                return {"status": "error", "message": f"Page not found for company slug '{company_slug}'.", "error_code": "NOT_FOUND"}
 
             # Extract __NEXT_DATA__
             next_data = await _extract_next_data(tab)
@@ -436,6 +441,7 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                 return {
                     "status": "error",
                     "message": "Could not extract review data from the page.",
+                    "error_code": "BROWSER_ERROR",
                 }
 
             page_props = next_data.get("props", {}).get("pageProps", {})
@@ -443,6 +449,7 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                 return {
                     "status": "error",
                     "message": "pageProps is empty — the company slug may be invalid or the page didn't load correctly.",
+                    "error_code": "BROWSER_ERROR",
                 }
 
             # Extract company info — actual keys: companyName, companyHeaderData
@@ -548,11 +555,14 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
             return {
                 "status": "error",
                 "message": f"Failed to get reviews: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
             }
 
 
 async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
     """Fetch interview experiences for a company from AmbitionBox."""
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     company_slug = _ensure_slug(company_slug)
     url = f"{AMBITIONBOX_BASE}/interviews/{company_slug}-interview-questions"
     if page > 1:
@@ -563,7 +573,7 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
             await page_goto(pg, url, wait="networkidle")
 
             if "404" in (await pg.title() or ""):
-                return {"status": "error", "message": f"No interview data for '{company_slug}'."}
+                return {"status": "error", "message": f"No interview data for '{company_slug}'.", "error_code": "BROWSER_ERROR"}
 
             next_data = await _extract_next_data(pg)
             if not next_data:
@@ -586,7 +596,7 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
                     }
                     return result
 
-                return {"status": "error", "message": "Could not extract interview data (no __NEXT_DATA__ and DOM scraping yielded no results)."}
+                return {"status": "error", "message": "Could not extract interview data (no __NEXT_DATA__ and DOM scraping yielded no results).", "error_code": "NOT_FOUND"}
 
             page_props = next_data.get("props", {}).get("pageProps", {})
 
@@ -663,7 +673,7 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
             return result
 
         except Exception as e:
-            return {"status": "error", "message": f"Interview experiences failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Interview experiences failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +708,7 @@ async def naukri_company_intel(
         return {
             "status": "error",
             "message": f"Unknown intel_type '{intel_type}'. Use: {', '.join(_VALID_INTEL_TYPES)}",
+            "error_code": "VALIDATION_ERROR",
         }
 
     slug = _ensure_slug(company)
@@ -862,6 +873,7 @@ async def naukri_get_company_slug(group_id: str) -> dict:
             return {
                 "status": "error",
                 "message": f"Could not determine AmbitionBox slug for group_id '{group_id}'. The company page may not have AmbitionBox integration.",
+                "error_code": "NOT_FOUND",
             }
 
         except Exception as e:
@@ -869,6 +881,7 @@ async def naukri_get_company_slug(group_id: str) -> dict:
             return {
                 "status": "error",
                 "message": f"Failed to get company slug: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
             }
 
 

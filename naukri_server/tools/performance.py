@@ -41,6 +41,8 @@ async def _get_recruiter_activity(
     filter_by: Optional[str] = None,
 ) -> dict:
     """Fetch recruiter activity from the API and return structured result."""
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     # Validate filter_by
     if filter_by is not None:
         filter_by = filter_by.upper()
@@ -48,6 +50,7 @@ async def _get_recruiter_activity(
             return {
                 "status": "error",
                 "message": f"Invalid filter_by '{filter_by}'. Must be one of: {', '.join(sorted(ACTIVITY_FILTERS))}",
+                "error_code": "VALIDATION_ERROR",
             }
 
     # POST body format discovered via JS bundle analysis of profilePerformance page:
@@ -157,32 +160,32 @@ async def naukri_performance(
     # ── impressions ───────────────────────────────────────────────────
     if metric == "impressions":
         if days not in VALID_DAYS:
-            return {"status": "error", "message": f"Invalid days={days}. Must be one of: {', '.join(str(d) for d in sorted(VALID_DAYS))}"}
+            return {"status": "error", "message": f"Invalid days={days}. Must be one of: {', '.join(str(d) for d in sorted(VALID_DAYS))}", "error_code": "VALIDATION_ERROR"}
         try:
             return await _get_search_impressions(days=days)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get search impressions failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get search impressions failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── recruiter_activity ────────────────────────────────────────────
     elif metric == "recruiter_activity":
         try:
             return await _get_recruiter_activity(page=page, size=size, filter_by=filter_by)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get recruiter activity failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get recruiter activity failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── activity_level ────────────────────────────────────────────────
     elif metric == "activity_level":
         try:
             return await _get_activity_level()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get activity level failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get activity level failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown metric ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level"}
+        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level", "error_code": "API_ERROR"}

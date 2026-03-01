@@ -13,6 +13,9 @@ from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API
 
 async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
     """Fetch early access roles from the API and return structured result."""
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_get(
         EARLY_ACCESS_API,
         params={"pageNo": str(page), "noOfResults": str(limit)},
@@ -35,11 +38,13 @@ async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
             "url": j.get("jdURL", j.get("url", "")),
         })
 
+    total = data.get("noOfJobs", data.get("totalJobs", len(roles)))
     return {
         "status": "success",
-        "page": page,
-        "total": data.get("noOfJobs", data.get("totalJobs", len(roles))),
+        "total": total,
         "count": len(roles),
+        "page": page,
+        "has_more": (page * limit) < total,
         "roles": roles,
     }
 
@@ -57,7 +62,7 @@ async def _share_interest(job_id: str) -> dict:
 
     jobs = data.get("jobs", [])
     if not jobs:
-        return {"status": "error", "message": "No response from apply endpoint."}
+        return {"status": "error", "message": "No response from apply endpoint.", "error_code": "API_ERROR"}
 
     job_result = jobs[0]
     if job_result.get("status") == 200:
@@ -72,7 +77,7 @@ async def _share_interest(job_id: str) -> dict:
             },
         }
     else:
-        return {"status": "error", "message": job_result.get("message", f"Failed with status {job_result.get('status')}")}
+        return {"status": "error", "message": job_result.get("message", f"Failed with status {job_result.get('status')}"), "error_code": "API_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +107,7 @@ async def naukri_early_access(
         limit: Max roles for list action (default 20)
 
     Returns:
-        - list: {status, page, total, count, roles: [{job_id, title, company_hint, location, experience, salary, job_type, tags, url}]}
+        - list: {status, total, count, page, has_more, roles: [{job_id, title, company_hint, location, experience, salary, job_type, tags, url}]}
         - share: {status, job_id, message, quota}
         - {status: "error", message} on failure
     """
@@ -111,21 +116,21 @@ async def naukri_early_access(
         try:
             return await _list_early_access_roles(page=page, limit=limit)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get early access roles failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get early access roles failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── share ──────────────────────────────────────────────────────────
     elif action == "share":
         if not job_id:
-            return {"status": "error", "message": "share requires job_id."}
+            return {"status": "error", "message": "share requires job_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _share_interest(job_id)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Share interest failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Share interest failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, share"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, share", "error_code": "VALIDATION_ERROR"}

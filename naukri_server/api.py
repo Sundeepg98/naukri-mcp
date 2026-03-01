@@ -50,10 +50,11 @@ def api_tool(context: str = None):
             try:
                 return await func(*args, **kwargs)
             except NaukriAPIError as e:
-                return {"status": "error", "message": str(e), "http_status": e.status}
+                error_code = "AUTH_ERROR" if e.status == 401 else "API_ERROR"
+                return {"status": "error", "message": str(e), "http_status": e.status, "error_code": error_code}
             except Exception as e:
                 label = context or func.__name__.replace("naukri_", "").replace("_", " ").title()
-                return {"status": "error", "message": f"{label} failed: {type(e).__name__}: {e}"}
+                return {"status": "error", "message": f"{label} failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
         return wrapper
     return decorator
 

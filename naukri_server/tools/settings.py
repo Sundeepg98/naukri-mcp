@@ -94,9 +94,9 @@ async def naukri_settings(
                 "settings": settings,
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get settings failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get settings failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "update":
         updated_fields = []
@@ -110,6 +110,7 @@ async def naukri_settings(
                     "status": "error",
                     "message": f"Invalid job_search_status '{job_search_status}'. "
                                f"Valid: {', '.join(_JOB_SEARCH_RADIO.keys())}",
+                    "error_code": "VALIDATION_ERROR",
                 }
             radio_id = _JOB_SEARCH_RADIO[key]
             try:
@@ -118,7 +119,7 @@ async def naukri_settings(
                     await asyncio.sleep(3)
 
                     if "/nlogin" in page.url:
-                        return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                        return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
                     # Capture settings API calls triggered by the radio click
                     captured = {}
@@ -140,7 +141,7 @@ async def naukri_settings(
                         }""", radio_id)
 
                         if not clicked:
-                            return {"status": "error", "message": f"Radio button #{radio_id} not found on settings page"}
+                            return {"status": "error", "message": f"Radio button #{radio_id} not found on settings page", "error_code": "NOT_FOUND"}
 
                         await asyncio.sleep(2)
 
@@ -190,6 +191,7 @@ async def naukri_settings(
                         "status": "error",
                         "message": f"Invalid recommended_job_frequency '{recommended_job_frequency}'. "
                                    f"Valid: {', '.join(RECOMMENDED_JOB_FREQUENCY.keys())}",
+                        "error_code": "VALIDATION_ERROR",
                     }
                 body["recommendedJob"] = RECOMMENDED_JOB_FREQUENCY[key]
                 updated_fields.append(f"recommendedJob={key}")
@@ -212,7 +214,7 @@ async def naukri_settings(
                     result = {"status": "success", "updated_fields": updated_fields}
                     result.update(jss_result)
                     return result
-                return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
+                return {"status": "error", "message": "No settings provided. Pass at least one parameter.", "error_code": "VALIDATION_ERROR"}
 
             # GET current formatted settings, extract {settingId: numericValue} pairs,
             # merge user changes, POST complete settings.
@@ -241,9 +243,9 @@ async def naukri_settings(
                 result.update(jss_result)
             return result
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to update settings: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to update settings: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "blocked_companies":
         try:
@@ -264,9 +266,9 @@ async def naukri_settings(
                 "companies": companies,
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get blocked companies failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get blocked companies failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "check_email":
         try:
@@ -282,9 +284,9 @@ async def naukri_settings(
                 "mobile": user.get("mobile", ""),
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Check email verification failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Check email verification failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email", "error_code": "VALIDATION_ERROR"}

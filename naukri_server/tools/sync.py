@@ -584,6 +584,7 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
             "message": ("Could not fetch applied jobs. "
                         "All strategies failed (REST, browser intercept, HTML scrape). "
                         "You may need to log in first via naukri_login."),
+            "error_code": "API_ERROR",
         }
 
     # Normalize status labels
@@ -658,6 +659,7 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
         return {
             "status": "error",
             "message": "Could not fetch saved jobs. Run naukri_debug(action='discover') to find the API endpoint.",
+            "error_code": "API_ERROR",
         }
 
     remote_jobs = _parse_saved_jobs(remote_data)
@@ -720,15 +722,15 @@ async def naukri_sync(
         try:
             return await _sync_applications(force_browser=force_browser, days_back=days_back)
         except Exception as e:
-            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
+            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
     # ── saved_jobs ────────────────────────────────────────────────────
     elif entity == "saved_jobs":
         try:
             return await _sync_saved_jobs(force_browser=force_browser)
         except Exception as e:
-            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}"}
+            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
     # ── unknown entity ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs"}
+        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs", "error_code": "VALIDATION_ERROR"}

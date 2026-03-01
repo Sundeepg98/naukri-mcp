@@ -93,19 +93,19 @@ async def naukri_resume_builder(
         try:
             return await _get_templates()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get resume templates failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get resume templates failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- status ─────────────────────────────────────────────────────────
     elif action == "status":
         try:
             return await _get_status()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get resume builder status failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get resume builder status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status", "error_code": "VALIDATION_ERROR"}

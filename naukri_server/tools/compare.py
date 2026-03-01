@@ -26,9 +26,9 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
         - {status: "error", message}
     """
     if len(job_ids) < 2:
-        return {"status": "error", "message": "Need at least 2 job IDs to compare."}
+        return {"status": "error", "message": "Need at least 2 job IDs to compare.", "error_code": "VALIDATION_ERROR"}
     if len(job_ids) > 5:
-        return {"status": "error", "message": "Maximum 5 jobs for comparison."}
+        return {"status": "error", "message": "Maximum 5 jobs for comparison.", "error_code": "VALIDATION_ERROR"}
 
     from naukri_server.tools.jobs import naukri_get_job
     from naukri_server.tools.profile import get_cached_profile
@@ -130,7 +130,7 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
         jobs.append(job_entry)
 
     if not jobs:
-        return {"status": "error", "message": f"No jobs could be fetched. Errors: {errors}"}
+        return {"status": "error", "message": f"No jobs could be fetched. Errors: {errors}", "error_code": "API_ERROR"}
 
     # Compute skill overlap (using normalized sets)
     common_skills = sorted(set.intersection(*all_skill_sets)) if all_skill_sets else []

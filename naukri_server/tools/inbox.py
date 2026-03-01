@@ -25,6 +25,9 @@ async def _fetch_inbox(
     page: int = 1,
 ) -> dict:
     """Fetch inbox messages from the API and return structured result."""
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     body = {
         "pageSize": limit,
         "pageNo": page,
@@ -118,10 +121,12 @@ async def _fetch_inbox(
     return {
         "status": "success",
         "total": total,
+        "count": len(messages),
+        "page": page,
+        "has_more": (page * limit) < total,
         "unread": unread_count,
         "total_power_nvite": total_power_nvite,
         "unread_power_nvite": unread_power_nvite,
-        "count": len(messages),
         "messages": messages,
     }
 
@@ -224,7 +229,7 @@ async def naukri_inbox(
         page: For list — page number (default 1)
 
     Returns:
-        - list: {status, total, unread, total_power_nvite, unread_power_nvite, count, messages: [...]}
+        - list: {status, total, count, page, has_more, unread, total_power_nvite, unread_power_nvite, messages: [...]}
         - read: {status, message_id, subject, content, date, type, conversation_id}
         - mark_interested: {status, mail_id, interested, message}
         - accept_nvite: {status: "applied"|"needs_input"|"already_applied"|"error", ...}
@@ -235,43 +240,43 @@ async def naukri_inbox(
         try:
             return await _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get inbox failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get inbox failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── read ───────────────────────────────────────────────────────────
     elif action == "read":
         if not message_id or not vcard_id or not unique_id:
-            return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id."}
+            return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _read_message(message_id, vcard_id, unique_id)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Read message failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Read message failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── mark_interested ────────────────────────────────────────────────
     elif action == "mark_interested":
         if not mail_id or not conversation_id:
-            return {"status": "error", "message": "mark_interested requires mail_id and conversation_id."}
+            return {"status": "error", "message": "mark_interested requires mail_id and conversation_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _mark_interested(mail_id, conversation_id, interested)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── accept_nvite ──────────────────────────────────────────────────
     elif action == "accept_nvite":
         if not nvite_job_id:
-            return {"status": "error", "message": "accept_nvite requires nvite_job_id."}
+            return {"status": "error", "message": "accept_nvite requires nvite_job_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _accept_nvite(nvite_job_id, answers, title, company)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Accept NVite failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Accept NVite failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, read, mark_interested, accept_nvite"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, read, mark_interested, accept_nvite", "error_code": "VALIDATION_ERROR"}

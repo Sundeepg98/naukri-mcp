@@ -61,7 +61,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
             await record_application(job_id, title=title, company=company,
                                      status="error",
                                      extra={"message": msg or "Unexpected response", **(tracking_extra or {})})
-            return {"status": "error", "job_id": job_id, "message": msg or "Unexpected response"}
+            return {"status": "error", "job_id": job_id, "message": msg or "Unexpected response", "error_code": "API_ERROR"}
 
         job_result = jobs[0]
         status_code = job_result.get("status")
@@ -157,18 +157,18 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
         await record_application(job_id, title=title, company=company,
                                  status="error",
                                  extra={"message": f"Apply returned status {status_code}", **(tracking_extra or {})})
-        return {"status": "error", "job_id": job_id, "message": f"Apply returned status {status_code}"}
+        return {"status": "error", "job_id": job_id, "message": f"Apply returned status {status_code}", "error_code": "API_ERROR"}
 
     except ValueError as e:
         await record_application(job_id, title=title, company=company,
                                  status="error",
                                  extra={"message": str(e), **(tracking_extra or {})})
-        return {"status": "error", "job_id": job_id, "message": str(e)}
+        return {"status": "error", "job_id": job_id, "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
         await record_application(job_id, title=title, company=company,
                                  status="error",
                                  extra={"message": f"{type(e).__name__}: {e!r}", **(tracking_extra or {})})
-        return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}"}
+        return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
 @mcp.tool()
@@ -262,7 +262,7 @@ async def naukri_batch_apply(
         answers = {}
     limit = min(limit, 20)
     if limit <= 0:
-        return {"status": "error", "message": "limit must be a positive number"}
+        return {"status": "error", "message": "limit must be a positive number", "error_code": "VALIDATION_ERROR"}
 
     # Step 1: Search
     search_result = await naukri_search_jobs(
@@ -273,11 +273,11 @@ async def naukri_batch_apply(
         limit=limit,
     )
     if search_result.get("status") != "success":
-        return {"status": "error", "message": "Search failed", "search_result": search_result}
+        return {"status": "error", "message": "Search failed", "search_result": search_result, "error_code": "API_ERROR"}
 
     all_jobs = search_result.get("jobs", [])
     if not all_jobs:
-        return {"status": "error", "message": "No jobs found for this search"}
+        return {"status": "error", "message": "No jobs found for this search", "error_code": "NOT_FOUND"}
 
     # Step 2: Filter out already-applied (from search results + local tracking)
     to_apply = [j for j in all_jobs if not j.get("is_applied")]
@@ -309,7 +309,7 @@ async def naukri_batch_apply(
                 timeout=30,
             )
         except asyncio.TimeoutError:
-            return {"status": "error", "job_id": j["job_id"], "message": "Timed out after 30s"}
+            return {"status": "error", "job_id": j["job_id"], "message": "Timed out after 30s", "error_code": "API_ERROR"}
 
     tasks = [asyncio.create_task(_apply_with_timeout(j)) for j in to_apply]
     try:

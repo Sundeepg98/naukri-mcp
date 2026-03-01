@@ -54,36 +54,36 @@ async def naukri_export_data(
     """
     format = format.lower()
     if format not in ("json", "csv"):
-        return {"status": "error", "message": f"Unsupported format '{format}'. Use 'json' or 'csv'."}
+        return {"status": "error", "message": f"Unsupported format '{format}'. Use 'json' or 'csv'.", "error_code": "VALIDATION_ERROR"}
 
     data_type = data_type.lower()
     valid_types = ("applications", "saved_jobs", "search_results")
     if data_type not in valid_types:
-        return {"status": "error", "message": f"Invalid data_type '{data_type}'. Use one of: {', '.join(valid_types)}"}
+        return {"status": "error", "message": f"Invalid data_type '{data_type}'. Use one of: {', '.join(valid_types)}", "error_code": "VALIDATION_ERROR"}
 
     # Load data
     records = []
     if data_type == "applications":
         apps_file = _PACKAGE_ROOT / "applications.json"
         if not apps_file.exists():
-            return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first."}
+            return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
         try:
             records = json.loads(apps_file.read_text(encoding="utf-8"))
         except Exception as e:
-            return {"status": "error", "message": f"Failed to read applications: {e}"}
+            return {"status": "error", "message": f"Failed to read applications: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "saved_jobs":
         saved_file = _PACKAGE_ROOT / "saved_jobs.json"
         if not saved_file.exists():
-            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first."}
+            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first.", "error_code": "NOT_FOUND"}
         try:
             records = json.loads(saved_file.read_text(encoding="utf-8"))
         except Exception as e:
-            return {"status": "error", "message": f"Failed to read saved jobs: {e}"}
+            return {"status": "error", "message": f"Failed to read saved jobs: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "search_results":
         if not keywords:
-            return {"status": "error", "message": "keywords is required when data_type is 'search_results'."}
+            return {"status": "error", "message": "keywords is required when data_type is 'search_results'.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.search import naukri_search_jobs
         result = await naukri_search_jobs(keywords=keywords, limit=50)
         if result.get("status") == "error":
@@ -91,7 +91,7 @@ async def naukri_export_data(
         records = result.get("jobs", [])
 
     if not records:
-        return {"status": "error", "message": f"No {data_type} records to export."}
+        return {"status": "error", "message": f"No {data_type} records to export.", "error_code": "API_ERROR"}
 
     # Determine output path
     _EXPORTS_DIR.mkdir(exist_ok=True)
@@ -112,7 +112,7 @@ async def naukri_export_data(
         else:  # csv
             flat = _flatten_for_csv(records)
             if not flat:
-                return {"status": "error", "message": "No data to write after flattening."}
+                return {"status": "error", "message": "No data to write after flattening.", "error_code": "API_ERROR"}
             # Collect all keys across all rows for header
             all_keys = []
             seen = set()
@@ -128,7 +128,7 @@ async def naukri_export_data(
             file_path.write_text(output.getvalue(), encoding="utf-8")
 
     except Exception as e:
-        return {"status": "error", "message": f"Failed to write {format} file: {e}"}
+        return {"status": "error", "message": f"Failed to write {format} file: {e}", "error_code": "API_ERROR"}
 
     return {
         "status": "success",

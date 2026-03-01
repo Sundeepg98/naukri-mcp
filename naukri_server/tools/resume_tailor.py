@@ -91,11 +91,11 @@ async def naukri_resume_tailor(job_id: str) -> dict:
 
     if isinstance(job_result, Exception) or job_result.get("status") == "error":
         msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch job: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
 
     if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
     # Extract job data
     job_title = job_result.get("title", "")

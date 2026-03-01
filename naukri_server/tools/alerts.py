@@ -89,22 +89,22 @@ async def naukri_job_alerts(
         try:
             return await _get_alerts_list()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"List Job Alerts failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"List Job Alerts failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "detail":
         if not alert_id:
-            return {"status": "error", "message": "detail requires alert_id."}
+            return {"status": "error", "message": "detail requires alert_id.", "error_code": "VALIDATION_ERROR"}
         try:
             data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
             alerts = data.get("list", [data] if isinstance(data, dict) else data)
             if not alerts:
-                return {"status": "error", "message": f"Alert {alert_id} not found"}
+                return {"status": "error", "message": f"Alert {alert_id} not found", "error_code": "NOT_FOUND"}
 
             a = alerts[0] if isinstance(alerts, list) else alerts
             if not isinstance(a, dict):
-                return {"status": "error", "message": f"Unexpected response for alert {alert_id}"}
+                return {"status": "error", "message": f"Unexpected response for alert {alert_id}", "error_code": "API_ERROR"}
 
             return {
                 "status": "success",
@@ -124,13 +124,13 @@ async def naukri_job_alerts(
                 },
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get Alert Detail failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get Alert Detail failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "create":
         if not name or not keywords:
-            return {"status": "error", "message": "create requires name and keywords."}
+            return {"status": "error", "message": "create requires name and keywords.", "error_code": "VALIDATION_ERROR"}
         try:
             body = {"name": name, "keyword": keywords}
             if location is not None:
@@ -155,15 +155,15 @@ async def naukri_job_alerts(
                 "message": f"Job alert '{name}' created for '{keywords}'.",
             }
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Create Job Alert failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Create Job Alert failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     elif action == "update":
         if not alert_id:
-            return {"status": "error", "message": "update requires alert_id."}
+            return {"status": "error", "message": "update requires alert_id.", "error_code": "VALIDATION_ERROR"}
         if all(v is None for v in (keywords, location, experience, min_salary, new_name)):
-            return {"status": "error", "message": "No fields to update. Pass at least one parameter."}
+            return {"status": "error", "message": "No fields to update. Pass at least one parameter.", "error_code": "VALIDATION_ERROR"}
 
         # Look up alert name for logging
         try:
@@ -203,7 +203,7 @@ async def naukri_job_alerts(
                     }""")
 
                 if not form_found:
-                    return {"status": "error", "message": "Modify form did not load on the alert edit page."}
+                    return {"status": "error", "message": "Modify form did not load on the alert edit page.", "error_code": "BROWSER_ERROR"}
 
                 # Fill in the fields that need updating
                 updates = {}
@@ -264,7 +264,7 @@ async def naukri_job_alerts(
                 }""")
 
                 if not submit_result:
-                    return {"status": "error", "message": "Could not find submit button or form on the modify page."}
+                    return {"status": "error", "message": "Could not find submit button or form on the modify page.", "error_code": "BROWSER_ERROR"}
 
                 await asyncio.sleep(3)
 
@@ -282,11 +282,12 @@ async def naukri_job_alerts(
                 return {
                     "status": "error",
                     "message": f"Failed to update job alert: {type(e).__name__}: {e}",
+                    "error_code": "BROWSER_ERROR",
                 }
 
     elif action == "delete":
         if not alert_id:
-            return {"status": "error", "message": "delete requires alert_id."}
+            return {"status": "error", "message": "delete requires alert_id.", "error_code": "VALIDATION_ERROR"}
 
         # Get all alerts to find the target
         try:
@@ -295,7 +296,7 @@ async def naukri_job_alerts(
             alerts_result = {"status": "error"}
 
         if alerts_result.get("status") != "success":
-            return {"status": "error", "message": "Failed to fetch alerts."}
+            return {"status": "error", "message": "Failed to fetch alerts.", "error_code": "API_ERROR"}
 
         target = None
         for alert in alerts_result.get("alerts", []):
@@ -304,7 +305,7 @@ async def naukri_job_alerts(
                 break
 
         if not target:
-            return {"status": "error", "message": f"Alert ID '{alert_id}' not found."}
+            return {"status": "error", "message": f"Alert ID '{alert_id}' not found.", "error_code": "NOT_FOUND"}
 
         a_id = str(target["alert_id"])
         alert_name = target.get("name", a_id)
@@ -320,7 +321,7 @@ async def naukri_job_alerts(
 
                 # Check if logged in
                 if "/nlogin" in page.url:
-                    return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                    return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
                 # Submit the delete confirmation via fetch POST
                 delete_result = await page.evaluate("""(params) => {
@@ -345,12 +346,13 @@ async def naukri_job_alerts(
                 }""", {"deleteUrl": f"/alert/delete?aId={a_id}", "aId": a_id})
 
                 if not delete_result:
-                    return {"status": "error", "message": "Delete fetch returned no result."}
+                    return {"status": "error", "message": "Delete fetch returned no result.", "error_code": "BROWSER_ERROR"}
 
                 if delete_result.get("error"):
                     return {
                         "status": "error",
                         "message": f"Delete request failed: {delete_result['error']}",
+                        "error_code": "BROWSER_ERROR",
                     }
 
                 # Also try clicking the submit button as a fallback if fetch didn't work cleanly
@@ -382,6 +384,7 @@ async def naukri_job_alerts(
                             "status": "error",
                             "message": f"Delete POST returned status {delete_result.get('status')} "
                                        f"and no confirm button found on page.",
+                            "error_code": "BROWSER_ERROR",
                         }
 
                 logger.info("Alert '%s' (id=%s) deleted successfully.", alert_name, a_id)
@@ -397,7 +400,8 @@ async def naukri_job_alerts(
                 return {
                     "status": "error",
                     "message": f"Failed to delete job alert: {type(e).__name__}: {e}",
+                    "error_code": "BROWSER_ERROR",
                 }
 
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, create, update, delete"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, create, update, delete", "error_code": "VALIDATION_ERROR"}

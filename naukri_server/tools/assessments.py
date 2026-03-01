@@ -43,7 +43,10 @@ async def _list_assessments() -> dict:
 
     return {
         "status": "success",
+        "total": len(assessments),
         "count": len(assessments),
+        "page": 1,
+        "has_more": False,
         "assessments": assessments,
     }
 
@@ -92,7 +95,7 @@ async def naukri_assessments(action: str = "list") -> dict:
         action: "list" | "completeness"
 
     Returns:
-        - list: {status, count, assessments: [{skill, level, badge_url, score, rank, accuracy, status, max_marks, passing_marks, test_id}]}
+        - list: {status, total, count, page, has_more, assessments: [{skill, level, badge_url, score, rank, accuracy, status, max_marks, passing_marks, test_id}]}
         - completeness: {status, completeness_percent, search_appearances, recruiter_views, is_paid, is_premium, ai_resume_eligible, mock_interview_eligible, job_search_status}
         - {status: "error", message} on failure
     """
@@ -101,19 +104,19 @@ async def naukri_assessments(action: str = "list") -> dict:
         try:
             return await _list_assessments()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get assessments failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get assessments failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── completeness ──────────────────────────────────────────────────
     elif action == "completeness":
         try:
             return await _get_profile_completeness()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get profile completeness failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get profile completeness failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, completeness"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, completeness", "error_code": "VALIDATION_ERROR"}

@@ -185,14 +185,53 @@ async def _get_profile() -> dict:
             "education": education,
             "profile_id": additional.get("profileId"),
         }
+
+        # --- Communication settings (notification preferences) ---
+        comm_settings = data.get("communicationSettings") or data.get("communicationPreferences") or profile.get("communicationSettings")
+        if comm_settings and isinstance(comm_settings, dict):
+            result["communication_settings"] = {
+                "email_notifications": comm_settings.get("emailNotifications") or comm_settings.get("emailAlerts"),
+                "sms_notifications": comm_settings.get("smsNotifications") or comm_settings.get("smsAlerts"),
+                "push_notifications": comm_settings.get("pushNotifications"),
+                "job_alerts": comm_settings.get("jobAlerts") or comm_settings.get("jobAlert"),
+                "recruiter_messages": comm_settings.get("recruiterMessages") or comm_settings.get("recruiterMail"),
+                "promotional": comm_settings.get("promotional") or comm_settings.get("marketingMail"),
+                "whatsapp_notifications": comm_settings.get("whatsappNotifications") or comm_settings.get("whatsappAlerts"),
+            }
+            # Strip None values
+            result["communication_settings"] = {k: v for k, v in result["communication_settings"].items() if v is not None}
+            if not result["communication_settings"]:
+                del result["communication_settings"]
+
+        # --- Resdex visibility (profile visibility flags) ---
+        resdex = data.get("resdexVisibility") or data.get("profileVisibility") or additional.get("resdexVisibility") or profile.get("resdexVisibility")
+        if resdex and isinstance(resdex, dict):
+            result["resdex_visibility"] = {
+                "show_profile": resdex.get("showProfile") or resdex.get("profileVisible"),
+                "show_current_employer": resdex.get("showCurrentEmployer") or resdex.get("currentEmployerVisible"),
+                "show_email": resdex.get("showEmail") or resdex.get("emailVisible"),
+                "show_phone": resdex.get("showPhone") or resdex.get("mobileVisible"),
+                "show_resume": resdex.get("showResume") or resdex.get("resumeVisible"),
+                "hide_from_companies": resdex.get("hideFromCompanies") or resdex.get("blockedCompanies"),
+                "search_visible": resdex.get("searchVisible") or resdex.get("isSearchable"),
+                "active_job_seeker": resdex.get("activeJobSeeker") or resdex.get("isActivelySearching"),
+            }
+            # Strip None values
+            result["resdex_visibility"] = {k: v for k, v in result["resdex_visibility"].items() if v is not None}
+            if not result["resdex_visibility"]:
+                del result["resdex_visibility"]
+        elif resdex and isinstance(resdex, str):
+            # Sometimes returned as a simple string like "visible" / "hidden"
+            result["resdex_visibility"] = resdex
+
         warnings = validate_profile(result)
         if warnings:
             result["warnings"] = warnings
         return result
     except ValueError as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
-        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}"}
+        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
 async def _boost_visibility(randomize: bool = False) -> dict:
@@ -236,7 +275,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
             await asyncio.sleep(3)
 
             if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             edit_clicked = await page.evaluate("""() => {
                 const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
@@ -259,7 +298,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
             }""")
 
             if not edit_clicked:
-                return {"status": "error", "message": "Could not find edit button on profile"}
+                return {"status": "error", "message": "Could not find edit button on profile", "error_code": "BROWSER_ERROR"}
 
             await asyncio.sleep(2)
 
@@ -303,7 +342,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                 "message": "Profile refreshed via browser. You appear as 'recently active'.",
             }
     except Exception as e:
-        return {"status": "error", "message": f"Browser fallback failed: {type(e).__name__}: {e}"}
+        return {"status": "error", "message": f"Browser fallback failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
 
 
 async def _update_profile(
@@ -321,7 +360,7 @@ async def _update_profile(
     if current_ctc is not None:
         fields["currentCtc"] = current_ctc
     if not fields:
-        return {"status": "error", "message": "No fields provided. Pass at least one field to update."}
+        return {"status": "error", "message": "No fields provided. Pass at least one field to update.", "error_code": "VALIDATION_ERROR"}
 
     unknown = set(fields.keys()) - UPDATABLE_FIELDS
     if unknown:
@@ -329,6 +368,7 @@ async def _update_profile(
             "status": "error",
             "message": f"Unknown fields: {', '.join(sorted(unknown))}. "
                        f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
+            "error_code": "VALIDATION_ERROR",
         }
 
     # The fullprofiles endpoint rejects all external API calls (405 from CDN).
@@ -340,7 +380,7 @@ async def _update_profile(
             await asyncio.sleep(3)
 
             if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             # Track which fields were updated via UI
             ui_updated = []
@@ -376,7 +416,7 @@ async def _update_profile(
                     }""")
 
                     if not edit_clicked:
-                        return {"status": "error", "message": "Could not find edit button for resume headline"}
+                        return {"status": "error", "message": "Could not find edit button for resume headline", "error_code": "BROWSER_ERROR"}
 
                     await asyncio.sleep(2)
 
@@ -393,12 +433,12 @@ async def _update_profile(
                         await asyncio.sleep(0.5)
                         ui_updated.append("resumeHeadline")
                     else:
-                        return {"status": "error", "message": "Edit modal opened but textarea not found"}
+                        return {"status": "error", "message": "Edit modal opened but textarea not found", "error_code": "NOT_FOUND"}
 
                     # Click save
                     save_result = await _click_save_modal(page)
                     if not save_result:
-                        return {"status": "error", "message": "Edit modal opened but Save button not found"}
+                        return {"status": "error", "message": "Edit modal opened but Save button not found", "error_code": "NOT_FOUND"}
 
                     await asyncio.sleep(3)
 
@@ -420,7 +460,7 @@ async def _update_profile(
                     }""")
 
                     if not edit_clicked:
-                        return {"status": "error", "message": "Could not find edit button for key skills"}
+                        return {"status": "error", "message": "Could not find edit button for key skills", "error_code": "BROWSER_ERROR"}
 
                     await asyncio.sleep(2)
 
@@ -461,6 +501,7 @@ async def _update_profile(
                             "status": "error",
                             "message": f"keySkills total length is {len(new_csv)} chars, exceeds 250 char limit. "
                                        f"Reduce skills or shorten names. Current CSV: {new_csv}",
+                            "error_code": "VALIDATION_ERROR",
                         }
 
                     # Determine removals and additions
@@ -582,7 +623,7 @@ async def _update_profile(
                     }""")
 
                     if save_result != "save_clicked":
-                        return {"status": "error", "message": f"Skills updated in DOM but Save failed: {save_result}"}
+                        return {"status": "error", "message": f"Skills updated in DOM but Save failed: {save_result}", "error_code": "BROWSER_ERROR"}
 
                     await asyncio.sleep(3)
 
@@ -600,7 +641,7 @@ async def _update_profile(
                     logger.info(f"Skills save post-check: {post_save}")
 
                     if post_save.startswith("error:"):
-                        return {"status": "error", "message": f"Skills save validation failed: {post_save}"}
+                        return {"status": "error", "message": f"Skills save validation failed: {post_save}", "error_code": "BROWSER_ERROR"}
 
                 # --- Notice Period / Expected CTC / Current CTC (Career Profile section) ---
                 # These three fields share the same "Career profile" edit modal on Naukri.
@@ -645,6 +686,7 @@ async def _update_profile(
                             "status": "error",
                             "message": "Could not find edit button for Career Profile section "
                                        "(needed for noticePeriod/expectedCtc/currentCtc)",
+                            "error_code": "BROWSER_ERROR",
                         }
 
                     await asyncio.sleep(2)
@@ -666,6 +708,7 @@ async def _update_profile(
                                     "status": "error",
                                     "message": f"Invalid noticePeriod: '{notice_val}'. "
                                                f"Valid options: {', '.join(sorted(VALID_NOTICE_PERIODS))}",
+                                    "error_code": "VALIDATION_ERROR",
                                 }
 
                             # Try to find and set the notice period dropdown/select
@@ -750,6 +793,7 @@ async def _update_profile(
                                     return {
                                         "status": "error",
                                         "message": f"Notice period dropdown opened but could not select '{notice_val}'",
+                                        "error_code": "BROWSER_ERROR",
                                     }
                             elif notice_set == "select_set":
                                 ui_updated.append("noticePeriod")
@@ -757,6 +801,7 @@ async def _update_profile(
                                 return {
                                     "status": "error",
                                     "message": "Could not find notice period dropdown in Career Profile modal",
+                                    "error_code": "BROWSER_ERROR",
                                 }
 
                             await asyncio.sleep(0.5)
@@ -764,6 +809,7 @@ async def _update_profile(
                             return {
                                 "status": "error",
                                 "message": f"Failed to update noticePeriod: {type(e).__name__}: {e}",
+                                "error_code": "BROWSER_ERROR",
                             }
 
                     # --- Current CTC ---
@@ -773,9 +819,9 @@ async def _update_profile(
                             if filled:
                                 ui_updated.append("currentCtc")
                             else:
-                                return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal"}
+                                return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
                         except Exception as e:
-                            return {"status": "error", "message": f"Failed to update currentCtc: {type(e).__name__}: {e}"}
+                            return {"status": "error", "message": f"Failed to update currentCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
                     # --- Expected CTC ---
                     if "expectedCtc" in career_fields:
@@ -784,14 +830,14 @@ async def _update_profile(
                             if filled:
                                 ui_updated.append("expectedCtc")
                             else:
-                                return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal"}
+                                return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
                         except Exception as e:
-                            return {"status": "error", "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}"}
+                            return {"status": "error", "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
                     # Click save on the Career Profile modal
                     save_result = await _click_save_modal(page)
                     if not save_result:
-                        return {"status": "error", "message": "Career Profile modal opened but Save button not found"}
+                        return {"status": "error", "message": "Career Profile modal opened but Save button not found", "error_code": "NOT_FOUND"}
 
                     await asyncio.sleep(3)
 
@@ -803,6 +849,7 @@ async def _update_profile(
                         "status": "error",
                         "message": f"Browser UI update not yet supported for: {', '.join(unsupported)}. "
                                    f"Currently supported: {', '.join(sorted(all_browser_handled))}",
+                        "error_code": "VALIDATION_ERROR",
                     }
 
             finally:
@@ -817,7 +864,7 @@ async def _update_profile(
                 "message": f"Profile updated via browser UI. Fields: {', '.join(ui_updated)}",
             }
         except Exception as e:
-            return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 async def _audit_profile() -> dict:
@@ -981,7 +1028,7 @@ async def _audit_profile() -> dict:
             "tips": tips,
         }
     except Exception as e:
-        return {"status": "error", "message": f"Profile audit failed: {type(e).__name__}: {e}"}
+        return {"status": "error", "message": f"Profile audit failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -1045,7 +1092,7 @@ async def naukri_profile(
 
     # ── unknown action ──────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -1057,18 +1104,28 @@ async def naukri_get_dashboard() -> dict:
     """Get your Naukri dashboard summary via API.
 
     Returns profile views, recruiter activity, CTC, experience,
-    recruiter invites, and unread mail counts — a quick health check
-    of your Naukri presence.
+    recruiter invites, unread mail counts, application stats, profile
+    completeness, resume details, saved jobs count, and more — a
+    comprehensive health check of your Naukri presence.
 
     Returns:
-        - {status: "success", profile_views, recruiter_activity_date, ctc_lpa, experience_years, unread_invites, total_invites, unread_relevant_mail, has_inbox, total_matches}
+        - {status: "success", profile_views, recruiter_activity_date, ctc_lpa, experience_years,
+           unread_invites, total_invites, unread_relevant_mail, has_inbox, total_matches,
+           applied_count, profile_completion, profile_score, saved_jobs_count,
+           resume_name, resume_last_updated, profile_title, profile_image_url,
+           designation, company, location, notice_period, preferred_locations,
+           total_unread_mail, search_impressions, recruiter_actions_count,
+           is_profile_verified, is_email_verified, is_phone_verified,
+           subscription_type, subscription_expiry, job_alerts_count,
+           pending_invites, accepted_invites, ...}
         - {status: "error", message}
     """
     try:
         data = await api_get(DASHBOARD_API)
         db = data.get("dashBoard", {})
 
-        return {
+        # --- Core fields (existing) ---
+        result = {
             "status": "success",
             "profile_views": db.get("profileViewCount"),
             "recruiter_activity_date": db.get("recruiterActionsLatestDate"),
@@ -1080,7 +1137,94 @@ async def naukri_get_dashboard() -> dict:
             "has_inbox": db.get("hasInboxFlag") == "Y",
             "total_matches": db.get("mrt"),
         }
+
+        # --- Application stats ---
+        result["applied_count"] = db.get("appliedCount") or db.get("totalApplied")
+        result["applied_today"] = db.get("appliedToday")
+        result["applied_this_week"] = db.get("appliedThisWeek")
+
+        # --- Profile completeness and score ---
+        result["profile_completion"] = db.get("profileCompletion") or db.get("completeness") or db.get("profileCompleteness")
+        result["profile_score"] = db.get("profileScore") or db.get("profileRank")
+        result["profile_quality"] = db.get("profileQuality")
+        result["profile_strength"] = db.get("profileStrength")
+
+        # --- Saved jobs ---
+        result["saved_jobs_count"] = db.get("savedJobsCount") or db.get("totalSavedJobs")
+
+        # --- Resume details ---
+        resume = db.get("resumeDetails") or db.get("resume") or {}
+        if isinstance(resume, dict):
+            result["resume_name"] = resume.get("name") or resume.get("resumeName") or db.get("resumeName")
+            result["resume_last_updated"] = resume.get("lastUpdated") or resume.get("modifiedDate") or db.get("resumeLastUpdated")
+            result["resume_headline"] = resume.get("resumeHeadline") or db.get("resumeHeadline")
+            result["resume_id"] = resume.get("resumeId") or resume.get("id")
+        else:
+            result["resume_name"] = db.get("resumeName")
+            result["resume_last_updated"] = db.get("resumeLastUpdated")
+            result["resume_headline"] = db.get("resumeHeadline")
+            result["resume_id"] = None
+
+        # --- User identity ---
+        result["profile_title"] = db.get("profileTitle") or db.get("title")
+        result["profile_image_url"] = db.get("profileImageUrl") or db.get("imageUrl") or db.get("photoUrl")
+        result["name"] = db.get("name") or db.get("fullName")
+        result["email"] = db.get("email") or db.get("emailId")
+        result["phone"] = db.get("phone") or db.get("mobileNo")
+        result["user_id"] = db.get("userId") or db.get("resId")
+
+        # --- Current employment context ---
+        result["designation"] = db.get("designation") or db.get("currentDesignation")
+        result["company"] = db.get("company") or db.get("currentCompany")
+        result["location"] = db.get("location") or db.get("city")
+        result["notice_period"] = db.get("noticePeriod")
+        result["preferred_locations"] = db.get("preferredLocations") or db.get("locationPref")
+
+        # --- Mail / messaging ---
+        result["total_unread_mail"] = db.get("totalUnreadMail") or db.get("unreadMailCount")
+        result["unread_direct_mail"] = db.get("unreadDirectMail")
+        result["unread_forwarded_mail"] = db.get("unreadForwardedMail")
+
+        # --- Search and recruiter analytics ---
+        result["search_impressions"] = db.get("searchImpressions") or db.get("searchAppearances") or db.get("searchCount")
+        result["recruiter_actions_count"] = db.get("recruiterActionsCount") or db.get("totalRecruiterActions")
+        result["profile_views_trend"] = db.get("profileViewsTrend") or db.get("viewsTrend")
+        result["profile_views_last_week"] = db.get("profileViewsLastWeek")
+        result["profile_views_last_month"] = db.get("profileViewsLastMonth")
+
+        # --- Verification flags ---
+        result["is_profile_verified"] = db.get("isProfileVerified") or db.get("profileVerified")
+        result["is_email_verified"] = db.get("isEmailVerified") or db.get("emailVerified")
+        result["is_phone_verified"] = db.get("isPhoneVerified") or db.get("mobileVerified")
+
+        # --- Subscription ---
+        result["subscription_type"] = db.get("subscriptionType") or db.get("productName")
+        result["subscription_expiry"] = db.get("subscriptionExpiry") or db.get("subscriptionEndDate")
+        result["is_premium"] = db.get("isPremium") or db.get("premiumUser")
+
+        # --- Job alerts ---
+        result["job_alerts_count"] = db.get("jobAlertsCount") or db.get("totalJobAlerts")
+
+        # --- Invite breakdown ---
+        result["pending_invites"] = db.get("pendingNvite") or db.get("pendingInvites")
+        result["accepted_invites"] = db.get("acceptedNvite") or db.get("acceptedInvites")
+        result["declined_invites"] = db.get("declinedNvite") or db.get("declinedInvites")
+
+        # --- Resdex / visibility ---
+        result["resdex_visible"] = db.get("resdexVisible") or db.get("showProfile")
+        result["active_status"] = db.get("activeStatus") or db.get("activityStatus")
+        result["last_active"] = db.get("lastActive") or db.get("lastLoginDate")
+
+        # --- Recommendations ---
+        result["recommended_jobs_count"] = db.get("recommendedJobsCount") or db.get("totalRecommendedJobs")
+
+        # --- Strip None values to keep response clean ---
+        result = {k: v for k, v in result.items() if v is not None}
+        # Always include status
+        result["status"] = "success"
+
+        return result
     except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
-        return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}"}
+        return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

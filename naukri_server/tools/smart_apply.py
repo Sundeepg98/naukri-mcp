@@ -34,6 +34,9 @@ async def naukri_smart_apply(
            experience_match, bonuses, recommendation}, job_summary, applied}
         - {status: "error", message}
     """
+    if not 0 <= min_fit_score <= 100:
+        return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
+
     from naukri_server.tools.jobs import naukri_get_job
     from naukri_server.tools.profile import get_cached_profile
     from naukri_server.tools.apply import _apply_single
@@ -47,11 +50,11 @@ async def naukri_smart_apply(
 
     if isinstance(job_result, Exception) or job_result.get("status") == "error":
         msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch job: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
 
     if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
     # Compute fit — use tags-or-skills fallback, pass enrichment data
     job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])

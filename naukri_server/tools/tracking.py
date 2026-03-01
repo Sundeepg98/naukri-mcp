@@ -87,6 +87,7 @@ async def naukri_get_applications(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = 50,
+    page: int = 1,
 ) -> dict:
     """List your tracked job applications with filtering and summary stats.
 
@@ -99,11 +100,15 @@ async def naukri_get_applications(
         status: Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: ISO date string, include applications on/after this date (e.g. "2026-02-01")
         date_to: ISO date string, include applications on/before this date (e.g. "2026-02-28")
-        limit: Max results to return (default 50)
+        limit: Max results per page (default 50)
+        page: Page number for pagination (default 1)
 
     Returns:
-        - {status: "success", total, count, summary: {total_all_statuses, by_status: {...}}, applications: [...]}
+        - {status: "success", total, count, page, has_more, summary: {total_all_statuses, by_status: {...}}, applications: [...]}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
@@ -125,12 +130,18 @@ async def naukri_get_applications(
 
     filtered.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
 
+    total = len(filtered)
+    offset = (page - 1) * limit
+    page_items = filtered[offset:offset + limit]
+
     return {
         "status": "success",
-        "total": len(filtered),
-        "count": min(len(filtered), limit),
+        "total": total,
+        "count": len(page_items),
+        "page": page,
+        "has_more": (offset + limit) < total,
         "summary": {"total_all_statuses": len(apps), "by_status": by_status},
-        "applications": filtered[:limit],
+        "applications": page_items,
     }
 
 
@@ -153,18 +164,27 @@ async def _push_save_to_naukri(job_id: str) -> bool:
         return False
 
 
-async def _list_saved_jobs(limit: int = 50) -> dict:
+async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     """List saved/bookmarked jobs from local tracking."""
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     async with _saved_jobs_lock:
         saved = _load_json(SAVED_JOBS_FILE)
 
     saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
 
+    total = len(saved)
+    offset = (page - 1) * limit
+    page_items = saved[offset:offset + limit]
+
     return {
         "status": "success",
-        "total": len(saved),
-        "count": min(len(saved), limit),
-        "saved_jobs": saved[:limit],
+        "total": total,
+        "count": len(page_items),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "saved_jobs": page_items,
     }
 
 
@@ -228,11 +248,12 @@ async def naukri_saved_jobs(
     notes: Optional[str] = None,
     sync_to_naukri: bool = False,
     limit: int = 50,
+    page: int = 1,
 ) -> dict:
     """Unified saved/bookmarked jobs management — list, save, and unsave.
 
     Actions:
-      - "list": Get saved/bookmarked jobs (use limit for pagination)
+      - "list": Get saved/bookmarked jobs (use limit/page for pagination)
       - "save": Save/bookmark a job for later (requires job_id)
       - "unsave": Unsave/unbookmark a job (requires job_id)
 
@@ -243,10 +264,11 @@ async def naukri_saved_jobs(
         company: Company name for display (optional, save only)
         notes: Personal notes about this job (optional, save only)
         sync_to_naukri: If True, also save the job on Naukri's backend (save only)
-        limit: Max results for list action (default 50)
+        limit: Max results per page for list action (default 50)
+        page: Page number for list action (default 1)
 
     Returns:
-        - list: {status, total, count, saved_jobs: [...]}
+        - list: {status, total, count, page, has_more, saved_jobs: [...]}
         - save: {status: "saved", job_id, total_saved, synced_remote}
                 or {status: "already_saved", job_id}
         - unsave: {status: "unsaved", job_id}
@@ -255,29 +277,29 @@ async def naukri_saved_jobs(
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        return await _list_saved_jobs(limit=limit)
+        return await _list_saved_jobs(limit=limit, page=page)
 
     # ── save ───────────────────────────────────────────────────────────
     elif action == "save":
         if not job_id:
-            return {"status": "error", "message": "save requires job_id."}
+            return {"status": "error", "message": "save requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
 
     # ── unsave ─────────────────────────────────────────────────────────
     elif action == "unsave":
         if not job_id:
-            return {"status": "error", "message": "unsave requires job_id."}
+            return {"status": "error", "message": "unsave requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await _unsave_job(job_id)
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave", "error_code": "VALIDATION_ERROR"}
 
 
 @mcp.tool()
 @api_tool("Get application status")
 async def naukri_get_application_status(job_id: str) -> dict:
-    """Get detailed status for a specific job application — recruiter activity, applicant count, match score, timeline.
+    """Get detailed status for a specific job application — recruiter activity, applicant count, match score, timeline, screening responses, recruiter info.
 
     For listing all applications, use naukri_get_applications instead.
     Requires: a job_id from naukri_get_applications or naukri_apply results.
@@ -287,7 +309,10 @@ async def naukri_get_application_status(job_id: str) -> dict:
 
     Returns:
         - {status: "success", job_id, title, company, location, is_open, total_applicants,
-           recruiter_activity, match_rating, status_timeline: [{status, date}], matching_results}
+           recruiter_activity, match_rating, status_timeline: [{status, date, description}],
+           matching_results, application_date, current_status, apply_type,
+           screening_questions: [{question, answer}], recruiter: {name, designation, company},
+           job_url, salary_range, experience_range, ...}
         - {status: "error", message}
     """
     data = await api_get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
@@ -296,14 +321,58 @@ async def naukri_get_application_status(job_id: str) -> dict:
     status_steps = data.get("status") or []
     matching = data.get("matchingResults")
 
+    # --- Status timeline with richer detail ---
     timeline = []
     for step in status_steps:
         entry = {"status": step.get("status") or step.get("label", "")}
         if step.get("date"):
             entry["date"] = step["date"]
+        if step.get("description"):
+            entry["description"] = step["description"]
+        if step.get("isCompleted") is not None:
+            entry["is_completed"] = step["isCompleted"]
+        if step.get("isCurrent") is not None:
+            entry["is_current"] = step["isCurrent"]
+        if step.get("stepOrder") is not None:
+            entry["step_order"] = step["stepOrder"]
+        if step.get("subStatus"):
+            entry["sub_status"] = step["subStatus"]
         timeline.append(entry)
 
-    return {
+    # --- Screening question responses ---
+    screening_questions = []
+    raw_screening = data.get("screeningQuestions") or data.get("questionnaire") or data.get("screeningResponses") or []
+    for sq in raw_screening:
+        q_entry = {
+            "question": sq.get("question") or sq.get("questionText") or sq.get("title", ""),
+            "answer": sq.get("answer") or sq.get("response") or sq.get("answerText"),
+        }
+        if sq.get("questionId"):
+            q_entry["question_id"] = sq["questionId"]
+        if sq.get("questionType"):
+            q_entry["question_type"] = sq["questionType"]
+        if sq.get("isMandatory") is not None:
+            q_entry["is_mandatory"] = sq["isMandatory"]
+        screening_questions.append(q_entry)
+
+    # --- Recruiter details ---
+    raw_recruiter = data.get("recruiterDetails") or data.get("recruiter") or job_details.get("recruiterDetails") or job_details.get("recruiter") or {}
+    recruiter = None
+    if isinstance(raw_recruiter, dict) and raw_recruiter:
+        recruiter = {
+            "name": raw_recruiter.get("name") or raw_recruiter.get("recruiterName"),
+            "designation": raw_recruiter.get("designation") or raw_recruiter.get("title"),
+            "company": raw_recruiter.get("company") or raw_recruiter.get("companyName"),
+            "profile_url": raw_recruiter.get("profileUrl") or raw_recruiter.get("recruiterProfileUrl"),
+            "image_url": raw_recruiter.get("imageUrl") or raw_recruiter.get("photoUrl"),
+            "last_active": raw_recruiter.get("lastActive") or raw_recruiter.get("lastActiveDate"),
+        }
+        # Strip None values from recruiter
+        recruiter = {k: v for k, v in recruiter.items() if v is not None}
+        if not recruiter:
+            recruiter = None
+
+    result = {
         "status": "success",
         "job_id": job_id,
         "title": job_details.get("jobTitle"),
@@ -319,6 +388,46 @@ async def naukri_get_application_status(job_id: str) -> dict:
         "matching_results": matching,
     }
 
+    # --- Application metadata ---
+    result["application_date"] = data.get("applicationDate") or data.get("appliedDate") or data.get("applyDate")
+    result["current_status"] = data.get("currentStatus") or data.get("applicationStatus")
+    result["apply_type"] = data.get("applyType") or data.get("applicationMode")
+
+    # --- Job details enrichment ---
+    result["job_url"] = job_details.get("jobUrl") or job_details.get("url") or data.get("jobUrl")
+    result["salary_range"] = job_details.get("salaryRange") or job_details.get("salary") or job_details.get("ctcRange")
+    result["experience_range"] = job_details.get("experienceRange") or job_details.get("experience")
+    result["job_description_snippet"] = job_details.get("jobDescription") or job_details.get("snippet")
+    result["job_type"] = job_details.get("jobType") or job_details.get("employmentType")
+    result["industry"] = job_details.get("industry")
+    result["functional_area"] = job_details.get("functionalArea")
+    result["role_category"] = job_details.get("roleCategory")
+    result["posted_date"] = job_details.get("postedDate") or job_details.get("createdDate")
+    result["expiry_date"] = job_details.get("expiryDate") or job_details.get("validTill")
+
+    # --- Screening and recruiter ---
+    if screening_questions:
+        result["screening_questions"] = screening_questions
+    if recruiter:
+        result["recruiter"] = recruiter
+
+    # --- Applicant analytics ---
+    result["view_count"] = data.get("viewCount") or data.get("applicationViewCount")
+    result["shortlisted"] = data.get("shortlisted") or data.get("isShortlisted")
+    result["rejected"] = data.get("rejected") or data.get("isRejected")
+    result["ars_score"] = data.get("arsScore") or data.get("ars")
+
+    # --- Additional metadata ---
+    result["apply_source"] = data.get("applySource") or data.get("source")
+    result["resume_used"] = data.get("resumeUsed") or data.get("resumeName")
+    result["cover_letter_used"] = data.get("coverLetterUsed") or data.get("hasCoverLetter")
+
+    # --- Strip None values to keep response clean ---
+    result = {k: v for k, v in result.items() if v is not None}
+    result["status"] = "success"
+
+    return result
+
 
 @mcp.tool()
 @api_tool("Get match analytics")
@@ -333,6 +442,8 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
            low_match, field_breakdown, user_details}
         - {status: "error", message}
     """
+    if days < 1:
+        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
 
     return {
@@ -398,6 +509,8 @@ async def naukri_purge_applications(
 async def naukri_get_stale_applications(
     days_threshold: int = 14,
     min_stale_score: int = 40,
+    limit: int = 50,
+    page: int = 1,
 ) -> dict:
     """Detect stale job applications that need follow-up or should be abandoned.
 
@@ -410,9 +523,11 @@ async def naukri_get_stale_applications(
     Args:
         days_threshold: Consider apps older than N days for staleness (default 14)
         min_stale_score: Minimum staleness score 0-100 to include (default 40)
+        limit: Max results per page (default 50)
+        page: Page number for pagination (default 1)
 
     Returns:
-        - {status: "success", total_applications, stale_count,
+        - {status: "success", total_applications, total, count, page, has_more,
            stale_applications: [{job_id, title, company, stale_score,
            reasons, recommendation, applied_date, is_open, view_count,
            job_activity, ars_score}]}
@@ -424,7 +539,7 @@ async def naukri_get_stale_applications(
         apps = _load_json(APPLICATIONS_FILE)
 
     if not apps:
-        return {"status": "success", "total_applications": 0, "stale_count": 0, "stale_applications": []}
+        return {"status": "success", "total_applications": 0, "total": 0, "count": 0, "page": page, "has_more": False, "stale_applications": []}
 
     now = datetime.now(timezone.utc)
     stale_apps = []
@@ -519,9 +634,16 @@ async def naukri_get_stale_applications(
     # Sort by stale score descending
     stale_apps.sort(key=lambda x: x["stale_score"], reverse=True)
 
+    total = len(stale_apps)
+    offset = (page - 1) * limit
+    page_items = stale_apps[offset:offset + limit]
+
     return {
         "status": "success",
         "total_applications": len(apps),
-        "stale_count": len(stale_apps),
-        "stale_applications": stale_apps,
+        "total": total,
+        "count": len(page_items),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "stale_applications": page_items,
     }

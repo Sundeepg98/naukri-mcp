@@ -65,7 +65,7 @@ async def naukri_debug_browser(action: str = "snapshot", url: Optional[str] = No
     handler = _BROWSER_HANDLERS.get(action)
     if handler is None:
         valid = ", ".join(sorted(_BROWSER_HANDLERS))
-        return {"status": "error", "message": f"Unknown browser action: {action!r}. Valid: {valid}"}
+        return {"status": "error", "message": f"Unknown browser action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
 
     async with browser.page_pool.acquire() as page:
         if url:
@@ -111,7 +111,7 @@ async def naukri_debug_api(action: str = "fetch_api", url: str = "") -> dict:
     handler = _API_HANDLERS.get(action)
     if handler is None:
         valid = ", ".join(sorted(_API_HANDLERS))
-        return {"status": "error", "message": f"Unknown API action: {action!r}. Valid: {valid}"}
+        return {"status": "error", "message": f"Unknown API action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
 
     async with browser.page_pool.acquire() as page:
         return await handler(page, url)
@@ -148,7 +148,7 @@ async def naukri_debug_discovery(action: str = "discover", url: Optional[str] = 
     handler = _DISCOVERY_HANDLERS.get(action)
     if handler is None:
         valid = ", ".join(sorted(_DISCOVERY_HANDLERS))
-        return {"status": "error", "message": f"Unknown discovery action: {action!r}. Valid: {valid}"}
+        return {"status": "error", "message": f"Unknown discovery action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
 
     async with browser.page_pool.acquire() as page:
         return await handler(page, url)

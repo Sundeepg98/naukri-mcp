@@ -58,12 +58,12 @@ async def naukri_profile_media(
     # ── validate media_type ───────────────────────────────────────────
     if media_type not in _VALID_ACTIONS:
         valid_types = ", ".join(sorted(_VALID_ACTIONS))
-        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}"}
+        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}", "error_code": "API_ERROR"}
 
     # ── validate action for the chosen media_type ─────────────────────
     valid = _VALID_ACTIONS[media_type]
     if action not in valid:
-        return {"status": "error", "message": f"Unknown action '{action}' for media_type '{media_type}'. Use: {', '.join(sorted(valid))}"}
+        return {"status": "error", "message": f"Unknown action '{action}' for media_type '{media_type}'. Use: {', '.join(sorted(valid))}", "error_code": "VALIDATION_ERROR"}
 
     # ── resume actions ────────────────────────────────────────────────
     if media_type == "resume":
@@ -71,11 +71,11 @@ async def naukri_profile_media(
             return await _resume_info()
         elif action == "download":
             if not save_path:
-                return {"status": "error", "message": "download requires save_path."}
+                return {"status": "error", "message": "download requires save_path.", "error_code": "VALIDATION_ERROR"}
             return await _resume_download(save_path)
         elif action == "upload":
             if not file_path:
-                return {"status": "error", "message": "upload requires file_path."}
+                return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
             return await _resume_upload(file_path)
 
     # ── photo actions ─────────────────────────────────────────────────
@@ -84,7 +84,7 @@ async def naukri_profile_media(
             return await _photo_info()
         elif action == "upload":
             if not file_path:
-                return {"status": "error", "message": "upload requires file_path."}
+                return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
             return await _photo_upload(file_path)
         elif action == "delete":
             return await _photo_delete()
@@ -137,11 +137,11 @@ async def _resume_download(save_path: str) -> dict:
         url = f"{NAUKRI_BASE}{RESUME_DOWNLOAD_API}"
         async with session.get(url, headers=headers) as resp:
             if resp.status != 200:
-                return {"status": "error", "message": f"Download failed with HTTP {resp.status}"}
+                return {"status": "error", "message": f"Download failed with HTTP {resp.status}", "error_code": "API_ERROR"}
 
             data = await resp.read()
             if not data:
-                return {"status": "error", "message": "Empty response — no resume data received."}
+                return {"status": "error", "message": "Empty response — no resume data received.", "error_code": "NOT_FOUND"}
 
             save = Path(save_path)
             save.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +154,7 @@ async def _resume_download(save_path: str) -> dict:
                 "message": f"Resume saved to {save.resolve()} ({len(data)} bytes).",
             }
     except Exception as e:
-        return {"status": "error", "message": f"Resume download failed: {type(e).__name__}: {e}"}
+        return {"status": "error", "message": f"Resume download failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 async def _resume_upload(file_path: str) -> dict:
@@ -162,16 +162,16 @@ async def _resume_upload(file_path: str) -> dict:
 
     # Validate file exists
     if not path.exists():
-        return {"status": "error", "message": f"File not found: {file_path}"}
+        return {"status": "error", "message": f"File not found: {file_path}", "error_code": "NOT_FOUND"}
 
     # Validate format
     if path.suffix.lower() not in RESUME_ALLOWED_FORMATS:
-        return {"status": "error", "message": f"Unsupported format '{path.suffix}'. Use: {', '.join(RESUME_ALLOWED_FORMATS)}"}
+        return {"status": "error", "message": f"Unsupported format '{path.suffix}'. Use: {', '.join(RESUME_ALLOWED_FORMATS)}", "error_code": "VALIDATION_ERROR"}
 
     # Validate size
     size_mb = path.stat().st_size / (1024 * 1024)
     if size_mb > RESUME_MAX_SIZE_MB:
-        return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {RESUME_MAX_SIZE_MB}MB"}
+        return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {RESUME_MAX_SIZE_MB}MB", "error_code": "BROWSER_ERROR"}
 
     async with browser.page_pool.acquire() as page:
         try:
@@ -179,7 +179,7 @@ async def _resume_upload(file_path: str) -> dict:
             await asyncio.sleep(3)
 
             if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             # Find the resume upload input
             file_input = await page.query_selector('input[type="file"]')
@@ -195,7 +195,7 @@ async def _resume_upload(file_path: str) -> dict:
                     file_input = await page.query_selector('input[type="file"]')
 
             if not file_input:
-                return {"status": "error", "message": "Could not find file upload input on profile page"}
+                return {"status": "error", "message": "Could not find file upload input on profile page", "error_code": "BROWSER_ERROR"}
 
             # Upload the file
             await file_input.set_input_files(str(path.resolve()))
@@ -208,7 +208,7 @@ async def _resume_upload(file_path: str) -> dict:
                 "message": f"Resume '{path.name}' uploaded to Naukri profile.",
             }
         except Exception as e:
-            return {"status": "error", "message": f"Upload failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Upload failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -248,13 +248,14 @@ async def _photo_upload(file_path: str) -> dict:
 
     # Validate file exists
     if not path.exists():
-        return {"status": "error", "message": f"File not found: {file_path}"}
+        return {"status": "error", "message": f"File not found: {file_path}", "error_code": "NOT_FOUND"}
 
     # Validate format
     if path.suffix.lower() not in PHOTO_ALLOWED_FORMATS:
         return {
             "status": "error",
             "message": f"Unsupported format '{path.suffix}'. Use: {', '.join(PHOTO_ALLOWED_FORMATS)}",
+            "error_code": "VALIDATION_ERROR",
         }
 
     async with browser.page_pool.acquire() as page:
@@ -263,7 +264,7 @@ async def _photo_upload(file_path: str) -> dict:
             await asyncio.sleep(3)
 
             if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             # Click photo area to open upload modal (JS click to bypass visibility checks)
             await page.evaluate("""() => {
@@ -302,7 +303,7 @@ async def _photo_upload(file_path: str) -> dict:
                 file_input = await page.query_selector('input[type="file"]')
 
             if not file_input:
-                return {"status": "error", "message": "Could not find photo upload input on profile page"}
+                return {"status": "error", "message": "Could not find photo upload input on profile page", "error_code": "BROWSER_ERROR"}
 
             await file_input.set_input_files(str(path.resolve()))
             logger.info("Photo file set: %s", path.name)
@@ -331,7 +332,7 @@ async def _photo_upload(file_path: str) -> dict:
                 "message": f"Photo '{path.name}' uploaded to Naukri profile.",
             }
         except Exception as e:
-            return {"status": "error", "message": f"Photo upload failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Photo upload failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
 
 
 async def _photo_delete() -> dict:
@@ -341,7 +342,7 @@ async def _photo_delete() -> dict:
             await asyncio.sleep(3)
 
             if "/nlogin" in page.url:
-                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             # Check if a photo exists on the profile page
             has_photo = await page.evaluate("""() => {
@@ -374,7 +375,7 @@ async def _photo_delete() -> dict:
             }""")
 
             if not photo_clicked:
-                return {"status": "error", "message": "Could not find the profile photo element to click."}
+                return {"status": "error", "message": "Could not find the profile photo element to click.", "error_code": "BROWSER_ERROR"}
 
             logger.info("Clicked photo element: %s", photo_clicked)
 
@@ -390,7 +391,7 @@ async def _photo_delete() -> dict:
                     break
 
             if not modal_appeared:
-                return {"status": "error", "message": "Photo cropper modal did not appear after clicking photo."}
+                return {"status": "error", "message": "Photo cropper modal did not appear after clicking photo.", "error_code": "BROWSER_ERROR"}
 
             await asyncio.sleep(1)  # Let modal fully render
 
@@ -410,7 +411,7 @@ async def _photo_delete() -> dict:
             }""")
 
             if not delete_clicked:
-                return {"status": "error", "message": "Could not find the delete button in the photo modal."}
+                return {"status": "error", "message": "Could not find the delete button in the photo modal.", "error_code": "BROWSER_ERROR"}
 
             logger.info("Clicked initial delete option: %s", delete_clicked)
 
@@ -432,7 +433,7 @@ async def _photo_delete() -> dict:
             }""")
 
             if confirm_clicked is None:
-                return {"status": "error", "message": "Could not find confirmation dialog to delete photo."}
+                return {"status": "error", "message": "Could not find confirmation dialog to delete photo.", "error_code": "BROWSER_ERROR"}
 
             logger.info("Clicked confirmation button: %s", confirm_clicked)
             await asyncio.sleep(5)  # Wait for deletion to complete
@@ -442,4 +443,4 @@ async def _photo_delete() -> dict:
                 "message": "Profile photo deleted successfully.",
             }
         except Exception as e:
-            return {"status": "error", "message": f"Photo deletion failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Photo deletion failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

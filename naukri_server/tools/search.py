@@ -43,9 +43,12 @@ async def naukri_search_jobs(
         page: Page number for pagination (default 1)
 
     Returns:
-        - {status: "success", keywords, location, page, total, count, filters, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
+        - {status: "success", keywords, location, page, total, count, has_more, filters, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     page_no = page  # save before shadowing by page_pool
     async with browser.page_pool.acquire() as page:
         try:
@@ -89,17 +92,19 @@ async def naukri_search_jobs(
 
             data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
-                return {"status": "error", "message": "Search API response not captured. Try again."}
+                return {"status": "error", "message": "Search API response not captured. Try again.", "error_code": "API_ERROR"}
 
             jobs = _parse_job_list(data.get("jobDetails", []), limit)
 
+            total_jobs = data.get("noOfJobs") or 0
             result = {
                 "status": "success",
                 "keywords": keywords,
                 "location": location,
                 "page": page_no,
-                "total": data.get("noOfJobs"),
+                "total": total_jobs,
                 "count": len(jobs),
+                "has_more": (page_no * limit) < total_jobs,
                 "clusters": data.get("clusters", {}),
                 "filters": {k: v for k, v in {
                     "experience": experience,
@@ -118,12 +123,12 @@ async def naukri_search_jobs(
                 result["warnings"] = warnings
             return result
         except Exception as e:
-            return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}"}
+            return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
 @mcp.tool()
 @api_tool("Get recommendations")
-async def naukri_get_recommendations(limit: int = 20) -> dict:
+async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     """Get personalized job recommendations from Naukri's algorithm based on your profile.
 
     AI-recommended jobs based on your profile, skills, and activity.
@@ -131,22 +136,31 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
 
     Args:
         limit: Max jobs to return (default 20, max 50)
+        page: Page number for pagination (default 1). Note: Naukri's recommendations API returns a single batch; pagination is applied client-side.
 
     Returns:
-        - {status: "success", source: "recommendations", total, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "success", source: "recommendations", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_post(RECOMMENDED_JOBS_API, body={})
     job_details = data.get("jobDetails", [])
-    jobs = _parse_job_list(job_details, limit)
+    all_jobs = _parse_job_list(job_details, len(job_details))
+    total = data.get("noOfJobs") or len(all_jobs)
+    offset = (page - 1) * limit
+    jobs = all_jobs[offset:offset + limit]
     result = {
         "status": "success",
         "source": "recommendations",
-        "total": data.get("noOfJobs"),
+        "total": total,
         "count": len(jobs),
+        "page": page,
+        "has_more": (offset + limit) < total,
         "jobs": jobs,
     }
-    warnings = validate_job_list(jobs, data.get("noOfJobs"), "recommendations")
+    warnings = validate_job_list(jobs, total, "recommendations")
     if warnings:
         result["warnings"] = warnings
     return result
@@ -154,7 +168,7 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
 
 @mcp.tool()
 @api_tool("Get similar jobs")
-async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
+async def naukri_get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
     """Get jobs similar to a given job posting on Naukri.com.
 
     Requires: a job_id from naukri_search_jobs or naukri_get_job results.
@@ -162,28 +176,37 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
     Args:
         job_id: The Naukri job ID to find similar jobs for
         limit: Max jobs to return (default 10)
+        page: Page number for pagination (default 1). Note: similar jobs API returns a single batch; pagination is applied client-side.
 
     Returns:
-        - {status: "success", job_id, source: "similar", total, count, jobs: [{job_id, title, company, ...}]}
+        - {status: "success", job_id, source: "similar", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_get(SIMILAR_JOBS_API + job_id, params={
-        "noOfResults": str(limit),
+        "noOfResults": str(limit * page),
         "searchType": "sim",
     })
     # Similar jobs uses simJobDetails with content + collaborative arrays
     sim = data.get("simJobDetails", {})
     job_details = sim.get("content", []) + sim.get("collaborative", [])
-    jobs = _parse_job_list(job_details, limit)
+    all_jobs = _parse_job_list(job_details, len(job_details))
+    total = data.get("noOfJobs") or len(all_jobs)
+    offset = (page - 1) * limit
+    jobs = all_jobs[offset:offset + limit]
     result = {
         "status": "success",
         "job_id": job_id,
         "source": "similar",
-        "total": data.get("noOfJobs"),
+        "total": total,
         "count": len(jobs),
+        "page": page,
+        "has_more": (offset + limit) < total,
         "jobs": jobs,
     }
-    warnings = validate_job_list(jobs, data.get("noOfJobs"), "similar_jobs")
+    warnings = validate_job_list(jobs, total, "similar_jobs")
     if warnings:
         result["warnings"] = warnings
     return result

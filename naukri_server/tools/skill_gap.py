@@ -31,7 +31,7 @@ async def naukri_skill_gap_analysis(
         - {status: "error", message}
     """
     if not use_recommendations and not keywords:
-        return {"status": "error", "message": "keywords is required when use_recommendations is False."}
+        return {"status": "error", "message": "keywords is required when use_recommendations is False.", "error_code": "VALIDATION_ERROR"}
 
     sample_size = min(sample_size, 50)
 
@@ -52,15 +52,15 @@ async def naukri_skill_gap_analysis(
 
     if isinstance(jobs_result, Exception) or jobs_result.get("status") == "error":
         msg = str(jobs_result) if isinstance(jobs_result, Exception) else jobs_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch jobs: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch jobs: {msg}", "error_code": "API_ERROR"}
 
     if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
+        return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
     jobs = jobs_result.get("jobs", [])
     if not jobs:
-        return {"status": "error", "message": "No jobs found to analyze."}
+        return {"status": "error", "message": "No jobs found to analyze.", "error_code": "NOT_FOUND"}
 
     profile_skills = parse_skills(profile_result.get("key_skills", []))
 

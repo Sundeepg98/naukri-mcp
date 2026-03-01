@@ -200,7 +200,7 @@ async def naukri_get_job(job_id_or_url: str) -> dict:
     try:
         job_id = _extract_job_id(job_id_or_url)
     except ValueError as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
 
     # Build URL for display/fallback
     if job_id_or_url.isdigit():
@@ -256,11 +256,11 @@ async def naukri_get_job(job_id_or_url: str) -> dict:
 
             details_data = captured.get("details")
             if not details_data:
-                return {"status": "error", "message": "Job details API response not captured. Page may not have loaded."}
+                return {"status": "error", "message": "Job details API response not captured. Page may not have loaded.", "error_code": "API_ERROR"}
 
             return _parse_job_detail(details_data, job_id, page_url, captured.get("score"))
         except Exception as e:
-            return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}"}
+            return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
 @mcp.tool()

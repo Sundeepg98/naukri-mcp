@@ -56,7 +56,10 @@ async def _get_topics() -> dict:
 
     return {
         "status": "success",
+        "total": len(topics),
         "count": len(topics),
+        "page": 1,
+        "has_more": False,
         "topics": topics,
         "roles": roles,
     }
@@ -82,9 +85,14 @@ async def _get_history() -> dict:
             if isinstance(iv, dict):
                 interviews.append(iv)
 
+    total = inner.get("interviewCount", len(interviews))
     return {
         "status": "success",
-        "interview_count": inner.get("interviewCount", len(interviews)),
+        "total": total,
+        "count": len(interviews),
+        "page": 1,
+        "has_more": False,
+        "interview_count": total,
         "interviews": interviews,
     }
 
@@ -99,11 +107,11 @@ async def _start_interview(job_id: str) -> dict:
     session_data = session_resp.get("data", session_resp)
 
     if session_resp.get("statusCode") not in ("0", 0, None):
-        return {"status": "error", "message": session_resp.get("message", "Failed to create interview session")}
+        return {"status": "error", "message": session_resp.get("message", "Failed to create interview session"), "error_code": "API_ERROR"}
 
     topics = session_data.get("topics", [])
     if not topics:
-        return {"status": "error", "message": "No interview topics generated for this job."}
+        return {"status": "error", "message": "No interview topics generated for this job.", "error_code": "API_ERROR"}
 
     topic = topics[0]
     topic_id = str(topic.get("topicId", ""))
@@ -112,7 +120,7 @@ async def _start_interview(job_id: str) -> dict:
     test_id = str(test_meta[0].get("testId", "")) if test_meta else ""
 
     if not test_id or not topic_id:
-        return {"status": "error", "message": "Could not extract test/topic IDs from session."}
+        return {"status": "error", "message": "Could not extract test/topic IDs from session.", "error_code": "API_ERROR"}
 
     company_details = session_data.get("companyDetails", [])
     company_info = None
@@ -226,8 +234,8 @@ async def naukri_mock_interview(
         answer: Required for answer — your answer text
 
     Returns:
-        - topics: {status, count, topics: [{name, status, id, tests_done, free}], roles: [{...}]}
-        - history: {status, interview_count, interviews: [{...}]}
+        - topics: {status, total, count, page, has_more, topics: [{name, status, id, tests_done, free}], roles: [{...}]}
+        - history: {status, total, count, page, has_more, interview_count, interviews: [{...}]}
         - start: {status, test_id, topic_id, topic_name, question, company_details}
         - answer: {status: "next_question"|"complete"|"generating", ...}
         - {status: "error", message} on failure
@@ -237,41 +245,41 @@ async def naukri_mock_interview(
         try:
             return await _get_topics()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get mock interview topics failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get mock interview topics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- history -------------------------------------------------------------
     elif action == "history":
         try:
             return await _get_history()
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get mock interview history failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Get mock interview history failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- start ---------------------------------------------------------------
     elif action == "start":
         if not job_id:
-            return {"status": "error", "message": "start requires job_id."}
+            return {"status": "error", "message": "start requires job_id.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _start_interview(job_id)
         except NaukriAPIError as e:
-            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status}
+            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to start mock interview: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to start mock interview: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- answer --------------------------------------------------------------
     elif action == "answer":
         if not test_id or not topic_id or not question_id or not answer:
-            return {"status": "error", "message": "answer requires test_id, topic_id, question_id, and answer."}
+            return {"status": "error", "message": "answer requires test_id, topic_id, question_id, and answer.", "error_code": "VALIDATION_ERROR"}
         try:
             return await _answer_question(test_id, topic_id, question_id, answer)
         except NaukriAPIError as e:
-            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status}
+            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to answer question: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to answer question: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # -- unknown action ------------------------------------------------------
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: topics, history, start, answer"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: topics, history, start, answer", "error_code": "VALIDATION_ERROR"}

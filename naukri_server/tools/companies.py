@@ -55,6 +55,9 @@ async def naukri_search_companies(
         - {status: "success", keyword, page, total, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     seo_key = keyword.lower().replace(" ", "-")
     data = await api_get(
         COMPANY_SEARCH_API,
@@ -104,6 +107,9 @@ async def naukri_get_company_jobs(
         - {status: "success", group_id, page, total, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
+    limit = min(limit, 50)
+    if page < 1:
+        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     page_no = page  # save before shadowing by page_pool
     async with browser.page_pool.acquire() as page:
         try:
@@ -114,7 +120,7 @@ async def naukri_get_company_jobs(
 
             data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
-                return {"status": "error", "message": "Search API response not captured for company jobs."}
+                return {"status": "error", "message": "Search API response not captured for company jobs.", "error_code": "BROWSER_ERROR"}
 
             job_details = data.get("jobDetails", [])
             jobs = _parse_job_list(job_details, limit)
@@ -132,7 +138,7 @@ async def naukri_get_company_jobs(
                 result["warnings"] = warnings
             return result
         except Exception as e:
-            return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -217,26 +223,26 @@ async def naukri_company_follow(
     """
     # ── validate group_ids ────────────────────────────────────────────
     if not group_ids:
-        return {"status": "error", "message": "group_ids is required and must not be empty."}
+        return {"status": "error", "message": "group_ids is required and must not be empty.", "error_code": "VALIDATION_ERROR"}
 
     # ── status ────────────────────────────────────────────────────────
     if action == "status":
         try:
             return await _get_follow_status(group_ids)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── follow / unfollow ─────────────────────────────────────────────
     elif action in ("follow", "unfollow"):
         try:
             return await _follow_or_unfollow(group_ids, action)
         except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status}
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}"}
+            return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: status, follow, unfollow"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: status, follow, unfollow", "error_code": "VALIDATION_ERROR"}

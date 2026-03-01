@@ -45,7 +45,7 @@ async def naukri_login(
             await browser.token_manager.extract()
             browser.token = browser.token_manager._token
             if not browser.token:
-                return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
+                return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
             name = await browser.get_profile_name()
             return {"status": "already_logged_in", "profile_name": name, "has_token": True}
 
@@ -66,7 +66,7 @@ async def naukri_login(
                     continue
 
             if not google_clicked:
-                return {"status": "error", "message": "Google login button not found. Try method='email'."}
+                return {"status": "error", "message": "Google login button not found. Try method='email'.", "error_code": "NOT_FOUND"}
 
             # Wait up to 30s for Google SSO to complete
             for _ in range(30):
@@ -75,24 +75,24 @@ async def naukri_login(
                 if "/nlogin" not in current_url and "accounts.google" not in current_url:
                     await browser.token_manager.extract()
                     if not browser.token_manager._token:
-                        return {"status": "error", "message": "Login redirect completed but token not found. Try again."}
+                        return {"status": "error", "message": "Login redirect completed but token not found. Try again.", "error_code": "AUTH_ERROR"}
                     name = await browser.get_profile_name()
                     return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
 
             current_url = page.url
             if "accounts.google" in current_url:
                 return {"status": "waiting_for_user", "message": "Google account picker is still open. Select your account in the browser, then call naukri_login() again."}
-            return {"status": "error", "message": "Google login did not complete within 30s. Check the browser."}
+            return {"status": "error", "message": "Google login did not complete within 30s. Check the browser.", "error_code": "BROWSER_ERROR"}
 
         else:
             if not email or not password:
-                return {"status": "error", "message": "email and password required for method='email'"}
+                return {"status": "error", "message": "email and password required for method='email'", "error_code": "VALIDATION_ERROR"}
             try:
                 await page_safe_fill(page, "input#usernameField", email)
                 await page_safe_fill(page, "input#passwordField", password)
                 await page.click("button[type='submit']")
             except Exception as e:
-                return {"status": "error", "message": f"Login form error: {e}"}
+                return {"status": "error", "message": f"Login form error: {e}", "error_code": "BROWSER_ERROR"}
 
             await asyncio.sleep(3)
 
@@ -104,12 +104,12 @@ async def naukri_login(
                 await browser.token_manager.extract()
                 browser.token = browser.token_manager._token
                 if not browser.token:
-                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
+                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
                 name = await browser.get_profile_name()
                 return {"status": "logged_in", "method": "email", "profile_name": name, "has_token": True}
 
             error = await page_text(page, ".err-message, .error-msg, [class*='error']")
-            return {"status": "error", "message": error or "Login failed — check credentials"}
+            return {"status": "error", "message": error or "Login failed — check credentials", "error_code": "AUTH_ERROR"}
 
 
 # ============================================================================
@@ -132,7 +132,7 @@ async def naukri_verify_otp(otp: str) -> dict:
         # Validate OTP format
         otp = otp.strip()
         if not re.match(r'^\d{4,6}$', otp):
-            return {"status": "error", "message": f"Invalid OTP format: expected 4-6 digits, got '{otp}'"}
+            return {"status": "error", "message": f"Invalid OTP format: expected 4-6 digits, got '{otp}'", "error_code": "AUTH_ERROR"}
 
         try:
             await page_safe_fill(page, "input#otp", otp)
@@ -143,14 +143,14 @@ async def naukri_verify_otp(otp: str) -> dict:
                 await browser.token_manager.extract()
                 browser.token = browser.token_manager._token
                 if not browser.token:
-                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again."}
+                    return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
                 name = await browser.get_profile_name()
                 return {"status": "logged_in", "profile_name": name, "has_token": True}
 
             error = await page_text(page, ".err-message, .error-msg")
-            return {"status": "error", "message": error or "OTP verification failed"}
+            return {"status": "error", "message": error or "OTP verification failed", "error_code": "AUTH_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
 
 
 # ============================================================================
@@ -175,6 +175,6 @@ async def naukri_get_login_status() -> dict:
             "logged_in": data.get("loggedInStatus", False),
         }
     except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
-        return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}"}
+        return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
