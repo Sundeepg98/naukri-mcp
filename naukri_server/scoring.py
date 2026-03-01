@@ -3,6 +3,17 @@
 import re
 
 
+def parse_skills(raw) -> set:
+    """Normalize skills from any format (string, list, set) to a lowercase set."""
+    if isinstance(raw, set):
+        return {s.lower().strip() for s in raw if s}
+    if isinstance(raw, str):
+        return {s.strip().lower() for s in raw.split(",") if s.strip()}
+    if isinstance(raw, (list, tuple)):
+        return {s.lower().strip() for s in raw if isinstance(s, str) and s.strip()}
+    return set()
+
+
 def compute_fit_score(job_skills: set, profile_skills: set, job_exp_str: str, profile_exp) -> dict:
     """Compute fit score between a job and a candidate profile.
 

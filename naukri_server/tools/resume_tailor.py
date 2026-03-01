@@ -103,8 +103,12 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     job_skills = [s for s in job_result.get("skills", []) if isinstance(s, str)]
     job_skills_lower = set(s.lower() for s in job_skills)
 
-    # Extract profile data
-    profile_skills = [s for s in profile_result.get("key_skills", []) if isinstance(s, str)]
+    # Extract profile data — key_skills may be comma-separated string or list
+    raw_profile_skills = profile_result.get("key_skills", [])
+    if isinstance(raw_profile_skills, str):
+        profile_skills = [s.strip() for s in raw_profile_skills.split(",") if s.strip()]
+    else:
+        profile_skills = [s for s in raw_profile_skills if isinstance(s, str)]
     profile_skills_lower = set(s.lower() for s in profile_skills)
     headline = profile_result.get("resume_headline", "")
     employment = profile_result.get("employment", [])

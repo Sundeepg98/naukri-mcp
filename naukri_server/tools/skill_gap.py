@@ -6,6 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.scoring import parse_skills
 
 
 @mcp.tool()
@@ -61,7 +62,7 @@ async def naukri_skill_gap_analysis(
     if not jobs:
         return {"status": "error", "message": "No jobs found to analyze."}
 
-    profile_skills = set(s.lower() for s in profile_result.get("key_skills", []))
+    profile_skills = parse_skills(profile_result.get("key_skills", []))
 
     # Analyze each job
     missing_counter = Counter()  # skill -> count of jobs missing it
@@ -69,7 +70,7 @@ async def naukri_skill_gap_analysis(
     missing_jobs = {}  # skill -> list of job titles where it's missing
 
     for job in jobs:
-        job_skills = set(s.lower() for s in (job.get("tags") or job.get("skills") or []))
+        job_skills = parse_skills(job.get("tags") or job.get("skills") or [])
         if not job_skills:
             continue
 

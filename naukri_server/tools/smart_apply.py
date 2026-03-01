@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
-from naukri_server.scoring import compute_fit_score
+from naukri_server.scoring import compute_fit_score, parse_skills
 
 
 @mcp.tool()
@@ -51,8 +51,8 @@ async def naukri_smart_apply(
         return {"status": "error", "message": f"Failed to fetch profile: {msg}"}
 
     # Compute fit
-    job_skills = set(s.lower() for s in job_result.get("skills", []))
-    profile_skills = set(s.lower() for s in profile_result.get("key_skills", []))
+    job_skills = parse_skills(job_result.get("skills", []))
+    profile_skills = parse_skills(profile_result.get("key_skills", []))
     fit = compute_fit_score(
         job_skills, profile_skills,
         job_result.get("experience", ""),
