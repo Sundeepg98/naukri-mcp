@@ -61,6 +61,16 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
         profile_location = None
         profile_expected_ctc = None
 
+    # Load local tracking for cross-check
+    local_applied_ids = set()
+    try:
+        from naukri_server.tools.tracking import _load_json, APPLICATIONS_FILE, _applications_lock
+        async with _applications_lock:
+            local_apps = _load_json(APPLICATIONS_FILE)
+            local_applied_ids = {str(a.get("job_id")) for a in local_apps}
+    except Exception:
+        pass  # Non-critical — just use API is_applied
+
     jobs = []
     errors = []
     all_skill_sets = []
@@ -90,7 +100,7 @@ async def naukri_compare_jobs(job_ids: list[str]) -> dict:
             "skills": skills if isinstance(skills, list) else list(job_skills),
             "group_id": r.get("group_id"),
             "vacancies": r.get("vacancies"),
-            "is_applied": r.get("is_applied"),
+            "is_applied": r.get("is_applied") or jid in local_applied_ids,
         }
 
         if profile_ok:

@@ -44,7 +44,7 @@ def api_tool(context: str = None):
             try:
                 return await func(*args, **kwargs)
             except NaukriAPIError as e:
-                return {"status": "error", "message": str(e)}
+                return {"status": "error", "message": str(e), "http_status": e.status}
             except Exception as e:
                 label = context or func.__name__.replace("naukri_", "").replace("_", " ").title()
                 return {"status": "error", "message": f"{label} failed: {type(e).__name__}: {e}"}

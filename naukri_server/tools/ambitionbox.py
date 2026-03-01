@@ -7,6 +7,7 @@ import re
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import NAUKRI_BASE, AMBITIONBOX_BASE
+from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_salary_data, validate_review_data
 
 logger = logging.getLogger(__name__)
@@ -850,7 +851,7 @@ async def naukri_get_company_slug(group_id: str) -> dict:
                 """)
 
             if company_name:
-                slug = _derive_slug(company_name)
+                slug = derive_slug(company_name)
                 return {
                     "status": "success",
                     "group_id": group_id,
@@ -888,21 +889,3 @@ def _extract_slug_from_url(url: str) -> str | None:
     return None
 
 
-def _derive_slug(company_name: str) -> str:
-    """Derive an AmbitionBox-style slug from a company name.
-
-    Examples: "Tata Consultancy Services" -> "tata-consultancy-services"
-              "Google India Pvt. Ltd." -> "google-india"
-    """
-    # Remove common suffixes
-    name = company_name.strip()
-    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd", "Limited",
-                   "Inc.", "Inc", "Corp.", "Corp", "Corporation", "LLP", "LLC"):
-        if name.lower().endswith(suffix.lower()):
-            name = name[:len(name) - len(suffix)].strip()
-            break
-    # Lowercase, replace non-alphanumeric with hyphens, collapse
-    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
-    # Collapse multiple hyphens
-    slug = re.sub(r'-+', '-', slug)
-    return slug

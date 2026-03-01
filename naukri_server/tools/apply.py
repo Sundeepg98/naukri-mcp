@@ -225,6 +225,8 @@ async def naukri_batch_apply(
     sort_by: Optional[str] = None,
     freshness: Optional[int] = None,
     work_mode: Optional[str] = None,
+    job_type: Optional[str] = None,
+    company_type: Optional[str] = None,
     limit: int = 5,
     answers: Optional[dict] = None,
 ) -> dict:
@@ -245,6 +247,8 @@ async def naukri_batch_apply(
         sort_by: Sort order — "relevance" or "date" (forwarded to search)
         freshness: Job age in days — 1, 3, 7, 15, 30 (forwarded to search)
         work_mode: Work mode filter — "wfh", "hybrid", "wfo" (forwarded to search)
+        job_type: Filter by job type - "fulltime", "parttime", "contract", "internship", "temporary"
+        company_type: Filter by company type - "startup", "mnc", "indian_mnc", "corporate"
         limit: Max jobs to apply to (default 5, max 20)
         answers: Pre-filled answers for common screening questions.
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
@@ -265,6 +269,7 @@ async def naukri_batch_apply(
         keywords, location, experience,
         salary_min=salary_min, salary_max=salary_max,
         sort_by=sort_by, freshness=freshness, work_mode=work_mode,
+        job_type=job_type, company_type=company_type,
         limit=limit,
     )
     if search_result.get("status") != "success":
@@ -295,11 +300,18 @@ async def naukri_batch_apply(
         }
 
     # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
-    # Create tasks so we can cancel them on timeout
-    tasks = [asyncio.create_task(_apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
-                                  tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
-                                                  "url": j.get("url"), "source": "batch"}))
-             for j in to_apply]
+    async def _apply_with_timeout(j):
+        try:
+            return await asyncio.wait_for(
+                _apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
+                              tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
+                                              "url": j.get("url"), "source": "batch"}),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            return {"status": "error", "job_id": j["job_id"], "message": "Timed out after 30s"}
+
+    tasks = [asyncio.create_task(_apply_with_timeout(j)) for j in to_apply]
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),

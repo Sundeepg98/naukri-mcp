@@ -65,6 +65,14 @@ async def naukri_auto_hunt(
     if not jobs:
         return {"status": "success", "jobs_found": 0, "jobs_matched": 0, "ranked_jobs": []}
 
+    # Filter out already-applied jobs
+    pre_filter_count = len(jobs)
+    jobs = [j for j in jobs if not j.get("is_applied")]
+    if not jobs:
+        return {"status": "success", "jobs_found": pre_filter_count,
+                "jobs_matched": 0, "ranked_jobs": [],
+                "note": "All matching jobs already applied to."}
+
     profile_skills = parse_skills(profile_result.get("key_skills", []))
     profile_exp = profile_result.get("total_experience")
     profile_location = profile_result.get("current_location")

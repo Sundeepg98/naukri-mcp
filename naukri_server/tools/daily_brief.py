@@ -1,4 +1,4 @@
-"""Daily brief — morning dashboard combining notifications, inbox, recommendations, and activity."""
+"""Daily brief — morning dashboard combining notifications, inbox, recommendations, activity, and dashboard stats."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -11,18 +11,19 @@ from naukri_server.config import logger
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 6 checks in parallel: unread messages, notifications, new recommendations,
-    recruiter activity, profile activity level, and today's applications.
+    Runs 7 checks in parallel: unread messages, notifications, new recommendations,
+    recruiter activity, profile activity level, today's applications, and dashboard stats.
 
     Returns:
         - {status: "success", unread_messages, notifications, recommendations,
-           recruiter_activity, activity_level, todays_applications, errors}
+           recruiter_activity, activity_level, todays_applications, dashboard, errors}
     """
     from naukri_server.tools.inbox import naukri_get_inbox
     from naukri_server.tools.notifications import naukri_get_notifications
     from naukri_server.tools.search import naukri_get_recommendations
     from naukri_server.tools.performance import naukri_get_recruiter_activity, naukri_get_activity_level
     from naukri_server.tools.tracking import naukri_get_applications
+    from naukri_server.tools.profile import naukri_get_dashboard
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors = []
@@ -34,6 +35,7 @@ async def naukri_daily_brief() -> dict:
         naukri_get_recruiter_activity(size=5),
         naukri_get_activity_level(),
         naukri_get_applications(date_from=today),
+        naukri_get_dashboard(),
         return_exceptions=True,
     )
 
@@ -53,6 +55,7 @@ async def naukri_daily_brief() -> dict:
     recruiter = _extract(3, "Recruiter activity")
     activity = _extract(4, "Activity level")
     apps = _extract(5, "Applications")
+    dashboard = _extract(6, "Dashboard")
 
     brief = {
         "status": "success",
@@ -78,6 +81,11 @@ async def naukri_daily_brief() -> dict:
         "todays_applications": {
             "count": apps.get("count", 0) if apps else 0,
             "applications": apps.get("applications", []) if apps else [],
+        },
+        "dashboard": {
+            "profile_views": dashboard.get("profile_views", 0) if dashboard else 0,
+            "total_matches": dashboard.get("total_matches", 0) if dashboard else 0,
+            "unread_invites": dashboard.get("unread_invites", 0) if dashboard else 0,
         },
     }
 

@@ -97,6 +97,7 @@ async def naukri_update_settings(
         - {status: "error", message}
     """
     updated_fields = []
+    jss_result = None
 
     # --- Job Search Status: use browser UI (radio buttons on settings page) ---
     if job_search_status is not None:
@@ -161,18 +162,19 @@ async def naukri_update_settings(
                 updated_fields.append(f"jobSearchStatus={key}")
                 api_ok = captured.get("status") in (200, 201, 204)
 
-                # If no API call was captured, the radio click might have triggered
-                # a page reload or widget update without a separate POST
-                return {
-                    "status": "success",
+                # Store result instead of returning early, so other settings
+                # (recommended_job_frequency, notifications, etc.) can still be processed.
+                jss_result = {
                     "method": "browser_ui",
-                    "updated_fields": updated_fields,
                     "api_confirmed": api_ok,
                     "select_result": select_clicked,
-                    "message": f"Job search status set to '{key}' via settings page.",
+                    "jss_message": f"Job search status set to '{key}' via settings page.",
                 }
         except Exception as e:
-            return {"status": "error", "message": f"Failed to update job search status: {type(e).__name__}: {e}"}
+            jss_result = {
+                "method": "browser_ui",
+                "jss_error": f"Failed to update job search status: {type(e).__name__}: {e}",
+            }
 
     # --- Other settings: try API POST with full settings body ---
     try:
@@ -202,6 +204,11 @@ async def naukri_update_settings(
             updated_fields.append(f"promotionalNotification={promotional_notification}")
 
         if not body:
+            if jss_result is not None:
+                # Only job_search_status was requested; no API settings to update
+                result = {"status": "success", "updated_fields": updated_fields}
+                result.update(jss_result)
+                return result
             return {"status": "error", "message": "No settings provided. Pass at least one parameter."}
 
         # GET current formatted settings, extract {settingId: numericValue} pairs,
@@ -222,11 +229,14 @@ async def naukri_update_settings(
             merged = body
 
         await api_post(SETTINGS_API, merged)
-        return {
+        result = {
             "status": "success",
             "updated_fields": updated_fields,
             "message": f"Updated {len(updated_fields)} setting(s).",
         }
+        if jss_result is not None:
+            result.update(jss_result)
+        return result
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:

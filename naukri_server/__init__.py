@@ -1,17 +1,17 @@
-"""Naukri.com Job Automation MCP Server v6 (80 tools) — package entry point.
+"""Naukri.com Job Automation MCP Server v7 (80 tools) — package entry point.
 
 Quick Start for AI consumers:
   1. naukri_login / naukri_get_login_status (authenticate first)
-  2. naukri_daily_brief (morning dashboard — inbox, notifications, recommendations)
-  3. naukri_auto_hunt (one-call job hunting with fit scoring)
-  4. naukri_smart_apply (fit assessment) → naukri_apply (apply)
-  5. naukri_compare_jobs (side-by-side comparison of shortlisted jobs)
+  2. naukri_daily_brief (morning dashboard — inbox, notifications, recommendations, dashboard stats)
+  3. naukri_auto_hunt (one-call job hunting with fit scoring, filters already-applied)
+  4. naukri_smart_apply (fit assessment with configurable threshold) → naukri_apply (apply)
+  5. naukri_compare_jobs (side-by-side comparison with fit scores)
   6. naukri_accept_nvite (respond to recruiter NVites)
   7. naukri_sync_applications → naukri_get_applications (track)
   8. naukri_research_company / naukri_get_interview_experiences (company intel)
-  9. naukri_audit_profile → naukri_resume_tailor → naukri_update_profile (optimize profile)
+  9. naukri_resume_tailor → naukri_update_profile (optimize profile)
 
-For automation: naukri_auto_hunt, naukri_skill_gap_analysis
+For automation: naukri_auto_hunt, naukri_skill_gap_analysis, naukri_batch_apply
 For analytics: naukri_get_application_insights, naukri_analyze_salary_position
 For export: naukri_export_data (JSON/CSV)
 For cache management: naukri_review_cached_answers, naukri_delete/update_cached_answer

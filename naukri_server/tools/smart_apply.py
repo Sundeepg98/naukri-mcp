@@ -12,6 +12,7 @@ from naukri_server.scoring import compute_fit_score, parse_skills
 async def naukri_smart_apply(
     job_id: str,
     apply_if_fit: bool = False,
+    min_fit_score: int = 60,
     answers: Optional[dict] = None,
 ) -> dict:
     """Assess job fit before applying — compares your profile against the job.
@@ -24,7 +25,8 @@ async def naukri_smart_apply(
 
     Args:
         job_id: Naukri job ID
-        apply_if_fit: If True, automatically apply when fit score >= 60%
+        apply_if_fit: If True, automatically apply when fit score >= min_fit_score
+        min_fit_score: Minimum fit score for auto-apply (default 60, range 0-100)
         answers: Optional screening question answers (for auto-apply)
 
     Returns:
@@ -80,7 +82,7 @@ async def naukri_smart_apply(
     }
 
     # Auto-apply if requested and fit
-    if apply_if_fit and fit["overall_score"] >= 60:
+    if apply_if_fit and fit["overall_score"] >= min_fit_score:
         apply_result = await _apply_single(
             job_id=job_id, answers=answers,
             title=job_result.get("title"), company=job_result.get("company"),

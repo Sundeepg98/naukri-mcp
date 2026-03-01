@@ -114,6 +114,26 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     headline = profile_result.get("resume_headline", "")
     employment = profile_result.get("employment", [])
 
+    # Extract additional profile keywords from summary, certifications, projects
+    profile_summary = profile_result.get("summary") or ""
+    profile_certs = profile_result.get("certifications") or []
+    profile_projects = profile_result.get("projects") or []
+
+    # Build extended keyword set from all profile sections
+    extended_keywords = set(normalize_skill(s) for s in profile_result.get("key_skills", []))
+    # Add certifications as keywords
+    for cert in profile_certs:
+        if isinstance(cert, dict):
+            cert_name = cert.get("certificationName") or cert.get("name") or ""
+            if cert_name:
+                extended_keywords.add(normalize_skill(cert_name))
+    # Add project tech skills
+    for proj in profile_projects:
+        if isinstance(proj, dict):
+            for skill in (proj.get("skills") or []):
+                if isinstance(skill, str):
+                    extended_keywords.add(normalize_skill(skill))
+
     # --- Analysis ---
 
     # 1. Skills to add (in job but not in profile)
@@ -159,6 +179,7 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     # 5. Keyword gaps — terms in JD not found anywhere in profile
     profile_text = " ".join([
         headline or "",
+        profile_summary,
         " ".join(profile_skills),
         " ".join(emp.get("description", "") or "" for emp in employment),
         " ".join(emp.get("designation", "") or "" for emp in employment),
@@ -167,7 +188,7 @@ async def naukri_resume_tailor(job_id: str) -> dict:
     jd_phrases = _extract_phrases(job_desc)
     # Normalize keyword gaps through alias map to avoid "js" gap when profile has "javascript"
     raw_gaps = (job_keywords - profile_keywords - _STOPWORDS) - job_skills_lower
-    normalized_profile = {normalize_skill(k) for k in profile_keywords}
+    normalized_profile = {normalize_skill(k) for k in profile_keywords} | extended_keywords
     keyword_gaps = sorted([k for k in raw_gaps if normalize_skill(k) not in normalized_profile])
     # Filter to only meaningful gaps (3+ chars, appear significant)
     keyword_gaps = [k for k in keyword_gaps if len(k) >= 3][:20]

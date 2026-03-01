@@ -56,6 +56,7 @@ async def naukri_create_job_alert(
     location: Optional[str] = None,
     experience: Optional[int] = None,
     min_ctc: Optional[int] = None,
+    max_ctc: Optional[int] = None,
     function_area_id: Optional[str] = None,
     role_id: Optional[str] = None,
     industry_type_id: Optional[str] = None,
@@ -69,6 +70,7 @@ async def naukri_create_job_alert(
         location: City filter (e.g., "Bangalore", "Remote")
         experience: Years of experience filter (e.g., 5)
         min_ctc: Minimum CTC in lakhs (e.g., 15 for 15 LPA)
+        max_ctc: Maximum CTC in lakhs (e.g., 30 for 30 LPA)
         function_area_id: Functional area ID (from Naukri taxonomy)
         role_id: Role ID (from Naukri taxonomy)
         industry_type_id: Industry type ID (from Naukri taxonomy)
@@ -85,6 +87,8 @@ async def naukri_create_job_alert(
         body["experience"] = str(experience)
     if min_ctc is not None:
         body["minCTC"] = str(min_ctc * 100000)
+    if max_ctc is not None:
+        body["maxCTC"] = str(max_ctc * 100000)
     if function_area_id is not None:
         body["functionAreaId"] = function_area_id
     if role_id is not None:
@@ -142,116 +146,54 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
 
 
 @mcp.tool()
-async def naukri_delete_job_alert(alert_name: str) -> dict:
-    """Delete a job alert by name. Uses browser automation since no REST API exists.
+@api_tool("Delete job alert")
+async def naukri_delete_job_alert(alert_id: str) -> dict:
+    """Delete a job alert by its ID. Uses browser automation since no REST API exists.
 
     Naukri has no REST DELETE endpoint for alerts (Akamai CDN returns 501).
-    This tool navigates to the legacy alert management page, finds the alert
-    by name, and submits the delete confirmation form.
+    This tool looks up the alert by ID via the alerts API, then navigates to
+    the legacy delete confirmation page and submits the form.
+
+    Use naukri_get_job_alerts first to get alert IDs.
 
     Args:
-        alert_name: The name of the alert to delete (case-insensitive partial match)
+        alert_id: The alert ID to delete (from naukri_get_job_alerts results)
 
     Returns:
-        - {status: "success", alert_name, message}
+        - {status: "success", alert_id, alert_name, message}
         - {status: "error", message}
     """
+    # Get all alerts to find the target
+    alerts_result = await naukri_get_job_alerts()
+    if alerts_result.get("status") != "success":
+        return {"status": "error", "message": "Failed to fetch alerts."}
+
+    target = None
+    for alert in alerts_result.get("alerts", []):
+        if str(alert.get("alert_id")) == str(alert_id) or str(alert.get("id")) == str(alert_id):
+            target = alert
+            break
+
+    if not target:
+        return {"status": "error", "message": f"Alert ID '{alert_id}' not found."}
+
+    a_id = str(target["alert_id"])
+    alert_name = target.get("name", a_id)
+
     async with browser.page_pool.acquire() as page:
         try:
-            # Step 1: Navigate to the legacy alert management page
-            await page_goto(page, f"{NAUKRI_BASE}/alert/manage")
-            await asyncio.sleep(3)
+            logger.info("Deleting alert '%s' (id=%s)...", alert_name, a_id[:16] + "...")
+
+            # Step 1: Navigate to the delete confirmation page
+            delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
+            await page_goto(page, delete_url)
+            await asyncio.sleep(2)
 
             # Check if logged in
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first."}
 
-            # Step 2: Scrape alert rows — extract alert names and their delete link hrefs
-            alerts_data = await page.evaluate("""() => {
-                const results = [];
-                // Look for links that contain '/alert/delete' in href
-                const deleteLinks = document.querySelectorAll('a[href*="/alert/delete"]');
-                for (const link of deleteLinks) {
-                    // Walk up to find the row/container that has the alert name
-                    const row = link.closest('tr') || link.closest('div') || link.parentElement;
-                    if (!row) continue;
-
-                    // The alert name is typically in the row text (excluding the link text)
-                    const rowText = row.textContent || '';
-                    const href = link.getAttribute('href') || '';
-                    results.push({
-                        name: rowText.trim(),
-                        href: href
-                    });
-                }
-
-                // Fallback: also look for table rows with alert info
-                if (results.length === 0) {
-                    const rows = document.querySelectorAll('table tr, .alert-row, [class*="alert"]');
-                    for (const row of rows) {
-                        const link = row.querySelector('a[href*="delete"]');
-                        if (link) {
-                            results.push({
-                                name: row.textContent.trim(),
-                                href: link.getAttribute('href') || ''
-                            });
-                        }
-                    }
-                }
-
-                return results;
-            }""")
-
-            if not alerts_data:
-                # Maybe the page structure is different — check if there are any alerts at all
-                page_text_content = await page.evaluate("() => document.body.innerText")
-                logger.warning("No alert delete links found. Page text: %s", page_text_content[:500])
-                return {
-                    "status": "error",
-                    "message": "No alerts found on the manage page. The page may have no alerts, "
-                               "or the page structure may have changed.",
-                }
-
-            # Step 3: Match the user's alert_name (case-insensitive partial match)
-            alert_name_lower = alert_name.lower()
-            matched = None
-            for alert in alerts_data:
-                if alert_name_lower in alert.get("name", "").lower():
-                    matched = alert
-                    break
-
-            if not matched:
-                available = [a.get("name", "")[:80] for a in alerts_data]
-                return {
-                    "status": "error",
-                    "message": f"No alert matching '{alert_name}' found. "
-                               f"Available alerts: {available}",
-                }
-
-            # Step 4: Extract the aId from the delete link URL
-            delete_href = matched["href"]
-            if not delete_href:
-                return {"status": "error", "message": "Delete link found but href is empty."}
-
-            # Parse aId from the URL (e.g., /alert/delete?aId=<96-hex-chars>)
-            parsed = urlparse(delete_href)
-            query_params = parse_qs(parsed.query)
-            aid_values = query_params.get("aId", [])
-            if not aid_values:
-                return {
-                    "status": "error",
-                    "message": f"Could not extract aId from delete link: {delete_href}",
-                }
-            a_id = aid_values[0]
-
-            logger.info("Deleting alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
-
-            # Step 5: Navigate to the delete confirmation page
-            delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
-            await page_goto(page, delete_url)
-            await asyncio.sleep(2)
-
-            # Step 6: Submit the delete confirmation via fetch POST
+            # Step 2: Submit the delete confirmation via fetch POST
             delete_result = await page.evaluate("""(params) => {
                 const { deleteUrl, aId } = params;
                 return fetch(deleteUrl, {
@@ -314,12 +256,12 @@ async def naukri_delete_job_alert(alert_name: str) -> dict:
                                    f"and no confirm button found on page.",
                     }
 
-            matched_name = matched.get("name", alert_name)[:80]
-            logger.info("Alert '%s' deleted successfully.", matched_name)
+            logger.info("Alert '%s' (id=%s) deleted successfully.", alert_name, a_id)
             return {
                 "status": "success",
-                "alert_name": matched_name,
-                "message": f"Job alert matching '{alert_name}' has been deleted.",
+                "alert_id": a_id,
+                "alert_name": alert_name,
+                "message": f"Job alert '{alert_name}' (id={a_id}) has been deleted.",
             }
 
         except Exception as e:

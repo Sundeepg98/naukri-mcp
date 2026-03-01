@@ -44,5 +44,7 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "is_saved": job.get("isSaved"),
             "company_rating": (job.get("ambitionBoxData") or {}).get("Rating") or (job.get("ambitionBoxData") or {}).get("AggregateRating"),
             "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),
+            "candidates_count": job.get("candidatesCount"),
+            "type_of_business": job.get("typeOfBusiness"),
         })
     return jobs

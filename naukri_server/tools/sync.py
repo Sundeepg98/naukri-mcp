@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -38,7 +39,9 @@ def _load_sync_state() -> dict:
 
 def _save_sync_state(state: dict):
     text = json.dumps(state, indent=2)
-    _SYNC_STATE_FILE.write_text(text, encoding="utf-8")
+    tmp = _SYNC_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(_SYNC_STATE_FILE))
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +445,7 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
         if rid in local_by_id:
             existing = local_by_id[rid]
             changed = False
-            for field in ("title", "company", "status"):
+            for field in ("title", "company", "status", "recruiter_active", "apply_type"):
                 if rj.get(field) and rj[field] != existing.get(field):
                     existing[field] = rj[field]
                     changed = True

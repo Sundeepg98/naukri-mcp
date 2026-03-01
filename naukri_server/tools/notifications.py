@@ -1,5 +1,7 @@
 """Notification tools — view and manage Naukri notification center."""
 
+import asyncio
+
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
@@ -76,40 +78,58 @@ async def naukri_mark_notification_read(notification_id: str, date: str) -> dict
 async def naukri_mark_all_notifications_read() -> dict:
     """Mark all unread notifications as read in your Naukri notification center.
 
-    Fetches all notifications, filters unread ones, and marks each as read.
+    Fetches all notifications (with pagination), filters unread ones, and
+    marks them as read in parallel batches.
 
     Returns:
-        - {status: "success", marked_count, already_read}
+        - {status: "success", marked_count, already_read, total_processed}
         - {status: "error", message}
     """
-    result = await naukri_get_notifications(limit=50)
-    if result.get("status") != "success":
-        return result
+    total_marked = 0
+    total_read = 0
+    total_processed = 0
+    all_errors = []
 
-    notifications = result.get("notifications", [])
-    unread = [n for n in notifications if not n.get("is_read")]
+    while True:
+        result = await naukri_get_notifications(limit=50)
+        if result.get("status") != "success":
+            if total_processed == 0:
+                return result
+            break
 
-    if not unread:
-        return {
-            "status": "success",
-            "marked_count": 0,
-            "already_read": len(notifications),
-        }
+        notifications = result.get("notifications", [])
+        if not notifications:
+            break
 
-    marked = 0
-    errors = []
-    for n in unread:
-        mark_result = await naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
-        if mark_result.get("status") == "success":
-            marked += 1
-        else:
-            errors.append({"id": n["id"], "error": mark_result.get("message")})
+        total_processed += len(notifications)
+        unread = [n for n in notifications if not n.get("is_read")]
+        total_read += len(notifications) - len(unread)
+
+        if unread:
+            # Parallel mark-read
+            mark_tasks = [
+                naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
+                for n in unread
+            ]
+            mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
+            for mr in mark_results:
+                if isinstance(mr, Exception):
+                    all_errors.append(str(mr))
+                elif isinstance(mr, dict) and mr.get("status") == "success":
+                    total_marked += 1
+                else:
+                    all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
+
+        # If we got fewer than 50, we've reached the end
+        if len(notifications) < 50:
+            break
 
     return {
         "status": "success",
-        "marked_count": marked,
-        "already_read": len(notifications) - len(unread),
-        "errors": errors if errors else None,
+        "marked_count": total_marked,
+        "already_read": total_read,
+        "total_processed": total_processed,
+        "errors": all_errors if all_errors else None,
     }
 
 

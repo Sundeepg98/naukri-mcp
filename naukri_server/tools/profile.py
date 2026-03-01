@@ -150,7 +150,7 @@ async def naukri_get_profile() -> dict:
     for Claude to auto-answer screening questions intelligently.
 
     Returns:
-        - {status: "success", name, current_ctc, expected_ctc, notice_period, total_experience, skills_with_experience, employment, education}
+        - {status: "success", name, current_ctc, expected_ctc, notice_period, total_experience, skills_with_experience, employment, education, summary, certifications, projects, languages, online_profiles}
         - {status: "error", message}
     """
     try:
@@ -203,6 +203,11 @@ async def naukri_get_profile() -> dict:
             "current_location": profile.get("city", {}).get("value"),
             "gender": "Male" if profile.get("gender") == "M" else "Female",
             "key_skills": profile.get("keySkills"),
+            "summary": profile.get("summary"),
+            "certifications": data.get("certifications", []),
+            "projects": data.get("projects", []),
+            "languages": data.get("languages", []),
+            "online_profiles": data.get("onlineProfiles", []),
             "skills_with_experience": skills,
             "employment": employment,
             "education": education,
@@ -262,10 +267,10 @@ async def naukri_get_dashboard() -> dict:
 # ============================================================================
 
 UPDATABLE_FIELDS = {
-    "resumeHeadline", "keySkills", "summary", "noticePeriod",
-    "expectedCtc", "locationPrefId", "experience", "currentCtc",
-    "absoluteCtc", "absoluteExpectedCtc", "name", "gender",
-    "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
+    "resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc",
+    # These fields are accepted by the REST API but may not persist:
+    # "summary", "locationPrefId", "experience", "absoluteCtc", "absoluteExpectedCtc",
+    # "name", "gender", "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
 }
 
 BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}

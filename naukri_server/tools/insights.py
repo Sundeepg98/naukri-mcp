@@ -107,7 +107,7 @@ async def naukri_review_cached_answers() -> dict:
     - Updating stale answers
 
     Returns:
-        - {status: "success", total_cached, answers: [{key, answer, type, cached_at}]}
+        - {status: "success", total_cached, answers: [{key, question, answer, type, cached_at}]}
         - {status: "no_data", message}
     """
     try:
@@ -119,9 +119,18 @@ async def naukri_review_cached_answers() -> dict:
 
         answers = []
         for key, entry in cache.items():
+            # Extract question name from key format: "question_name_{options_json}"
+            question_name = key
+            for sep in ("_{", "_[", "_("):
+                idx = key.find(sep)
+                if idx > 0:
+                    question_name = key[:idx]
+                    break
+
             if isinstance(entry, dict):
                 answers.append({
                     "key": key,
+                    "question": question_name,
                     "answer": entry.get("answer"),
                     "type": entry.get("type"),
                     "cached_at": entry.get("cached_at"),
@@ -130,6 +139,7 @@ async def naukri_review_cached_answers() -> dict:
                 # Legacy format: simple value
                 answers.append({
                     "key": key,
+                    "question": question_name,
                     "answer": entry,
                     "type": "unknown",
                     "cached_at": None,

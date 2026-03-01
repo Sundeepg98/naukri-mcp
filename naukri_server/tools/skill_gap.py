@@ -6,7 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
-from naukri_server.scoring import parse_skills
+from naukri_server.scoring import normalize_skill, parse_skills
 
 
 @mcp.tool()
@@ -64,6 +64,15 @@ async def naukri_skill_gap_analysis(
 
     profile_skills = parse_skills(profile_result.get("key_skills", []))
 
+    # Build experience depth map for weighting gaps
+    exp_map = {}
+    for s in profile_result.get("skills_with_experience", []):
+        if isinstance(s, dict):
+            name = normalize_skill(s.get("skill", ""))
+            years = s.get("experience_years", 0) or 0
+            months = s.get("experience_months", 0) or 0
+            exp_map[name] = years + months / 12
+
     # Analyze each job
     missing_counter = Counter()  # skill -> count of jobs missing it
     matched_counter = Counter()  # skill -> count of jobs matching it
@@ -108,6 +117,11 @@ async def naukri_skill_gap_analysis(
             "frequency": freq,
             "percentage": round(freq / jobs_analyzed * 100),
         })
+
+    # For matched skills, add experience depth
+    for skill_entry in strong_skills:
+        skill_name = normalize_skill(skill_entry["skill"])
+        skill_entry["your_experience_years"] = round(exp_map.get(skill_name, 0), 1)
 
     return {
         "status": "success",

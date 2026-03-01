@@ -1,23 +1,8 @@
 """Unified company research — combines job search, salary, and reviews in one call."""
 
-import re
-
 from naukri_server import mcp
 from naukri_server.config import logger
-
-
-def _derive_slug(company_name: str) -> str:
-    """Derive an AmbitionBox-style slug from a company name."""
-    name = company_name.strip()
-    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd",
-                   "Limited", "Inc.", "Inc", "Corp.", "Corp", "Corporation",
-                   "LLP", "LLC", "Technologies", "Technology", "Solutions",
-                   "Services", "India"):
-        if name.lower().endswith(suffix.lower()):
-            name = name[:len(name) - len(suffix)].strip()
-    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
-    slug = re.sub(r'-+', '-', slug)
-    return slug
+from naukri_server.utils import derive_slug
 
 
 @mcp.tool()
@@ -46,13 +31,12 @@ async def naukri_research_company(
            errors: [any partial failures]}
         - {status: "error", message}
     """
-    from naukri_server.tools.search import naukri_search_jobs
     from naukri_server.tools.ambitionbox import (
         naukri_get_company_salary, naukri_get_company_reviews,
     )
 
     errors = []
-    slug = _derive_slug(keyword)
+    slug = derive_slug(keyword)
 
     result = {
         "status": "success",
@@ -60,24 +44,46 @@ async def naukri_research_company(
         "slug": slug,
     }
 
-    # Step 1: Search for jobs at this company via Naukri job search
+    # Step 1: Search for jobs at this company
     if include_jobs:
         try:
-            jobs_result = await naukri_search_jobs(
-                keywords=keyword, limit=jobs_limit,
-            )
-            if jobs_result.get("status") == "success":
-                jobs = jobs_result.get("jobs", [])
-                # Filter to jobs whose company name matches the keyword
-                keyword_lower = keyword.lower()
-                matching = [j for j in jobs if keyword_lower in (j.get("company") or "").lower()]
-                result["jobs"] = {
-                    "total": jobs_result.get("total"),
-                    "matching": len(matching),
-                    "sample": matching if matching else jobs[:jobs_limit],
-                }
+            from naukri_server.tools.companies import naukri_search_companies, naukri_get_company_jobs
+
+            # Step 1: Find the company's group_id
+            company_result = await naukri_search_companies(keyword=keyword)
+            group_id = None
+            if company_result.get("status") == "success":
+                companies = company_result.get("companies", [])
+                if companies:
+                    group_id = companies[0].get("group_id")
+                    result["company_name"] = companies[0].get("name") or keyword
+
+            if group_id:
+                # Step 2: Get company jobs by group_id (exact match)
+                jobs_result = await naukri_get_company_jobs(group_id=str(group_id), limit=jobs_limit)
+                if jobs_result.get("status") == "success":
+                    result["jobs"] = {
+                        "total": jobs_result.get("total", 0),
+                        "matching": jobs_result.get("count", 0),
+                        "sample": jobs_result.get("jobs", [])[:jobs_limit],
+                    }
+                else:
+                    errors.append(f"Jobs: {jobs_result.get('message', 'unknown error')}")
             else:
-                errors.append(f"Jobs: {jobs_result.get('message', 'unknown error')}")
+                # Fallback: keyword search if company not found
+                from naukri_server.tools.search import naukri_search_jobs
+                jobs_result = await naukri_search_jobs(keywords=keyword, limit=jobs_limit)
+                if jobs_result.get("status") == "success":
+                    jobs = jobs_result.get("jobs", [])
+                    keyword_lower = keyword.lower()
+                    matching = [j for j in jobs if keyword_lower in (j.get("company") or "").lower()]
+                    result["jobs"] = {
+                        "total": jobs_result.get("total"),
+                        "matching": len(matching),
+                        "sample": matching if matching else jobs[:jobs_limit],
+                    }
+                else:
+                    errors.append(f"Jobs: {jobs_result.get('message', 'unknown error')}")
         except Exception as e:
             errors.append(f"Jobs: {type(e).__name__}: {e}")
             logger.warning("Research company jobs failed: %s", e)
