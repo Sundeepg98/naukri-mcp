@@ -40,6 +40,7 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
 
         return {
             "status": "success",
+            "total": data.get("totalCount", len(notifications)) if isinstance(data, dict) else len(notifications),
             "count": len(notifications),
             "notifications": notifications,
         }
