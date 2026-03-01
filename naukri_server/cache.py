@@ -46,6 +46,28 @@ def _save_cache(cache: dict):
     os.replace(str(tmp), str(CACHE_FILE))
 
 
+async def delete_cached_answer(key: str) -> bool:
+    """Delete a single cached answer by key. Returns True if found and deleted."""
+    async with _cache_lock:
+        cache = _load_cache()
+        if key in cache:
+            del cache[key]
+            _save_cache(cache)
+            return True
+        return False
+
+async def update_cached_answer(key: str, new_answer) -> bool:
+    """Update the answer value for an existing cache entry. Returns True if found."""
+    async with _cache_lock:
+        cache = _load_cache()
+        if key in cache:
+            cache[key]["answer"] = new_answer
+            cache[key]["cached_at"] = time.time()
+            _save_cache(cache)
+            return True
+        return False
+
+
 def _cache_key(question_name: str, answer_option: dict) -> str:
     try:
         opts = json.dumps(answer_option, sort_keys=True)

@@ -266,14 +266,20 @@ UPDATABLE_FIELDS = {
     "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
 }
 
-BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills"}
+BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
 
 
 @mcp.tool()
-async def naukri_update_profile(fields: dict) -> dict:
+async def naukri_update_profile(
+    fields: dict,
+    notice_period: Optional[str] = None,
+    expected_ctc: Optional[float] = None,
+    current_ctc: Optional[float] = None,
+) -> dict:
     """Update your Naukri profile fields via browser UI automation.
 
-    Currently supported fields: resumeHeadline, keySkills (browser-based update).
+    Currently supported fields: resumeHeadline, keySkills, noticePeriod,
+    expectedCtc, currentCtc (browser-based update).
     Other fields in UPDATABLE_FIELDS are accepted but may not persist —
     Naukri's API support for direct field updates varies.
 
@@ -284,11 +290,22 @@ async def naukri_update_profile(fields: dict) -> dict:
             - resumeHeadline: str — your profile headline
             - keySkills: str — comma-separated skills
             Other fields in UPDATABLE_FIELDS are accepted but may not persist.
+        notice_period: Notice period — "Serving Notice Period", "15 Days or less",
+            "1 Month", "2 Months", "3 Months", "More than 3 Months"
+        expected_ctc: Expected CTC in lakhs (e.g., 15 for 15 LPA)
+        current_ctc: Current CTC in lakhs (e.g., 12 for 12 LPA)
 
     Returns:
         - {status: "updated", updated_fields: [...], method, api_confirmed, message}
         - {status: "error", message}
     """
+    # Merge convenience parameters into fields dict
+    if notice_period is not None:
+        fields["noticePeriod"] = notice_period
+    if expected_ctc is not None:
+        fields["expectedCtc"] = expected_ctc
+    if current_ctc is not None:
+        fields["currentCtc"] = current_ctc
     if not fields:
         return {"status": "error", "message": "No fields provided. Pass at least one field to update."}
 
@@ -442,13 +459,305 @@ async def naukri_update_profile(fields: dict) -> dict:
 
                     await asyncio.sleep(3)
 
-                else:
-                    # For other fields, no browser UI support yet
-                    unsupported = [k for k in fields.keys() if k not in ("resumeHeadline", "keySkills")]
+                # --- Notice Period / Expected CTC / Current CTC (Career Profile section) ---
+                # These three fields share the same "Career profile" edit modal on Naukri.
+                # We open the modal once and update whichever fields are requested.
+                # NOTE: Selectors are best-effort based on common Naukri UI patterns;
+                # they may need adjustment based on live browser testing.
+                career_fields = {
+                    k: fields[k] for k in ("noticePeriod", "expectedCtc", "currentCtc")
+                    if k in fields
+                }
+                if career_fields:
+                    # Open the Career Profile edit modal
+                    edit_clicked = await page.evaluate("""() => {
+                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+                        );
+                        // Strategy 1: find edit icon near "Career profile" or "Notice period" text
+                        for (const icon of editIcons) {
+                            const parent = icon.closest('div, section');
+                            if (parent && (
+                                parent.textContent.includes('Career profile') ||
+                                parent.textContent.includes('career profile') ||
+                                parent.textContent.includes('Notice period') ||
+                                parent.textContent.includes('notice period') ||
+                                parent.textContent.includes('Current CTC') ||
+                                parent.textContent.includes('Expected CTC')
+                            )) {
+                                icon.click();
+                                return 'career_profile_edit';
+                            }
+                        }
+                        // Strategy 2: look for section with class containing "careerProfile"
+                        for (const icon of editIcons) {
+                            const section = icon.closest('[class*="careerProfile"], [class*="career-profile"], [class*="CareerProfile"]');
+                            if (section) { icon.click(); return 'career_section_edit'; }
+                        }
+                        return null;
+                    }""")
+
+                    if not edit_clicked:
+                        return {
+                            "status": "error",
+                            "message": "Could not find edit button for Career Profile section "
+                                       "(needed for noticePeriod/expectedCtc/currentCtc)",
+                        }
+
+                    await asyncio.sleep(2)
+
+                    # --- Notice Period ---
+                    if "noticePeriod" in career_fields:
+                        try:
+                            VALID_NOTICE_PERIODS = {
+                                "Serving Notice Period",
+                                "15 Days or less",
+                                "1 Month",
+                                "2 Months",
+                                "3 Months",
+                                "More than 3 Months",
+                            }
+                            notice_val = career_fields["noticePeriod"]
+                            if notice_val not in VALID_NOTICE_PERIODS:
+                                return {
+                                    "status": "error",
+                                    "message": f"Invalid noticePeriod: '{notice_val}'. "
+                                               f"Valid options: {', '.join(sorted(VALID_NOTICE_PERIODS))}",
+                                }
+
+                            # Try to find and set the notice period dropdown/select
+                            notice_set = await page.evaluate("""(targetValue) => {
+                                // Strategy 1: native <select> element
+                                const selectors = [
+                                    'select[name*="notice"]', 'select[name*="Notice"]',
+                                    '[class*="notice"] select', '[class*="Notice"] select',
+                                    '#noticePeriod', 'select[id*="notice"]', 'select[id*="Notice"]'
+                                ];
+                                for (const sel of selectors) {
+                                    const select = document.querySelector(sel);
+                                    if (select) {
+                                        // Find matching option
+                                        const options = Array.from(select.options);
+                                        const match = options.find(o =>
+                                            o.text.trim() === targetValue || o.value === targetValue
+                                        );
+                                        if (match) {
+                                            select.value = match.value;
+                                            select.dispatchEvent(new Event('change', {bubbles: true}));
+                                            return 'select_set';
+                                        }
+                                    }
+                                }
+
+                                // Strategy 2: custom dropdown (React/Naukri style)
+                                // Find the notice period label, then the dropdown trigger near it
+                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
+                                    el.textContent.trim().toLowerCase().includes('notice period') &&
+                                    el.children.length <= 2
+                                );
+                                for (const label of labels) {
+                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
+                                    if (container) {
+                                        // Look for a clickable dropdown trigger
+                                        const trigger = container.querySelector(
+                                            '[class*="dropdown"], [class*="select"], [class*="Dropdown"], ' +
+                                            '[class*="Select"], [role="listbox"], [role="combobox"]'
+                                        );
+                                        if (trigger) {
+                                            trigger.click();
+                                            return 'custom_dropdown_clicked';
+                                        }
+                                    }
+                                }
+                                return null;
+                            }""", career_fields["noticePeriod"])
+
+                            if notice_set == "custom_dropdown_clicked":
+                                # Wait for dropdown options to appear, then click the matching one
+                                await asyncio.sleep(1)
+                                option_clicked = await page.evaluate("""(targetValue) => {
+                                    // Look for dropdown options/list items
+                                    const items = Array.from(document.querySelectorAll(
+                                        '[class*="option"], [class*="Option"], [role="option"], ' +
+                                        'li[class*="dropdown"], li[class*="Dropdown"], ' +
+                                        'ul[class*="dropdown"] li, ul[class*="Dropdown"] li, ' +
+                                        '[class*="listItem"], [class*="list-item"]'
+                                    ));
+                                    const match = items.find(item =>
+                                        item.textContent.trim() === targetValue
+                                    );
+                                    if (match) { match.click(); return 'option_selected'; }
+
+                                    // Broader search: any visible element with exact text
+                                    const allVisible = Array.from(document.querySelectorAll('*')).filter(el =>
+                                        el.offsetParent !== null &&
+                                        el.children.length === 0 &&
+                                        el.textContent.trim() === targetValue
+                                    );
+                                    if (allVisible.length > 0) {
+                                        allVisible[0].click();
+                                        return 'text_match_selected';
+                                    }
+                                    return null;
+                                }""", career_fields["noticePeriod"])
+
+                                if option_clicked:
+                                    ui_updated.append("noticePeriod")
+                                else:
+                                    return {
+                                        "status": "error",
+                                        "message": f"Notice period dropdown opened but could not select '{notice_val}'",
+                                    }
+                            elif notice_set == "select_set":
+                                ui_updated.append("noticePeriod")
+                            else:
+                                return {
+                                    "status": "error",
+                                    "message": "Could not find notice period dropdown in Career Profile modal",
+                                }
+
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            return {
+                                "status": "error",
+                                "message": f"Failed to update noticePeriod: {type(e).__name__}: {e}",
+                            }
+
+                    # --- Current CTC ---
+                    if "currentCtc" in career_fields:
+                        try:
+                            ctc_val = str(career_fields["currentCtc"])
+                            ctc_input = await page.evaluate("""() => {
+                                // Try specific selectors for current CTC input
+                                const selectors = [
+                                    'input[name*="currentCtc"]', 'input[name*="CurrentCtc"]',
+                                    'input[name*="current_ctc"]', 'input[id*="currentCtc"]',
+                                    'input[id*="CurrentCtc"]', 'input[id*="current_ctc"]',
+                                ];
+                                for (const sel of selectors) {
+                                    const el = document.querySelector(sel);
+                                    if (el) return sel;
+                                }
+
+                                // Fallback: find label "Current CTC" and get nearby input
+                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
+                                    el.textContent.trim().toLowerCase().includes('current ctc') &&
+                                    el.children.length <= 2
+                                );
+                                for (const label of labels) {
+                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
+                                    if (container) {
+                                        const input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                                        if (input) {
+                                            input.setAttribute('data-ctc-found', 'current');
+                                            return 'input[data-ctc-found="current"]';
+                                        }
+                                    }
+                                }
+                                return null;
+                            }""")
+
+                            if ctc_input:
+                                input_el = await page.query_selector(ctc_input)
+                                if input_el:
+                                    await input_el.click(click_count=3)  # Select all existing text
+                                    await input_el.fill("")
+                                    await input_el.fill(ctc_val)
+                                    await input_el.dispatch_event("change")
+                                    await asyncio.sleep(0.5)
+                                    ui_updated.append("currentCtc")
+                                else:
+                                    return {"status": "error", "message": "Current CTC input found in DOM but not queryable"}
+                            else:
+                                return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal"}
+                        except Exception as e:
+                            return {
+                                "status": "error",
+                                "message": f"Failed to update currentCtc: {type(e).__name__}: {e}",
+                            }
+
+                    # --- Expected CTC ---
+                    if "expectedCtc" in career_fields:
+                        try:
+                            ctc_val = str(career_fields["expectedCtc"])
+                            ctc_input = await page.evaluate("""() => {
+                                // Try specific selectors for expected CTC input
+                                const selectors = [
+                                    'input[name*="expectedCtc"]', 'input[name*="ExpectedCtc"]',
+                                    'input[name*="expected_ctc"]', 'input[id*="expectedCtc"]',
+                                    'input[id*="ExpectedCtc"]', 'input[id*="expected_ctc"]',
+                                ];
+                                for (const sel of selectors) {
+                                    const el = document.querySelector(sel);
+                                    if (el) return sel;
+                                }
+
+                                // Fallback: find label "Expected CTC" and get nearby input
+                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
+                                    el.textContent.trim().toLowerCase().includes('expected ctc') &&
+                                    el.children.length <= 2
+                                );
+                                for (const label of labels) {
+                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
+                                    if (container) {
+                                        const input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                                        if (input) {
+                                            input.setAttribute('data-ctc-found', 'expected');
+                                            return 'input[data-ctc-found="expected"]';
+                                        }
+                                    }
+                                }
+                                return null;
+                            }""")
+
+                            if ctc_input:
+                                input_el = await page.query_selector(ctc_input)
+                                if input_el:
+                                    await input_el.click(click_count=3)  # Select all existing text
+                                    await input_el.fill("")
+                                    await input_el.fill(ctc_val)
+                                    await input_el.dispatch_event("change")
+                                    await asyncio.sleep(0.5)
+                                    ui_updated.append("expectedCtc")
+                                else:
+                                    return {"status": "error", "message": "Expected CTC input found in DOM but not queryable"}
+                            else:
+                                return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal"}
+                        except Exception as e:
+                            return {
+                                "status": "error",
+                                "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}",
+                            }
+
+                    # Click save on the Career Profile modal
+                    save_result = await page.evaluate("""() => {
+                        const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
+                        if (modal) {
+                            const btn = Array.from(modal.querySelectorAll('button')).find(
+                                b => b.textContent.trim().toLowerCase() === 'save'
+                            );
+                            if (btn) { btn.click(); return 'modal_save'; }
+                        }
+                        const exactSave = Array.from(document.querySelectorAll('button')).find(
+                            b => b.textContent.trim() === 'Save' && b.offsetParent !== null
+                        );
+                        if (exactSave) { exactSave.click(); return 'exact_save'; }
+                        return null;
+                    }""")
+
+                    if not save_result:
+                        return {"status": "error", "message": "Career Profile modal opened but Save button not found"}
+
+                    await asyncio.sleep(3)
+
+                # Check for any remaining unsupported fields
+                all_browser_handled = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
+                unsupported = [k for k in fields.keys() if k not in all_browser_handled]
+                if unsupported and not ui_updated:
                     return {
                         "status": "error",
                         "message": f"Browser UI update not yet supported for: {', '.join(unsupported)}. "
-                                   f"Currently supported: resumeHeadline, keySkills",
+                                   f"Currently supported: {', '.join(sorted(all_browser_handled))}",
                     }
 
             finally:

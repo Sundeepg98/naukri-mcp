@@ -88,6 +88,118 @@ async def _scrape_salary_table(page) -> list:
     return [entry for entry in raw if isinstance(entry, dict) and entry.get("designation")]
 
 
+async def _scrape_interview_data(page) -> dict | None:
+    """Fallback: scrape interview data from rendered DOM when __NEXT_DATA__ is absent."""
+    return await page.evaluate("""
+        () => {
+            const result = {
+                company_name: null,
+                total_interviews: null,
+                difficulty: null,
+                duration: null,
+                rating: null,
+                questions: [],
+                experiences: [],
+            };
+
+            // Company name — try page title parsing
+            const title = document.title || '';
+            const titleMatch = title.match(/^[\\d,+.\\s]*(.*?)\\s*Interview/i);
+            if (titleMatch) result.company_name = titleMatch[1].trim();
+
+            // Stats — "Interviews" tab count
+            const tabs = document.querySelectorAll('#midNavTabs a, .ab_header_tabs a');
+            tabs.forEach(tab => {
+                const text = tab.textContent || '';
+                if (text.includes('Interview')) {
+                    const numMatch = text.match(/([\\d,.]+[kKmM]?)/);
+                    if (numMatch) result.total_interviews = numMatch[1];
+                }
+            });
+
+            // Insight card — extract rating, difficulty, duration
+            const insightCards = document.querySelectorAll('[class*="interviewInsight"]');
+            insightCards.forEach(card => {
+                const text = card.textContent || '';
+                const ratingMatch = text.match(/(\\d+\\.\\d+)\\/5/);
+                if (ratingMatch) result.rating = ratingMatch[1];
+
+                const diffMatch = text.match(/Easy\\s*(\\d+)%.*?Moderate\\s*(\\d+)%.*?Hard\\s*(\\d+)%/s);
+                if (diffMatch) {
+                    result.difficulty = {easy: diffMatch[1]+'%', moderate: diffMatch[2]+'%', hard: diffMatch[3]+'%'};
+                }
+
+                const durMatch = text.match(/Less than 2 weeks\\s*(\\d+)%.*?2-4 weeks\\s*(\\d+)%/s);
+                if (durMatch) {
+                    result.duration = {under_2_weeks: durMatch[1]+'%', two_to_four_weeks: durMatch[2]+'%'};
+                }
+            });
+
+            // Interview experience cards — only top-level cards (have the __cta link)
+            const ctaLinks = document.querySelectorAll('a.interview-exp-card__cta');
+            const seen = new Set();
+            ctaLinks.forEach(link => {
+                // Walk up to the top-level card container
+                let card = link.closest('[class*="interview-exp-card"]');
+                // Go up until we find one whose parent is NOT also an exp-card
+                while (card && card.parentElement && Array.from(card.parentElement.classList || []).some(c => c.includes('interview-exp-card'))) {
+                    card = card.parentElement;
+                }
+                if (!card || seen.has(card)) return;
+                seen.add(card);
+
+                const text = card.textContent.trim();
+                // Parse "A <Role> shared <date> <preview>"
+                const roleMatch = text.match(/^(?:An?\\s+)(.+?)\\s+shared/i);
+                const dateMatch = text.match(/shared\\s*\\n?\\s*([\\dwmdy]+\\s*ago)/i);
+                const previewMatch = text.match(/ago\\s*\\n?\\s*(.+?)(?:\\s*\\.{3}|\\s*Read full)/s);
+
+                result.experiences.push({
+                    designation: roleMatch ? roleMatch[1].trim() : null,
+                    date: dateMatch ? dateMatch[1].trim() : null,
+                    text_preview: previewMatch ? previewMatch[1].trim().substring(0, 300) : text.substring(0, 200),
+                });
+            });
+
+            // Interview questions — Q&A format cards
+            const qHeaders = document.querySelectorAll('[class*="questionCard"], [class*="ques_cnt"]');
+            qHeaders.forEach((card, i) => {
+                if (i >= 15) return;
+                const text = card.textContent.trim();
+                if (text.length > 30) {
+                    // Parse "A <Role> was asked <date> Q. <question>"
+                    const qMatch = text.match(/Q\\.\\s*(.+?)(?:\\nAns|$)/s);
+                    const roleMatch = text.match(/^(?:An?\\s+)(.+?)\\s+was asked/i);
+                    result.questions.push({
+                        designation: roleMatch ? roleMatch[1].trim() : null,
+                        question: qMatch ? qMatch[1].trim().substring(0, 300) : text.substring(0, 300),
+                    });
+                }
+            });
+
+            // Fallback: broader question search
+            if (result.questions.length === 0) {
+                document.querySelectorAll('div').forEach((el, i) => {
+                    if (result.questions.length >= 10) return;
+                    const text = el.textContent.trim();
+                    if (text.includes('was asked') && text.includes('Q.') && text.length < 1000) {
+                        const qMatch = text.match(/Q\\.\\s*(.+?)(?:\\nAns|$)/s);
+                        const roleMatch = text.match(/^(?:An?\\s+)(.+?)\\s+was asked/i);
+                        if (qMatch) {
+                            result.questions.push({
+                                designation: roleMatch ? roleMatch[1].trim() : null,
+                                question: qMatch[1].trim().substring(0, 300),
+                            });
+                        }
+                    }
+                });
+            }
+
+            return result;
+        }
+    """)
+
+
 # ============================================================================
 # Tool: Get Company Salary Data from AmbitionBox
 # ============================================================================
@@ -465,6 +577,143 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
                 "status": "error",
                 "message": f"Failed to get reviews: {type(e).__name__}: {e}",
             }
+
+
+# ============================================================================
+# Tool: Get Interview Experiences from AmbitionBox
+# ============================================================================
+
+
+@mcp.tool()
+async def naukri_get_interview_experiences(
+    company_slug: str,
+    page: int = 1,
+) -> dict:
+    """Get interview experiences for a company from AmbitionBox.
+
+    Returns interview questions, difficulty ratings, process details, and offer outcomes.
+
+    Args:
+        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
+        page: Page number for pagination (default 1)
+
+    Returns:
+        - {status: "success", company_name, total_interviews, overall_difficulty,
+           interview_experiences: [{designation, difficulty, outcome, experience_type,
+           duration, questions, date}]}
+        - {status: "error", message}
+    """
+    company_slug = _ensure_slug(company_slug)
+    url = f"{AMBITIONBOX_BASE}/interviews/{company_slug}-interview-questions"
+    if page > 1:
+        url += f"?page={page}"
+
+    async with browser.page_pool.acquire() as pg:
+        try:
+            await page_goto(pg, url, wait="networkidle")
+
+            if "404" in (await pg.title() or ""):
+                return {"status": "error", "message": f"No interview data for '{company_slug}'."}
+
+            next_data = await _extract_next_data(pg)
+            if not next_data:
+                # Fallback: scrape interview data from rendered DOM
+                dom_data = await _scrape_interview_data(pg)
+                if dom_data and (dom_data.get("questions") or dom_data.get("experiences")):
+                    company_name = dom_data.get("company_name") or company_slug
+
+                    result = {
+                        "status": "success",
+                        "company_name": company_name,
+                        "total_interviews": dom_data.get("total_interviews"),
+                        "overall_rating": dom_data.get("rating"),
+                        "overall_difficulty": dom_data.get("difficulty"),
+                        "typical_duration": dom_data.get("duration"),
+                        "source": "dom_scrape",
+                        "count": len(dom_data.get("experiences", [])),
+                        "interview_experiences": dom_data.get("experiences", []),
+                        "sample_questions": dom_data.get("questions", [])[:10],
+                    }
+                    return result
+
+                return {"status": "error", "message": "Could not extract interview data (no __NEXT_DATA__ and DOM scraping yielded no results)."}
+
+            page_props = next_data.get("props", {}).get("pageProps", {})
+
+            # Company info
+            company_data = (
+                page_props.get("companyData", {})
+                or page_props.get("companyInfo", {})
+                or {}
+            )
+            company_name = (
+                company_data.get("CompanyName")
+                or company_data.get("companyName")
+                or company_slug
+            )
+
+            # Interview overview
+            overview = page_props.get("interviewOverview", {}) or page_props.get("overview", {}) or {}
+            total_interviews = (
+                overview.get("totalInterviews")
+                or overview.get("interviewCount")
+                or page_props.get("totalInterviews")
+            )
+            overall_difficulty = (
+                overview.get("difficultyPercentage")
+                or overview.get("difficulty")
+            )
+
+            # Individual experiences
+            raw_interviews = (
+                page_props.get("interviewReviews")
+                or page_props.get("interviews")
+                or page_props.get("interviewExperiences")
+                or []
+            )
+
+            experiences = []
+            for iv in raw_interviews:
+                if not isinstance(iv, dict):
+                    continue
+                questions = iv.get("interviewQuestions") or iv.get("questions") or []
+                if isinstance(questions, str):
+                    questions = [q.strip() for q in questions.split("\n") if q.strip()]
+
+                experiences.append({
+                    "designation": (
+                        iv.get("jobProfile", {}).get("name")
+                        if isinstance(iv.get("jobProfile"), dict)
+                        else iv.get("jobProfile") or iv.get("designation")
+                    ),
+                    "difficulty": iv.get("difficultyLevel") or iv.get("difficulty"),
+                    "outcome": iv.get("offerStatus") or iv.get("outcome") or iv.get("result"),
+                    "experience_type": iv.get("experienceType") or iv.get("interviewType"),
+                    "duration": iv.get("duration") or iv.get("interviewDuration"),
+                    "rounds": iv.get("rounds") or iv.get("interviewRounds"),
+                    "questions": questions[:10],
+                    "date": iv.get("created") or iv.get("date"),
+                    "likes": iv.get("likesText") or iv.get("positives"),
+                    "dislikes": iv.get("disLikesText") or iv.get("negatives"),
+                })
+
+            result = {
+                "status": "success",
+                "company_name": company_name,
+                "total_interviews": total_interviews,
+                "overall_difficulty": overall_difficulty,
+                "count": len(experiences),
+                "interview_experiences": experiences,
+            }
+
+            difficulty_data = overview.get("difficultyBreakdown") or overview.get("difficultyDistribution")
+            if difficulty_data:
+                result["difficulty_breakdown"] = difficulty_data
+
+            return result
+
+        except Exception as e:
+            return {"status": "error", "message": f"Interview experiences failed: {type(e).__name__}: {e}"}
 
 
 # ============================================================================

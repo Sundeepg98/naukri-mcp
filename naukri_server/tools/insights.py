@@ -147,6 +147,48 @@ async def naukri_review_cached_answers() -> dict:
         return {"status": "error", "message": f"Failed to review cached answers: {type(e).__name__}: {e}"}
 
 
+@mcp.tool()
+async def naukri_delete_cached_answer(key: str) -> dict:
+    """Delete a cached screening question answer by its key.
+
+    Use naukri_review_cached_answers first to find the key.
+
+    Args:
+        key: Cache key from naukri_review_cached_answers results
+
+    Returns:
+        - {status: "success", key, message}
+        - {status: "error", message} if key not found
+    """
+    from naukri_server.cache import delete_cached_answer
+    deleted = await delete_cached_answer(key)
+    if deleted:
+        return {"status": "success", "key": key, "message": f"Cached answer '{key}' deleted."}
+    return {"status": "error", "message": f"Key '{key}' not found in cache."}
+
+
+@mcp.tool()
+async def naukri_update_cached_answer(key: str, new_answer: str) -> dict:
+    """Update a cached screening question answer.
+
+    Useful when CTC, notice period, or other answers change.
+    Use naukri_review_cached_answers first to find the key.
+
+    Args:
+        key: Cache key from naukri_review_cached_answers results
+        new_answer: New answer value
+
+    Returns:
+        - {status: "success", key, new_answer, message}
+        - {status: "error", message} if key not found
+    """
+    from naukri_server.cache import update_cached_answer
+    updated = await update_cached_answer(key, new_answer)
+    if updated:
+        return {"status": "success", "key": key, "new_answer": new_answer, "message": f"Answer updated."}
+    return {"status": "error", "message": f"Key '{key}' not found in cache."}
+
+
 def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
     """Parse salary strings like '10-15 Lacs', '₹10L - ₹15L', 'Not disclosed' into (min, max) in LPA."""
     if not salary_str or not isinstance(salary_str, str):

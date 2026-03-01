@@ -28,6 +28,23 @@ def _extract_job_id(job_url_or_id: str) -> str:
     raise ValueError(f"Invalid job ID or URL: {job_url_or_id}")
 
 
+def _extract_skills(raw_skills) -> list:
+    """Extract skill labels from keySkills — handles both list and dict formats."""
+    if isinstance(raw_skills, dict):
+        # v3 format: {"preferred": [{label: "Python"}, ...], "other": [...]}
+        skills = []
+        for category_skills in raw_skills.values():
+            if isinstance(category_skills, list):
+                for s in category_skills:
+                    label = s.get("label", s) if isinstance(s, dict) else s
+                    if label and isinstance(label, str):
+                        skills.append(label)
+        return skills
+    elif isinstance(raw_skills, list):
+        return [s.get("label", s) if isinstance(s, dict) else s for s in raw_skills]
+    return []
+
+
 def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
                       score_data: dict = None) -> dict:
     """Parse job detail API response (v3 or v4 format) into a structured result dict."""
@@ -61,7 +78,7 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
         "location": job.get("cityName") or job.get("citySuburb"),
         "description": job.get("description", ""),
-        "skills": [s.get("label", s) if isinstance(s, dict) else s for s in job.get("keySkills", [])],
+        "skills": _extract_skills(job.get("keySkills", [])),
         "match_score": match_score,
         "is_applied": is_applied,
         "external_apply": external,
@@ -70,6 +87,12 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "apply_count": job.get("applyCount"),
         "hr_name": job.get("contactPerson") or job.get("createdBy"),
         "hr_email": job.get("contactEmail"),
+        "group_id": company.get("groupId") if company else None,
+        "work_mode": job.get("workMode") or job.get("wfhType"),
+        "posted_date": job.get("createdDate"),
+        "industry": job.get("industryType"),
+        "role_category": job.get("roleCategory"),
+        "education": job.get("qualification"),
         "url": page_url,
     }
     warnings = validate_job_detail(result)

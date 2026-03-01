@@ -39,5 +39,10 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "vacancies": job.get("vacancy") or job.get("vacany"),
             "apply_count": job.get("applyCount"),
             "function_area": job.get("functionArea"),
+            "group_id": job.get("groupId"),
+            "work_mode": job.get("workMode") or job.get("wfhType"),
+            "is_saved": job.get("isSaved"),
+            "company_rating": (job.get("ambitionBoxData") or {}).get("Rating") or (job.get("ambitionBoxData") or {}).get("AggregateRating"),
+            "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),
         })
     return jobs

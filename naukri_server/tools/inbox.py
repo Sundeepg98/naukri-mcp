@@ -169,3 +169,33 @@ async def naukri_read_message(message_id: str, vcard_id: str, unique_id: str) ->
         "date": mail.get("dateTime") or mail.get("date", ""),
         "type": mail.get("messageType") or mail.get("type", ""),
     }
+
+
+@mcp.tool()
+async def naukri_accept_nvite(
+    nvite_job_id: str,
+    answers: Optional[dict] = None,
+) -> dict:
+    """Accept a recruiter NVite by applying to the associated job.
+
+    Get the nvite_job_id from naukri_get_inbox() → job_details.nvite_job_id.
+    NVites represent active recruiter interest — these are high-quality leads.
+
+    Args:
+        nvite_job_id: Job ID from the NVite message (job_details.nvite_job_id)
+        answers: Optional screening question answers {question_id: answer}
+
+    Returns:
+        - {status: "applied", job_id, message} — successfully accepted
+        - {status: "needs_input", job_id, questions} — screening questions pending
+        - {status: "already_applied", job_id} — already applied to this job
+        - {status: "error", message}
+    """
+    from naukri_server.tools.apply import _apply_single
+
+    result = await _apply_single(
+        job_id=nvite_job_id,
+        answers=answers,
+        tracking_extra={"source": "nvite"},
+    )
+    return result

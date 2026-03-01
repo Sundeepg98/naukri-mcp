@@ -18,6 +18,8 @@ async def naukri_search_jobs(
     sort_by: Optional[str] = None,
     freshness: Optional[int] = None,
     work_mode: Optional[str] = None,
+    job_type: Optional[str] = None,
+    company_type: Optional[str] = None,
     limit: int = 20,
     page: int = 1,
 ) -> dict:
@@ -35,6 +37,8 @@ async def naukri_search_jobs(
         sort_by: Sort order — "relevance" (default), "date", or "salary"
         freshness: Posted within N days — 1, 3, 7, 15, or 30
         work_mode: Work arrangement — "wfh", "hybrid", or "office"
+        job_type: Filter by job type — "fulltime", "parttime", "contract", "internship", "temporary"
+        company_type: Filter by company type — "startup", "mnc", "indian_mnc", "corporate"
         limit: Max jobs to return (default 20, max 50)
         page: Page number for pagination (default 1)
 
@@ -68,6 +72,16 @@ async def naukri_search_jobs(
                 wm_val = wm_map.get(work_mode.lower())
                 if wm_val:
                     params.append(f"wfhType={wm_val}")
+            if job_type:
+                _JOB_TYPE_MAP = {"fulltime": "1", "parttime": "2", "contract": "3", "internship": "4", "temporary": "5"}
+                jt = _JOB_TYPE_MAP.get(job_type.lower())
+                if jt:
+                    params.append(f"jobType={jt}")
+            if company_type:
+                _COMPANY_TYPE_MAP = {"startup": "startup", "mnc": "mnc", "indian_mnc": "indianMNC", "corporate": "corporate"}
+                ct = _COMPANY_TYPE_MAP.get(company_type.lower())
+                if ct:
+                    params.append(f"companyType={ct}")
             if page_no > 1:
                 params.append(f"pageNo={page_no}")
             if params:
@@ -93,6 +107,8 @@ async def naukri_search_jobs(
                     "sort_by": sort_by,
                     "freshness": freshness,
                     "work_mode": work_mode,
+                    "job_type": job_type,
+                    "company_type": company_type,
                 }.items() if v is not None},
                 "jobs": jobs,
             }
