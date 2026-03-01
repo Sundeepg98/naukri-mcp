@@ -1,9 +1,23 @@
-"""Unified company research — combines search, jobs, salary, and reviews in one call."""
+"""Unified company research — combines job search, salary, and reviews in one call."""
 
-from typing import Optional
+import re
 
 from naukri_server import mcp
 from naukri_server.config import logger
+
+
+def _derive_slug(company_name: str) -> str:
+    """Derive an AmbitionBox-style slug from a company name."""
+    name = company_name.strip()
+    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd",
+                   "Limited", "Inc.", "Inc", "Corp.", "Corp", "Corporation",
+                   "LLP", "LLC", "Technologies", "Technology", "Solutions",
+                   "Services", "India"):
+        if name.lower().endswith(suffix.lower()):
+            name = name[:len(name) - len(suffix)].strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    slug = re.sub(r'-+', '-', slug)
+    return slug
 
 
 @mcp.tool()
@@ -13,56 +27,54 @@ async def naukri_research_company(
     include_reviews: bool = True,
     jobs_limit: int = 5,
 ) -> dict:
-    """Research a company comprehensively — search, jobs, salary, and reviews in one call.
+    """Research a company comprehensively — jobs, salary data, and employee reviews.
 
-    Combines: naukri_search_companies → naukri_get_company_jobs → naukri_get_company_slug
-    → naukri_get_company_salary → naukri_get_company_reviews
-
-    For individual company operations, use the specific tools instead.
+    Searches for jobs at the company on Naukri, then fetches AmbitionBox
+    salary and review data. Handles partial failures gracefully.
 
     Args:
-        keyword: Company name to search for (e.g., "Google", "Infosys")
+        keyword: Company name (e.g., "Google", "Infosys", "TCS")
         include_jobs: Include open job listings (default True)
         include_reviews: Include AmbitionBox salary/review data (default True)
         jobs_limit: Max jobs to include (default 5)
 
     Returns:
-        - {status: "success", company: {name, group_id, type, industry, size, rating, review_count},
+        - {status: "success", company_name, slug,
            jobs: {total, sample: [...]},
            salary: {avg_salary, min_salary, max_salary, ...},
            reviews: {overall_rating, category_ratings, reviews: [...]},
            errors: [any partial failures]}
         - {status: "error", message}
     """
-    # Import tool functions from their modules (avoiding circular imports)
-    from naukri_server.tools.companies import naukri_search_companies, naukri_get_company_jobs
-    from naukri_server.tools.ambitionbox import naukri_get_company_slug, naukri_get_company_salary, naukri_get_company_reviews
+    from naukri_server.tools.search import naukri_search_jobs
+    from naukri_server.tools.ambitionbox import (
+        naukri_get_company_salary, naukri_get_company_reviews,
+    )
 
     errors = []
+    slug = _derive_slug(keyword)
 
-    # Step 1: Search for the company
-    search_result = await naukri_search_companies(keyword=keyword, limit=1)
-    if search_result.get("status") != "success" or not search_result.get("companies"):
-        return {
-            "status": "error",
-            "message": f"Company '{keyword}' not found on Naukri. Try a different name.",
-        }
-
-    company = search_result["companies"][0]
-    group_id = company.get("group_id")
     result = {
         "status": "success",
-        "company": company,
+        "company_name": keyword,
+        "slug": slug,
     }
 
-    # Step 2: Get company jobs (if requested)
-    if include_jobs and group_id:
+    # Step 1: Search for jobs at this company via Naukri job search
+    if include_jobs:
         try:
-            jobs_result = await naukri_get_company_jobs(group_id=str(group_id), limit=jobs_limit)
+            jobs_result = await naukri_search_jobs(
+                keywords=keyword, limit=jobs_limit,
+            )
             if jobs_result.get("status") == "success":
+                jobs = jobs_result.get("jobs", [])
+                # Filter to jobs whose company name matches the keyword
+                keyword_lower = keyword.lower()
+                matching = [j for j in jobs if keyword_lower in (j.get("company") or "").lower()]
                 result["jobs"] = {
                     "total": jobs_result.get("total"),
-                    "sample": jobs_result.get("jobs", []),
+                    "matching": len(matching),
+                    "sample": matching if matching else jobs[:jobs_limit],
                 }
             else:
                 errors.append(f"Jobs: {jobs_result.get('message', 'unknown error')}")
@@ -70,48 +82,34 @@ async def naukri_research_company(
             errors.append(f"Jobs: {type(e).__name__}: {e}")
             logger.warning("Research company jobs failed: %s", e)
 
-    # Step 3: Get AmbitionBox data (if requested)
-    if include_reviews and group_id:
-        # First, get the company slug
-        slug = None
+    # Step 2: Get AmbitionBox salary + reviews (if requested)
+    if include_reviews:
+        # Try the derived slug first; common company names work directly
         try:
-            slug_result = await naukri_get_company_slug(group_id=str(group_id))
-            if slug_result.get("status") == "success":
-                slug = slug_result.get("company_slug")
+            salary_result = await naukri_get_company_salary(company_slug=slug)
+            if salary_result.get("status") == "success":
+                result["salary"] = {
+                    k: v for k, v in salary_result.items()
+                    if k not in ("status", "url", "_debug_page_props_keys")
+                }
             else:
-                errors.append(f"Slug: {slug_result.get('message', 'unknown error')}")
+                errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
         except Exception as e:
-            errors.append(f"Slug: {type(e).__name__}: {e}")
-            logger.warning("Research company slug failed: %s", e)
+            errors.append(f"Salary: {type(e).__name__}: {e}")
+            logger.warning("Research company salary failed: %s", e)
 
-        if slug:
-            # Get salary data
-            try:
-                salary_result = await naukri_get_company_salary(company_slug=slug)
-                if salary_result.get("status") == "success":
-                    result["salary"] = {
-                        k: v for k, v in salary_result.items()
-                        if k not in ("status", "url", "_debug_page_props_keys")
-                    }
-                else:
-                    errors.append(f"Salary: {salary_result.get('message', 'unknown error')}")
-            except Exception as e:
-                errors.append(f"Salary: {type(e).__name__}: {e}")
-                logger.warning("Research company salary failed: %s", e)
-
-            # Get reviews
-            try:
-                reviews_result = await naukri_get_company_reviews(company_slug=slug)
-                if reviews_result.get("status") == "success":
-                    result["reviews"] = {
-                        k: v for k, v in reviews_result.items()
-                        if k not in ("status", "url")
-                    }
-                else:
-                    errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
-            except Exception as e:
-                errors.append(f"Reviews: {type(e).__name__}: {e}")
-                logger.warning("Research company reviews failed: %s", e)
+        try:
+            reviews_result = await naukri_get_company_reviews(company_slug=slug)
+            if reviews_result.get("status") == "success":
+                result["reviews"] = {
+                    k: v for k, v in reviews_result.items()
+                    if k not in ("status", "url")
+                }
+            else:
+                errors.append(f"Reviews: {reviews_result.get('message', 'unknown error')}")
+        except Exception as e:
+            errors.append(f"Reviews: {type(e).__name__}: {e}")
+            logger.warning("Research company reviews failed: %s", e)
 
     if errors:
         result["errors"] = errors
