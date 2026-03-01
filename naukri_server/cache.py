@@ -16,6 +16,14 @@ def _load_cache() -> dict:
         try:
             return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
         except Exception:
+            backup = CACHE_FILE.with_suffix(".backup")
+            if backup.exists():
+                try:
+                    from naukri_server.config import logger
+                    logger.warning("Cache corrupted, recovering from backup")
+                    return json.loads(backup.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
             return {}
     return {}
 
@@ -27,7 +35,7 @@ def _save_cache(cache: dict):
             entry["cached_at"] = time.time()
     # Purge entries older than 30 days
     cutoff = time.time() - (30 * 86400)
-    cache = {k: v for k, v in cache.items() if not isinstance(v, dict) or v.get("cached_at", time.time()) > cutoff}
+    cache = {k: v for k, v in cache.items() if not isinstance(v, dict) or v.get("cached_at", 0) > cutoff}
     # Atomic write with backup
     text = json.dumps(cache, indent=2, ensure_ascii=False)
     if CACHE_FILE.exists():

@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API, PROFILE_API
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
@@ -32,6 +32,7 @@ RECOMMENDED_JOB_FREQUENCY = {
 
 
 @mcp.tool()
+@api_tool("Get settings")
 async def naukri_get_settings() -> dict:
     """Get your Naukri account settings — job search status, alert frequencies,
     notification toggles, and communication preferences.
@@ -40,43 +41,38 @@ async def naukri_get_settings() -> dict:
         - {status: "success", count, settings: [{section, id, label, value, value_label, description}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(FORMATTED_SETTINGS_API)
+    data = await api_get(FORMATTED_SETTINGS_API)
 
-        sections = data if isinstance(data, list) else data.get("sections", data.get("settings", []))
-        settings = []
+    sections = data if isinstance(data, list) else data.get("sections", data.get("settings", []))
+    settings = []
 
-        if isinstance(sections, list):
-            for section in sections:
-                if not isinstance(section, dict):
-                    continue
-                section_name = section.get("sectionName", section.get("name", ""))
-                section_settings = section.get("settings", section.get("items", []))
-                if isinstance(section_settings, list):
-                    for s in section_settings:
-                        if not isinstance(s, dict):
-                            continue
-                        settings.append({
-                            "section": section_name,
-                            "id": s.get("settingId") or s.get("id", ""),
-                            "label": s.get("settingLabel") or s.get("label") or s.get("name", ""),
-                            "value": s.get("settingValue") or s.get("value", ""),
-                            "value_label": s.get("settingValueLabel") or s.get("valueLabel", ""),
-                            "description": s.get("description", ""),
-                        })
-        elif isinstance(sections, dict):
-            for key, val in sections.items():
-                settings.append({"id": key, "label": key, "value": val})
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_name = section.get("sectionName", section.get("name", ""))
+            section_settings = section.get("settings", section.get("items", []))
+            if isinstance(section_settings, list):
+                for s in section_settings:
+                    if not isinstance(s, dict):
+                        continue
+                    settings.append({
+                        "section": section_name,
+                        "id": s.get("settingId") or s.get("id", ""),
+                        "label": s.get("settingLabel") or s.get("label") or s.get("name", ""),
+                        "value": s.get("settingValue") or s.get("value", ""),
+                        "value_label": s.get("settingValueLabel") or s.get("valueLabel", ""),
+                        "description": s.get("description", ""),
+                    })
+    elif isinstance(sections, dict):
+        for key, val in sections.items():
+            settings.append({"id": key, "label": key, "value": val})
 
-        return {
-            "status": "success",
-            "count": len(settings),
-            "settings": settings,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get settings: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "count": len(settings),
+        "settings": settings,
+    }
 
 
 @mcp.tool()
@@ -238,6 +234,7 @@ async def naukri_update_settings(
 
 
 @mcp.tool()
+@api_tool("Get blocked companies")
 async def naukri_get_blocked_companies() -> dict:
     """Get the list of companies you have blocked on Naukri.
 
@@ -247,30 +244,26 @@ async def naukri_get_blocked_companies() -> dict:
         - {status: "success", count, companies: [{id, name}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(BLOCKED_COMPANIES_API)
-        companies_raw = data if isinstance(data, list) else data.get("blockedCompanies", data.get("companies", []))
+    data = await api_get(BLOCKED_COMPANIES_API)
+    companies_raw = data if isinstance(data, list) else data.get("blockedCompanies", data.get("companies", []))
 
-        companies = []
-        for c in companies_raw:
-            if isinstance(c, dict):
-                companies.append({
-                    "id": c.get("id", ""),
-                    "name": c.get("value") or c.get("name") or c.get("companyName", ""),
-                })
+    companies = []
+    for c in companies_raw:
+        if isinstance(c, dict):
+            companies.append({
+                "id": c.get("id", ""),
+                "name": c.get("value") or c.get("name") or c.get("companyName", ""),
+            })
 
-        return {
-            "status": "success",
-            "count": len(companies),
-            "companies": companies,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get blocked companies: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "count": len(companies),
+        "companies": companies,
+    }
 
 
 @mcp.tool()
+@api_tool("Check email verification")
 async def naukri_check_email_verification() -> dict:
     """Check if your Naukri account email is verified.
 
@@ -278,19 +271,14 @@ async def naukri_check_email_verification() -> dict:
         - {status: "success", is_verified, email, ...}
         - {status: "error", message}
     """
-    try:
-        # The /mail-verification endpoint returns 405. Email/mobile verification
-        # status is available in the profile API's user object instead.
-        data = await api_get(PROFILE_API, params={"expand_level": "1"})
-        user = data.get("user", {})
-        return {
-            "status": "success",
-            "is_email_verified": user.get("isEmailVerified", None),
-            "is_mobile_verified": user.get("isMobileVerified", None),
-            "email": user.get("email", user.get("username", "")),
-            "mobile": user.get("mobile", ""),
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to check email verification: {type(e).__name__}: {e}"}
+    # The /mail-verification endpoint returns 405. Email/mobile verification
+    # status is available in the profile API's user object instead.
+    data = await api_get(PROFILE_API, params={"expand_level": "1"})
+    user = data.get("user", {})
+    return {
+        "status": "success",
+        "is_email_verified": user.get("isEmailVerified", None),
+        "is_mobile_verified": user.get("isMobileVerified", None),
+        "email": user.get("email", user.get("username", "")),
+        "mobile": user.get("mobile", ""),
+    }

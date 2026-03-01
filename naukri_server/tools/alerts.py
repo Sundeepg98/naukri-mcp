@@ -5,12 +5,13 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API
 
 
 @mcp.tool()
+@api_tool("List job alerts")
 async def naukri_get_job_alerts() -> dict:
     """List all job alerts (saved searches) on your Naukri account.
 
@@ -22,36 +23,32 @@ async def naukri_get_job_alerts() -> dict:
           industry_type_id}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(JOB_ALERTS_LIST_API)
-        raw_list = data.get("list", [])
-        alerts = []
-        for alert in raw_list:
-            alerts.append({
-                "alert_id": alert.get("alertId"),
-                "name": alert.get("name"),
-                "keywords": alert.get("keywords"),
-                "location": alert.get("location"),
-                "experience": alert.get("experience"),
-                "min_ctc": alert.get("minCTC"),
-                "max_ctc": alert.get("maxCTC"),
-                "alert_type": alert.get("alertType"),  # "ssa" or "cja"
-                "function_area_id": alert.get("functionAreaId"),
-                "role_id": alert.get("roleId"),
-                "industry_type_id": alert.get("industryTypeId"),
-            })
-        return {
-            "status": "success",
-            "count": len(alerts),
-            "alerts": alerts,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to list job alerts: {type(e).__name__}: {e}"}
+    data = await api_get(JOB_ALERTS_LIST_API)
+    raw_list = data.get("list", [])
+    alerts = []
+    for alert in raw_list:
+        alerts.append({
+            "alert_id": alert.get("alertId"),
+            "name": alert.get("name"),
+            "keywords": alert.get("keywords"),
+            "location": alert.get("location"),
+            "experience": alert.get("experience"),
+            "min_ctc": alert.get("minCTC"),
+            "max_ctc": alert.get("maxCTC"),
+            "alert_type": alert.get("alertType"),  # "ssa" or "cja"
+            "function_area_id": alert.get("functionAreaId"),
+            "role_id": alert.get("roleId"),
+            "industry_type_id": alert.get("industryTypeId"),
+        })
+    return {
+        "status": "success",
+        "count": len(alerts),
+        "alerts": alerts,
+    }
 
 
 @mcp.tool()
+@api_tool("Create job alert")
 async def naukri_create_job_alert(
     name: str,
     keyword: str,
@@ -80,40 +77,30 @@ async def naukri_create_job_alert(
         - {status: "duplicate", alert_name, message, replace_url}
         - {status: "error", message}
     """
-    try:
-        body = {"name": name, "keyword": keyword}
-        if location is not None:
-            body["location"] = location
-        if experience is not None:
-            body["experience"] = str(experience)
-        if min_ctc is not None:
-            body["minCTC"] = str(min_ctc * 100000)
-        if function_area_id is not None:
-            body["functionAreaId"] = function_area_id
-        if role_id is not None:
-            body["roleId"] = role_id
-        if industry_type_id is not None:
-            body["industryTypeId"] = industry_type_id
+    body = {"name": name, "keyword": keyword}
+    if location is not None:
+        body["location"] = location
+    if experience is not None:
+        body["experience"] = str(experience)
+    if min_ctc is not None:
+        body["minCTC"] = str(min_ctc * 100000)
+    if function_area_id is not None:
+        body["functionAreaId"] = function_area_id
+    if role_id is not None:
+        body["roleId"] = role_id
+    if industry_type_id is not None:
+        body["industryTypeId"] = industry_type_id
 
-        await api_post(JOB_ALERT_API, body)
-        return {
-            "status": "success",
-            "alert_name": name,
-            "message": f"Job alert '{name}' created for '{keyword}'.",
-        }
-    except NaukriAPIError as e:
-        if "replacealert" in str(e).lower() or "already" in str(e).lower():
-            return {
-                "status": "duplicate",
-                "alert_name": name,
-                "message": f"A similar alert may already exist: {e}",
-            }
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to create job alert: {type(e).__name__}: {e}"}
+    await api_post(JOB_ALERT_API, body)
+    return {
+        "status": "success",
+        "alert_name": name,
+        "message": f"Job alert '{name}' created for '{keyword}'.",
+    }
 
 
 @mcp.tool()
+@api_tool("Get alert detail")
 async def naukri_get_alert_detail(alert_id: str) -> dict:
     """Get details of a specific job alert by its ID.
 
@@ -126,36 +113,31 @@ async def naukri_get_alert_detail(alert_id: str) -> dict:
         - {status: "success", alert: {alert_id, name, keywords, location, experience, ...}}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
-        alerts = data.get("list", [data] if isinstance(data, dict) else data)
-        if not alerts:
-            return {"status": "error", "message": f"Alert {alert_id} not found"}
+    data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
+    alerts = data.get("list", [data] if isinstance(data, dict) else data)
+    if not alerts:
+        return {"status": "error", "message": f"Alert {alert_id} not found"}
 
-        a = alerts[0] if isinstance(alerts, list) else alerts
-        if not isinstance(a, dict):
-            return {"status": "error", "message": f"Unexpected response for alert {alert_id}"}
+    a = alerts[0] if isinstance(alerts, list) else alerts
+    if not isinstance(a, dict):
+        return {"status": "error", "message": f"Unexpected response for alert {alert_id}"}
 
-        return {
-            "status": "success",
-            "alert": {
-                "alert_id": a.get("alertId", alert_id),
-                "name": a.get("name", ""),
-                "keywords": a.get("keywords", ""),
-                "location": a.get("location", ""),
-                "experience": a.get("experience"),
-                "min_ctc": a.get("minCTC"),
-                "max_ctc": a.get("maxCTC"),
-                "alert_type": a.get("alertType", ""),
-                "function_area_id": a.get("functionAreaId"),
-                "role_id": a.get("roleId"),
-                "industry_type_id": a.get("industryTypeId"),
-            },
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get alert detail: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "alert": {
+            "alert_id": a.get("alertId", alert_id),
+            "name": a.get("name", ""),
+            "keywords": a.get("keywords", ""),
+            "location": a.get("location", ""),
+            "experience": a.get("experience"),
+            "min_ctc": a.get("minCTC"),
+            "max_ctc": a.get("maxCTC"),
+            "alert_type": a.get("alertType", ""),
+            "function_area_id": a.get("functionAreaId"),
+            "role_id": a.get("roleId"),
+            "industry_type_id": a.get("industryTypeId"),
+        },
+    }
 
 
 @mcp.tool()

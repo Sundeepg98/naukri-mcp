@@ -125,3 +125,6 @@ EARLY_ACCESS_API = "/jobapi/v1/search/pseudojobs"
 # Resume Builder (Naukri 360)
 RESUME_BUILDER_CONFIG_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/services/resumeBuilder/configurations"
 RESUME_BUILDER_STATUS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/services/v1/details"
+
+# AmbitionBox (used by ambitionbox.py and health.py)
+AMBITIONBOX_BASE = "https://www.ambitionbox.com"

@@ -1,11 +1,12 @@
 """Notification tools — view and manage Naukri notification center."""
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
 
 
 @mcp.tool()
+@api_tool("Get notifications")
 async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
     """List notifications from your Naukri notification center.
 
@@ -17,40 +18,36 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
         - {status: "success", count, notifications: [{id, title, message, type, date, is_read, url}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(NOTIFICATION_FEED_API, params={
-            "page": str(page),
-            "limit": str(limit),
+    data = await api_get(NOTIFICATION_FEED_API, params={
+        "page": str(page),
+        "limit": str(limit),
+    })
+
+    # Response is a list of notification objects
+    notif_list = data if isinstance(data, list) else data.get("notifications", data.get("feed", []))
+
+    notifications = []
+    for notif in notif_list:
+        notifications.append({
+            "id": notif.get("id", ""),
+            "title": notif.get("displayTitle", ""),
+            "message": notif.get("message", ""),
+            "type": notif.get("type", ""),
+            "date": notif.get("createdAt", ""),
+            "is_read": bool(notif.get("readStatus")),
+            "url": notif.get("url", ""),
         })
 
-        # Response is a list of notification objects
-        notif_list = data if isinstance(data, list) else data.get("notifications", data.get("feed", []))
-
-        notifications = []
-        for notif in notif_list:
-            notifications.append({
-                "id": notif.get("id", ""),
-                "title": notif.get("displayTitle", ""),
-                "message": notif.get("message", ""),
-                "type": notif.get("type", ""),
-                "date": notif.get("createdAt", ""),
-                "is_read": bool(notif.get("readStatus")),
-                "url": notif.get("url", ""),
-            })
-
-        return {
-            "status": "success",
-            "total": data.get("totalCount", len(notifications)) if isinstance(data, dict) else len(notifications),
-            "count": len(notifications),
-            "notifications": notifications,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get notifications: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "total": data.get("totalCount", len(notifications)) if isinstance(data, dict) else len(notifications),
+        "count": len(notifications),
+        "notifications": notifications,
+    }
 
 
 @mcp.tool()
+@api_tool("Mark notification read")
 async def naukri_mark_notification_read(notification_id: str, date: str) -> dict:
     """Mark a notification as read in your Naukri notification center.
 
@@ -64,22 +61,18 @@ async def naukri_mark_notification_read(notification_id: str, date: str) -> dict
         - {status: "success", notification_id}
         - {status: "error", message}
     """
-    try:
-        await api_post(NOTIFICATION_READ_API, body={
-            "notificationId": notification_id,
-            "createdAt": date,
-        })
-        return {
-            "status": "success",
-            "notification_id": notification_id,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to mark notification read: {type(e).__name__}: {e}"}
+    await api_post(NOTIFICATION_READ_API, body={
+        "notificationId": notification_id,
+        "createdAt": date,
+    })
+    return {
+        "status": "success",
+        "notification_id": notification_id,
+    }
 
 
 @mcp.tool()
+@api_tool("Mark all notifications read")
 async def naukri_mark_all_notifications_read() -> dict:
     """Mark all unread notifications as read in your Naukri notification center.
 
@@ -89,41 +82,39 @@ async def naukri_mark_all_notifications_read() -> dict:
         - {status: "success", marked_count, already_read}
         - {status: "error", message}
     """
-    try:
-        result = await naukri_get_notifications(limit=50)
-        if result.get("status") != "success":
-            return result
+    result = await naukri_get_notifications(limit=50)
+    if result.get("status") != "success":
+        return result
 
-        notifications = result.get("notifications", [])
-        unread = [n for n in notifications if not n.get("is_read")]
+    notifications = result.get("notifications", [])
+    unread = [n for n in notifications if not n.get("is_read")]
 
-        if not unread:
-            return {
-                "status": "success",
-                "marked_count": 0,
-                "already_read": len(notifications),
-            }
-
-        marked = 0
-        errors = []
-        for n in unread:
-            mark_result = await naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
-            if mark_result.get("status") == "success":
-                marked += 1
-            else:
-                errors.append({"id": n["id"], "error": mark_result.get("message")})
-
+    if not unread:
         return {
             "status": "success",
-            "marked_count": marked,
-            "already_read": len(notifications) - len(unread),
-            "errors": errors if errors else None,
+            "marked_count": 0,
+            "already_read": len(notifications),
         }
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to mark all notifications read: {type(e).__name__}: {e}"}
+
+    marked = 0
+    errors = []
+    for n in unread:
+        mark_result = await naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
+        if mark_result.get("status") == "success":
+            marked += 1
+        else:
+            errors.append({"id": n["id"], "error": mark_result.get("message")})
+
+    return {
+        "status": "success",
+        "marked_count": marked,
+        "already_read": len(notifications) - len(unread),
+        "errors": errors if errors else None,
+    }
 
 
 @mcp.tool()
+@api_tool("Get notification count")
 async def naukri_get_notification_count() -> dict:
     """Get the count of unread notifications. Lightweight alternative to fetching the full notification feed.
 
@@ -131,13 +122,8 @@ async def naukri_get_notification_count() -> dict:
         - {status: "success", count: N}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(NOTIFICATION_COUNT_API)
-        return {
-            "status": "success",
-            "count": data.get("count", 0),
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get notification count: {type(e).__name__}: {e}"}
+    data = await api_get(NOTIFICATION_COUNT_API)
+    return {
+        "status": "success",
+        "count": data.get("count", 0),
+    }

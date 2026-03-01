@@ -6,12 +6,26 @@ import re
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import NAUKRI_BASE
+from naukri_server.config import NAUKRI_BASE, AMBITIONBOX_BASE
 from naukri_server.validation import validate_salary_data, validate_review_data
 
 logger = logging.getLogger(__name__)
 
-AMBITIONBOX_BASE = "https://www.ambitionbox.com"
+
+def _ensure_slug(value: str) -> str:
+    """Accept either a slug (lowercase-dashed) or a company name; return a slug."""
+    if re.match(r'^[a-z0-9][a-z0-9-]*$', value):
+        return value  # Already a slug
+    # Derive from company name
+    name = value.strip()
+    for suffix in ("Pvt. Ltd.", "Pvt Ltd", "Private Limited", "Ltd.", "Ltd",
+                   "Limited", "Inc.", "Inc", "Corp.", "Corp", "Corporation",
+                   "LLP", "LLC", "Technologies", "Technology", "Solutions",
+                   "Services", "India"):
+        if name.lower().endswith(suffix.lower()):
+            name = name[:len(name) - len(suffix)].strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    return re.sub(r'-+', '-', slug)
 
 
 async def _extract_next_data(page) -> dict | None:
@@ -84,7 +98,7 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
     """Get salary data for a company from AmbitionBox — avg salary, ranges, and experience breakdowns.
 
     Args:
-        company_slug: Company URL slug (e.g., "wissen-technology", "google", "tcs")
+        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
         designation: Optional job title slug (e.g., "software-engineer", "data-scientist")
                      If provided, returns salary for that specific role.
 
@@ -94,6 +108,7 @@ async def naukri_get_company_salary(company_slug: str, designation: str = "") ->
     """
     async with browser.page_pool.acquire() as page:
         try:
+            company_slug = _ensure_slug(company_slug)
             # Build URL
             if designation:
                 url = f"{AMBITIONBOX_BASE}/salaries/{company_slug}-salaries/{designation}"
@@ -312,7 +327,7 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
     """Get employee reviews for a company from AmbitionBox — ratings, pros, cons.
 
     Args:
-        company_slug: Company URL slug (e.g., "wissen-technology", "google", "tcs")
+        company_slug: AmbitionBox URL slug OR company name (e.g., "google" or "Google India Pvt. Ltd.")
         page: Page number for review pagination (default: 1)
 
     Returns:
@@ -321,6 +336,7 @@ async def naukri_get_company_reviews(company_slug: str, page: int = 1) -> dict:
     """
     async with browser.page_pool.acquire() as tab:
         try:
+            company_slug = _ensure_slug(company_slug)
             url = f"{AMBITIONBOX_BASE}/reviews/{company_slug}-reviews?page={page}"
 
             logger.info("Navigating to AmbitionBox reviews page: %s", url)
@@ -465,6 +481,10 @@ async def naukri_get_company_slug(group_id: str) -> dict:
     naukri_get_company_reviews) which require company_slug.
 
     Requires: group_id from naukri_search_companies results.
+
+    Note: naukri_get_company_salary and naukri_get_company_reviews now auto-derive
+    slugs from company names. Use this tool only when you specifically need the
+    canonical AmbitionBox slug (e.g., for URL construction).
 
     Args:
         group_id: Naukri company group ID (from naukri_search_companies)

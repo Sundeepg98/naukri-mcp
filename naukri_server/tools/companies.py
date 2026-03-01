@@ -3,7 +3,7 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
@@ -38,6 +38,7 @@ def _first(lst):
 
 
 @mcp.tool()
+@api_tool("Company search")
 async def naukri_search_companies(
     keyword: str,
     page: int = 1,
@@ -54,39 +55,34 @@ async def naukri_search_companies(
         - {status: "success", keyword, page, total, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
         - {status: "error", message}
     """
-    try:
-        seo_key = keyword.lower().replace(" ", "-")
-        data = await api_get(
-            COMPANY_SEARCH_API,
-            params={
-                "seoKey": seo_key,
-                "urltype": "search_by_company_general",
-                "pageNo": str(page),
-                "qcount": str(limit),
-                "searchType": "companySearch",
-            },
-            extra_headers=_COMPANY_HEADERS,
-        )
+    seo_key = keyword.lower().replace(" ", "-")
+    data = await api_get(
+        COMPANY_SEARCH_API,
+        params={
+            "seoKey": seo_key,
+            "urltype": "search_by_company_general",
+            "pageNo": str(page),
+            "qcount": str(limit),
+            "searchType": "companySearch",
+        },
+        extra_headers=_COMPANY_HEADERS,
+    )
 
-        groups = data.get("groupDetails", [])
-        companies = [_parse_company(g) for g in groups]
+    groups = data.get("groupDetails", [])
+    companies = [_parse_company(g) for g in groups]
 
-        result = {
-            "status": "success",
-            "keyword": keyword,
-            "page": page,
-            "total": data.get("noOfGroups"),
-            "count": len(companies),
-            "companies": companies,
-        }
-        warnings = validate_company_list(companies, data.get("noOfGroups"))
-        if warnings:
-            result["warnings"] = warnings
-        return result
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Company search failed: {type(e).__name__}: {e}"}
+    result = {
+        "status": "success",
+        "keyword": keyword,
+        "page": page,
+        "total": data.get("noOfGroups"),
+        "count": len(companies),
+        "companies": companies,
+    }
+    warnings = validate_company_list(companies, data.get("noOfGroups"))
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @mcp.tool()
@@ -140,6 +136,7 @@ async def naukri_get_company_jobs(
 
 
 @mcp.tool()
+@api_tool("Company follow")
 async def naukri_follow_company(
     group_id: str,
     action: str = "status",
@@ -157,46 +154,42 @@ async def naukri_follow_company(
         - action="follow"/"unfollow": {status: "success", group_id, action: "followed"/"unfollowed"}
         - {status: "error", message}
     """
-    try:
-        if action == "status":
-            data = await api_get(
-                COMPANY_FOLLOW_STATUS_API,
-                params={"query": group_id},
-            )
-            followed = data.get("followedGroups", [])
-            is_followed = any(
-                str(g.get("id", g) if isinstance(g, dict) else g) == str(group_id)
-                for g in followed
-            )
-            return {
-                "status": "success",
-                "group_id": group_id,
-                "is_followed": is_followed,
-            }
+    if action == "status":
+        data = await api_get(
+            COMPANY_FOLLOW_STATUS_API,
+            params={"query": group_id},
+        )
+        followed = data.get("followedGroups", [])
+        is_followed = any(
+            str(g.get("id", g) if isinstance(g, dict) else g) == str(group_id)
+            for g in followed
+        )
+        return {
+            "status": "success",
+            "group_id": group_id,
+            "is_followed": is_followed,
+        }
 
-        elif action in ("follow", "unfollow"):
-            await api_post(
-                COMPANY_FOLLOW_STATUS_API,
-                body={"groupId": group_id, "action": action},
-            )
-            return {
-                "status": "success",
-                "group_id": group_id,
-                "action": f"{action}ed",
-            }
+    elif action in ("follow", "unfollow"):
+        await api_post(
+            COMPANY_FOLLOW_STATUS_API,
+            body={"groupId": group_id, "action": action},
+        )
+        return {
+            "status": "success",
+            "group_id": group_id,
+            "action": f"{action}ed",
+        }
 
-        else:
-            return {
-                "status": "error",
-                "message": f"Invalid action '{action}'. Use 'status', 'follow', or 'unfollow'.",
-            }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Company follow failed: {type(e).__name__}: {e}"}
+    else:
+        return {
+            "status": "error",
+            "message": f"Invalid action '{action}'. Use 'status', 'follow', or 'unfollow'.",
+        }
 
 
 @mcp.tool()
+@api_tool("Check follow status")
 async def naukri_get_company_follow_status(group_ids: list[str]) -> dict:
     """Check follow status for multiple companies at once.
 
@@ -209,27 +202,22 @@ async def naukri_get_company_follow_status(group_ids: list[str]) -> dict:
         - {status: "success", followed: [...ids...], not_followed: [...ids...]}
         - {status: "error", message}
     """
-    try:
-        query = ",".join(group_ids)
-        data = await api_get(
-            COMPANY_FOLLOW_STATUS_API,
-            params={"query": query},
-        )
-        followed_raw = data.get("followedGroups", [])
-        followed_ids = set()
-        for g in followed_raw:
-            gid = str(g.get("id", g) if isinstance(g, dict) else g)
-            followed_ids.add(gid)
+    query = ",".join(group_ids)
+    data = await api_get(
+        COMPANY_FOLLOW_STATUS_API,
+        params={"query": query},
+    )
+    followed_raw = data.get("followedGroups", [])
+    followed_ids = set()
+    for g in followed_raw:
+        gid = str(g.get("id", g) if isinstance(g, dict) else g)
+        followed_ids.add(gid)
 
-        followed = [gid for gid in group_ids if gid in followed_ids]
-        not_followed = [gid for gid in group_ids if gid not in followed_ids]
+    followed = [gid for gid in group_ids if gid in followed_ids]
+    not_followed = [gid for gid in group_ids if gid not in followed_ids]
 
-        return {
-            "status": "success",
-            "followed": followed,
-            "not_followed": not_followed,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to check follow status: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "followed": followed,
+        "not_followed": not_followed,
+    }

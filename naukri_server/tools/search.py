@@ -1,7 +1,7 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
@@ -105,6 +105,7 @@ async def naukri_search_jobs(
 
 
 @mcp.tool()
+@api_tool("Get recommendations")
 async def naukri_get_recommendations(limit: int = 20) -> dict:
     """Get personalized job recommendations from Naukri's algorithm based on your profile.
 
@@ -118,28 +119,24 @@ async def naukri_get_recommendations(limit: int = 20) -> dict:
         - {status: "success", source: "recommendations", total, count, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_post(RECOMMENDED_JOBS_API, body={})
-        job_details = data.get("jobDetails", [])
-        jobs = _parse_job_list(job_details, limit)
-        result = {
-            "status": "success",
-            "source": "recommendations",
-            "total": data.get("noOfJobs"),
-            "count": len(jobs),
-            "jobs": jobs,
-        }
-        warnings = validate_job_list(jobs, data.get("noOfJobs"), "recommendations")
-        if warnings:
-            result["warnings"] = warnings
-        return result
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get recommendations: {type(e).__name__}: {e}"}
+    data = await api_post(RECOMMENDED_JOBS_API, body={})
+    job_details = data.get("jobDetails", [])
+    jobs = _parse_job_list(job_details, limit)
+    result = {
+        "status": "success",
+        "source": "recommendations",
+        "total": data.get("noOfJobs"),
+        "count": len(jobs),
+        "jobs": jobs,
+    }
+    warnings = validate_job_list(jobs, data.get("noOfJobs"), "recommendations")
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @mcp.tool()
+@api_tool("Get similar jobs")
 async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
     """Get jobs similar to a given job posting on Naukri.com.
 
@@ -153,28 +150,23 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10) -> dict:
         - {status: "success", job_id, source: "similar", total, count, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(SIMILAR_JOBS_API + job_id, params={
-            "noOfResults": str(limit),
-            "searchType": "sim",
-        })
-        # Similar jobs uses simJobDetails with content + collaborative arrays
-        sim = data.get("simJobDetails", {})
-        job_details = sim.get("content", []) + sim.get("collaborative", [])
-        jobs = _parse_job_list(job_details, limit)
-        result = {
-            "status": "success",
-            "job_id": job_id,
-            "source": "similar",
-            "total": data.get("noOfJobs"),
-            "count": len(jobs),
-            "jobs": jobs,
-        }
-        warnings = validate_job_list(jobs, data.get("noOfJobs"), "similar_jobs")
-        if warnings:
-            result["warnings"] = warnings
-        return result
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get similar jobs: {type(e).__name__}: {e}"}
+    data = await api_get(SIMILAR_JOBS_API + job_id, params={
+        "noOfResults": str(limit),
+        "searchType": "sim",
+    })
+    # Similar jobs uses simJobDetails with content + collaborative arrays
+    sim = data.get("simJobDetails", {})
+    job_details = sim.get("content", []) + sim.get("collaborative", [])
+    jobs = _parse_job_list(job_details, limit)
+    result = {
+        "status": "success",
+        "job_id": job_id,
+        "source": "similar",
+        "total": data.get("noOfJobs"),
+        "count": len(jobs),
+        "jobs": jobs,
+    }
+    warnings = validate_job_list(jobs, data.get("noOfJobs"), "similar_jobs")
+    if warnings:
+        result["warnings"] = warnings
+    return result

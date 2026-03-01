@@ -36,5 +36,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "job_age": job.get("jobAge"),
             "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
             "url": f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}",
+            "vacancies": job.get("vacancy") or job.get("vacany"),
+            "apply_count": job.get("applyCount"),
+            "function_area": job.get("functionArea"),
         })
     return jobs

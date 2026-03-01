@@ -4,6 +4,7 @@ API helpers — aiohttp-based GET/POST/PUT/DELETE for Naukri REST endpoints.
 
 import asyncio
 import json
+from functools import wraps
 from urllib.parse import urlencode
 
 import aiohttp
@@ -28,6 +29,27 @@ class NaukriAPIError(Exception):
         self.message = message
         self.code = code
         super().__init__(f"HTTP {status}: {message}")
+
+
+def api_tool(context: str = None):
+    """Decorator: wraps async MCP tool with standardized error handling.
+
+    Catches NaukriAPIError and Exception, returns {status: "error", message}.
+    Use only on tools with a single top-level try/except pattern.
+    Tools with custom error handling (apply, get_job, sync) should NOT use this.
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except NaukriAPIError as e:
+                return {"status": "error", "message": str(e)}
+            except Exception as e:
+                label = context or func.__name__.replace("naukri_", "").replace("_", " ").title()
+                return {"status": "error", "message": f"{label} failed: {type(e).__name__}: {e}"}
+        return wrapper
+    return decorator
 
 
 def _raise_api_error(status: int, text: str):

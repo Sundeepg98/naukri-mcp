@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
     SAVE_JOB_API, UNSAVE_JOB_API,
@@ -29,6 +29,14 @@ def _load_json(path: Path) -> list:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
+            backup = path.with_suffix(".backup")
+            if backup.exists():
+                try:
+                    logger.warning("Primary %s corrupted, recovering from backup", path.name)
+                    return json.loads(backup.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            logger.error("Both primary and backup corrupted for %s", path.name)
             return []
     return []
 
@@ -208,6 +216,7 @@ async def naukri_get_saved_jobs(limit: int = 50) -> dict:
 
 
 @mcp.tool()
+@api_tool("Unsave job")
 async def naukri_unsave_job(job_id: str) -> dict:
     """Unsave/unbookmark a previously saved job, both locally and on Naukri.
 
@@ -220,31 +229,26 @@ async def naukri_unsave_job(job_id: str) -> dict:
           (Naukri remote unsave is still attempted either way)
         - {status: "error", message} on failure
     """
+    # Always attempt the remote unsave regardless of local state
     try:
-        # Always attempt the remote unsave regardless of local state
-        try:
-            await api_post(UNSAVE_JOB_API + job_id, body={})
-        except Exception as e:
-            logger.warning("Failed to unsave job on Naukri: %s", e)
-
-        # Remove from local saved_jobs.json
-        async with _saved_jobs_lock:
-            saved = _load_json(SAVED_JOBS_FILE)
-            original_len = len(saved)
-            saved = [j for j in saved if j.get("job_id") != job_id]
-            if len(saved) < original_len:
-                _save_json(SAVED_JOBS_FILE, saved)
-                return {"status": "unsaved", "job_id": job_id}
-            else:
-                return {"status": "not_found", "job_id": job_id}
-
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
+        await api_post(UNSAVE_JOB_API + job_id, body={})
     except Exception as e:
-        return {"status": "error", "message": f"Failed to unsave job: {type(e).__name__}: {e}"}
+        logger.warning("Failed to unsave job on Naukri: %s", e)
+
+    # Remove from local saved_jobs.json
+    async with _saved_jobs_lock:
+        saved = _load_json(SAVED_JOBS_FILE)
+        original_len = len(saved)
+        saved = [j for j in saved if j.get("job_id") != job_id]
+        if len(saved) < original_len:
+            _save_json(SAVED_JOBS_FILE, saved)
+            return {"status": "unsaved", "job_id": job_id}
+        else:
+            return {"status": "not_found", "job_id": job_id}
 
 
 @mcp.tool()
+@api_tool("Get application status")
 async def naukri_get_application_status(job_id: str) -> dict:
     """Get detailed status for a specific job application — recruiter activity, applicant count, match score, timeline.
 
@@ -259,42 +263,38 @@ async def naukri_get_application_status(job_id: str) -> dict:
            recruiter_activity, match_rating, status_timeline: [{status, date}], matching_results}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
+    data = await api_get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
 
-        job_details = data.get("jobDetails") or {}
-        status_steps = data.get("status") or []
-        matching = data.get("matchingResults")
+    job_details = data.get("jobDetails") or {}
+    status_steps = data.get("status") or []
+    matching = data.get("matchingResults")
 
-        timeline = []
-        for step in status_steps:
-            entry = {"status": step.get("status") or step.get("label", "")}
-            if step.get("date"):
-                entry["date"] = step["date"]
-            timeline.append(entry)
+    timeline = []
+    for step in status_steps:
+        entry = {"status": step.get("status") or step.get("label", "")}
+        if step.get("date"):
+            entry["date"] = step["date"]
+        timeline.append(entry)
 
-        return {
-            "status": "success",
-            "job_id": job_id,
-            "title": job_details.get("jobTitle"),
-            "company": job_details.get("company"),
-            "location": job_details.get("location"),
-            "is_open": job_details.get("isOpen"),
-            "total_applicants": data.get("totalApplicants"),
-            "recruiter_activity": job_details.get("jobActivity"),
-            "recruiter_activity_date": job_details.get("jobActivityDate"),
-            "match_rating": data.get("starRating"),
-            "feedback_stored": data.get("feedbackStored"),
-            "status_timeline": timeline,
-            "matching_results": matching,
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get application status: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "title": job_details.get("jobTitle"),
+        "company": job_details.get("company"),
+        "location": job_details.get("location"),
+        "is_open": job_details.get("isOpen"),
+        "total_applicants": data.get("totalApplicants"),
+        "recruiter_activity": job_details.get("jobActivity"),
+        "recruiter_activity_date": job_details.get("jobActivityDate"),
+        "match_rating": data.get("starRating"),
+        "feedback_stored": data.get("feedbackStored"),
+        "status_timeline": timeline,
+        "matching_results": matching,
+    }
 
 
 @mcp.tool()
+@api_tool("Get match analytics")
 async def naukri_get_match_analytics(days: int = 7) -> dict:
     """Get match-score analytics for recent job applications — overall match distribution and per-field breakdowns.
 
@@ -306,21 +306,16 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
            low_match, field_breakdown, user_details}
         - {status: "error", message}
     """
-    try:
-        data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
+    data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
 
-        return {
-            "status": "success",
-            "days": days,
-            "total_applies": data.get("totalApplies"),
-            "complete_match": data.get("completeMatch"),
-            "high_match": data.get("highMatch"),
-            "medium_match": data.get("mediumMatch"),
-            "low_match": data.get("lowMatch"),
-            "field_breakdown": data.get("relevantFieldMatch"),
-            "user_details": data.get("userDetails"),
-        }
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to get match analytics: {type(e).__name__}: {e}"}
+    return {
+        "status": "success",
+        "days": days,
+        "total_applies": data.get("totalApplies"),
+        "complete_match": data.get("completeMatch"),
+        "high_match": data.get("highMatch"),
+        "medium_match": data.get("mediumMatch"),
+        "low_match": data.get("lowMatch"),
+        "field_breakdown": data.get("relevantFieldMatch"),
+        "user_details": data.get("userDetails"),
+    }

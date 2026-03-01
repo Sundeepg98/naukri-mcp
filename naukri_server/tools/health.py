@@ -8,6 +8,7 @@ from naukri_server.api import api_get, api_post
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
+    AMBITIONBOX_BASE,
     DASHBOARD_API,
     NAUKRI_BASE,
     PROFILE_API,
@@ -15,8 +16,6 @@ from naukri_server.config import (
     SEARCH_API,
     logger,
 )
-
-AMBITIONBOX_BASE = "https://www.ambitionbox.com"
 
 
 # ---------------------------------------------------------------------------
