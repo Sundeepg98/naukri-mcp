@@ -99,105 +99,98 @@ async def naukri_get_application_insights(days: int = 30) -> dict:
 
 
 @mcp.tool()
-async def naukri_review_cached_answers() -> dict:
-    """Review your cached screening question answers.
+async def naukri_cached_answers(
+    action: str = "list",
+    key: Optional[str] = None,
+    new_answer: Optional[str] = None,
+) -> dict:
+    """Manage cached screening question answers — list, update, or delete.
 
-    Shows all cached answers from previous job applications. Useful for:
-    - Checking what auto-fill answers are being used
-    - Identifying inconsistencies (e.g., different CTC answers)
-    - Updating stale answers
+    When you apply to jobs, screening question answers are cached for reuse.
+    Use this tool to review, correct, or remove stale answers.
 
-    Returns:
-        - {status: "success", total_cached, answers: [{key, question, answer, type, cached_at}]}
-        - {status: "no_data", message}
-    """
-    try:
-        async with _cache_lock:
-            cache = _load_cache()
-
-        if not cache:
-            return {"status": "no_data", "message": "No cached answers yet. Apply to jobs to build the cache."}
-
-        answers = []
-        for key, entry in cache.items():
-            # Extract question name from key format: "question_name_{options_json}"
-            question_name = key
-            for sep in ("_{", "_[", "_("):
-                idx = key.find(sep)
-                if idx > 0:
-                    question_name = key[:idx]
-                    break
-
-            if isinstance(entry, dict):
-                answers.append({
-                    "key": key,
-                    "question": question_name,
-                    "answer": entry.get("answer"),
-                    "type": entry.get("questionType"),
-                    "cached_at": entry.get("cached_at"),
-                })
-            else:
-                # Legacy format: simple value
-                answers.append({
-                    "key": key,
-                    "question": question_name,
-                    "answer": entry,
-                    "type": "unknown",
-                    "cached_at": None,
-                })
-
-        # Sort by cached_at (newest first), None last
-        answers.sort(key=lambda a: a.get("cached_at") or 0, reverse=True)
-
-        return {
-            "status": "success",
-            "total_cached": len(answers),
-            "answers": answers,
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to review cached answers: {type(e).__name__}: {e}"}
-
-
-@mcp.tool()
-async def naukri_delete_cached_answer(key: str) -> dict:
-    """Delete a cached screening question answer by its key.
-
-    Use naukri_review_cached_answers first to find the key.
+    Actions:
+      - "list": View all cached answers with their keys
+      - "update": Change a cached answer (requires key, new_answer)
+      - "delete": Remove a cached answer (requires key)
 
     Args:
-        key: Cache key from naukri_review_cached_answers results
+        action: "list" | "update" | "delete"
+        key: Cache key (from list results) — required for update/delete
+        new_answer: New answer value — required for update
 
     Returns:
-        - {status: "success", key, message}
-        - {status: "error", message} if key not found
+        - list: {status, count, answers: [{key, question, answer, type, cached_at}]}
+        - update: {status, key, new_answer, message}
+        - delete: {status, key, message}
     """
-    from naukri_server.cache import delete_cached_answer
-    deleted = await delete_cached_answer(key)
-    if deleted:
-        return {"status": "success", "key": key, "message": f"Cached answer '{key}' deleted."}
-    return {"status": "error", "message": f"Key '{key}' not found in cache."}
+    if action == "list":
+        try:
+            async with _cache_lock:
+                cache = _load_cache()
 
+            if not cache:
+                return {"status": "no_data", "message": "No cached answers yet. Apply to jobs to build the cache."}
 
-@mcp.tool()
-async def naukri_update_cached_answer(key: str, new_answer: str) -> dict:
-    """Update a cached screening question answer.
+            answers = []
+            for k, entry in cache.items():
+                # Extract question name from key format: "question_name_{options_json}"
+                question_name = k
+                for sep in ("_{", "_[", "_("):
+                    idx = k.find(sep)
+                    if idx > 0:
+                        question_name = k[:idx]
+                        break
 
-    Useful when CTC, notice period, or other answers change.
-    Use naukri_review_cached_answers first to find the key.
+                if isinstance(entry, dict):
+                    answers.append({
+                        "key": k,
+                        "question": question_name,
+                        "answer": entry.get("answer"),
+                        "type": entry.get("questionType"),
+                        "cached_at": entry.get("cached_at"),
+                    })
+                else:
+                    # Legacy format: simple value
+                    answers.append({
+                        "key": k,
+                        "question": question_name,
+                        "answer": entry,
+                        "type": "unknown",
+                        "cached_at": None,
+                    })
 
-    Args:
-        key: Cache key from naukri_review_cached_answers results
-        new_answer: New answer value
+            # Sort by cached_at (newest first), None last
+            answers.sort(key=lambda a: a.get("cached_at") or 0, reverse=True)
 
-    Returns:
-        - {status: "success", key, new_answer, message}
-        - {status: "error", message} if key not found
-    """
-    from naukri_server.cache import update_cached_answer
-    updated = await update_cached_answer(key, new_answer)
-    if updated:
-        return {"status": "success", "key": key, "new_answer": new_answer, "message": f"Answer updated."}
-    return {"status": "error", "message": f"Key '{key}' not found in cache."}
+            return {
+                "status": "success",
+                "total_cached": len(answers),
+                "answers": answers,
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to review cached answers: {type(e).__name__}: {e}"}
+
+    elif action == "update":
+        if not key or new_answer is None:
+            return {"status": "error", "message": "update requires key and new_answer."}
+        from naukri_server.cache import update_cached_answer
+        updated = await update_cached_answer(key, new_answer)
+        if updated:
+            return {"status": "success", "key": key, "new_answer": new_answer, "message": f"Answer updated."}
+        return {"status": "error", "message": f"Key '{key}' not found in cache."}
+
+    elif action == "delete":
+        if not key:
+            return {"status": "error", "message": "delete requires key."}
+        from naukri_server.cache import delete_cached_answer
+        deleted = await delete_cached_answer(key)
+        if deleted:
+            return {"status": "success", "key": key, "message": f"Cached answer '{key}' deleted."}
+        return {"status": "error", "message": f"Key '{key}' not found in cache."}
+
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, update, delete"}
 
 
 def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:

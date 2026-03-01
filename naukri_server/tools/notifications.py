@@ -1,25 +1,19 @@
 """Notification tools — view and manage Naukri notification center."""
 
 import asyncio
+from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
 
 
-@mcp.tool()
-@api_tool("Get notifications")
-async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
-    """List notifications from your Naukri notification center.
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified tool)
+# ---------------------------------------------------------------------------
 
-    Args:
-        limit: Max notifications to return (default 20)
-        page: Page number for pagination (default 1)
-
-    Returns:
-        - {status: "success", count, notifications: [{id, title, message, type, date, is_read, url}]}
-        - {status: "error", message}
-    """
+async def _fetch_notifications(limit: int = 20, page: int = 1) -> dict:
+    """Fetch notifications from the API and return structured result."""
     data = await api_get(NOTIFICATION_FEED_API, params={
         "page": str(page),
         "limit": str(limit),
@@ -49,21 +43,8 @@ async def naukri_get_notifications(limit: int = 20, page: int = 1) -> dict:
     }
 
 
-@mcp.tool()
-@api_tool("Mark notification read")
-async def naukri_mark_notification_read(notification_id: str, date: str) -> dict:
-    """Mark a notification as read in your Naukri notification center.
-
-    Requires: notification_id and date from naukri_get_notifications results.
-
-    Args:
-        notification_id: Notification ID to mark as read
-        date: The notification's date field from naukri_get_notifications
-
-    Returns:
-        - {status: "success", notification_id}
-        - {status: "error", message}
-    """
+async def _mark_single_read(notification_id: str, date: str) -> dict:
+    """Mark a single notification as read via the API."""
     await api_post(NOTIFICATION_READ_API, body={
         "notificationId": notification_id,
         "createdAt": date,
@@ -74,80 +55,129 @@ async def naukri_mark_notification_read(notification_id: str, date: str) -> dict
     }
 
 
-@mcp.tool()
-@api_tool("Mark all notifications read")
-async def naukri_mark_all_notifications_read() -> dict:
-    """Mark all unread notifications as read in your Naukri notification center.
-
-    Fetches all notifications (with pagination), filters unread ones, and
-    marks them as read in parallel batches.
-
-    Returns:
-        - {status: "success", marked_count, already_read, total_processed}
-        - {status: "error", message}
-    """
-    total_marked = 0
-    total_read = 0
-    total_processed = 0
-    all_errors = []
-
-    while True:
-        result = await naukri_get_notifications(limit=50)
-        if result.get("status") != "success":
-            if total_processed == 0:
-                return result
-            break
-
-        notifications = result.get("notifications", [])
-        if not notifications:
-            break
-
-        total_processed += len(notifications)
-        unread = [n for n in notifications if not n.get("is_read")]
-        total_read += len(notifications) - len(unread)
-
-        if not unread:
-            break
-
-        if unread:
-            # Parallel mark-read
-            mark_tasks = [
-                naukri_mark_notification_read(notification_id=n["id"], date=n["date"])
-                for n in unread
-            ]
-            mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
-            for mr in mark_results:
-                if isinstance(mr, Exception):
-                    all_errors.append(str(mr))
-                elif isinstance(mr, dict) and mr.get("status") == "success":
-                    total_marked += 1
-                else:
-                    all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
-
-        # If we got fewer than 50, we've reached the end
-        if len(notifications) < 50:
-            break
-
-    return {
-        "status": "success",
-        "marked_count": total_marked,
-        "already_read": total_read,
-        "total_processed": total_processed,
-        "errors": all_errors if all_errors else None,
-    }
-
+# ---------------------------------------------------------------------------
+# Unified MCP tool
+# ---------------------------------------------------------------------------
 
 @mcp.tool()
-@api_tool("Get notification count")
-async def naukri_get_notification_count() -> dict:
-    """Get the count of unread notifications. Lightweight alternative to fetching the full notification feed.
+async def naukri_notifications(
+    action: str = "list",
+    notification_id: Optional[str] = None,
+    date: Optional[str] = None,
+    limit: int = 20,
+    page: int = 1,
+) -> dict:
+    """Unified notification management — list, count, and mark read.
+
+    Actions:
+      - "list": Fetch notifications (use limit/page for pagination)
+      - "count": Get unread notification count
+      - "mark_read": Mark a single notification as read (requires notification_id, date)
+      - "mark_all_read": Mark ALL unread notifications as read
+
+    Args:
+        action: "list" | "count" | "mark_read" | "mark_all_read"
+        notification_id: Required for mark_read — the notification ID
+        date: Required for mark_read — the notification date string
+        limit: Max notifications for list action (default 20)
+        page: Page number for list action (default 1)
 
     Returns:
-        - {status: "success", count: N}
-        - {status: "error", message}
+        - list: {status, count, notifications: [...]}
+        - count: {status, unread_count}
+        - mark_read: {status, notification_id}
+        - mark_all_read: {status, total_read}
+        - {status: "error", message} on failure
     """
-    data = await api_get(NOTIFICATION_COUNT_API)
-    return {
-        "status": "success",
-        "count": data.get("count", 0),
-    }
+    # ── list ───────────────────────────────────────────────────────────
+    if action == "list":
+        try:
+            return await _fetch_notifications(limit=limit, page=page)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get notifications failed: {type(e).__name__}: {e}"}
+
+    # ── count ──────────────────────────────────────────────────────────
+    elif action == "count":
+        try:
+            data = await api_get(NOTIFICATION_COUNT_API)
+            return {
+                "status": "success",
+                "count": data.get("count", 0),
+            }
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Get notification count failed: {type(e).__name__}: {e}"}
+
+    # ── mark_read ──────────────────────────────────────────────────────
+    elif action == "mark_read":
+        if not notification_id or not date:
+            return {"status": "error", "message": "mark_read requires notification_id and date."}
+        try:
+            return await _mark_single_read(notification_id, date)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Mark notification read failed: {type(e).__name__}: {e}"}
+
+    # ── mark_all_read ──────────────────────────────────────────────────
+    elif action == "mark_all_read":
+        try:
+            total_marked = 0
+            total_read = 0
+            total_processed = 0
+            all_errors = []
+
+            while True:
+                result = await _fetch_notifications(limit=50)
+                if result.get("status") != "success":
+                    if total_processed == 0:
+                        return result
+                    break
+
+                notifications = result.get("notifications", [])
+                if not notifications:
+                    break
+
+                total_processed += len(notifications)
+                unread = [n for n in notifications if not n.get("is_read")]
+                total_read += len(notifications) - len(unread)
+
+                if not unread:
+                    break
+
+                # Parallel mark-read
+                mark_tasks = [
+                    _mark_single_read(notification_id=n["id"], date=n["date"])
+                    for n in unread
+                ]
+                mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
+                for mr in mark_results:
+                    if isinstance(mr, Exception):
+                        all_errors.append(str(mr))
+                    elif isinstance(mr, dict) and mr.get("status") == "success":
+                        total_marked += 1
+                    else:
+                        all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
+
+                # If we got fewer than 50, we've reached the end
+                if len(notifications) < 50:
+                    break
+
+            return {
+                "status": "success",
+                "marked_count": total_marked,
+                "already_read": total_read,
+                "total_processed": total_processed,
+                "errors": all_errors if all_errors else None,
+            }
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status}
+        except Exception as e:
+            return {"status": "error", "message": f"Mark all notifications read failed: {type(e).__name__}: {e}"}
+
+    # ── unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read"}

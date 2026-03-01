@@ -1,28 +1,98 @@
-"""Resume and photo tools — download URLs, metadata, and photo upload."""
+"""Resume and photo management — unified tools for resume info/download/upload and photo info/upload/delete."""
 
 import asyncio
 from pathlib import Path
+from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_tool
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, logger
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
+RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
+RESUME_MAX_SIZE_MB = 5
 
 
 @mcp.tool()
-@api_tool("Get resume info")
-async def naukri_get_resume_info() -> dict:
-    """Get your uploaded resume details — file name, upload date, headline, and download URL.
+async def naukri_resume(
+    action: str = "info",
+    file_path: Optional[str] = None,
+    save_path: Optional[str] = None,
+) -> dict:
+    """Resume management — view info, download, or upload.
+
+    Actions:
+      - "info": Get resume filename, upload date, download URL
+      - "download": Save resume to local file (requires save_path)
+      - "upload": Upload new resume (requires file_path; PDF/DOC/DOCX, max 5MB)
+
+    Args:
+        action: "info" | "download" | "upload"
+        file_path: Local file to upload (for upload action)
+        save_path: Local path to save downloaded resume (for download action)
 
     Returns:
-        - {status: "success", resume_headline, file_name, upload_date, download_url, cv_id}
-        - {status: "error", message}
+        - info: {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}
+        - download: {status, file_path, file_size_bytes, message}
+        - upload: {status, file, size_mb, message}
     """
+    if action == "info":
+        return await _resume_info()
+    elif action == "download":
+        if not save_path:
+            return {"status": "error", "message": "download requires save_path."}
+        return await _resume_download(save_path)
+    elif action == "upload":
+        if not file_path:
+            return {"status": "error", "message": "upload requires file_path."}
+        return await _resume_upload(file_path)
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: info, download, upload"}
+
+
+@mcp.tool()
+async def naukri_photo(
+    action: str = "info",
+    file_path: Optional[str] = None,
+) -> dict:
+    """Profile photo management — view info, upload, or delete.
+
+    Actions:
+      - "info": Get current photo URL and dimensions
+      - "upload": Upload new profile photo (requires file_path; PNG/JPG/JPEG/GIF)
+      - "delete": Remove current profile photo
+
+    Args:
+        action: "info" | "upload" | "delete"
+        file_path: Local image file to upload (for upload action)
+
+    Returns:
+        - info: {status, has_photo, photo_url, format, status_label, upload_date, download_api}
+        - upload: {status, file, message}
+        - delete: {status, message}
+    """
+    if action == "info":
+        return await _photo_info()
+    elif action == "upload":
+        if not file_path:
+            return {"status": "error", "message": "upload requires file_path."}
+        return await _photo_upload(file_path)
+    elif action == "delete":
+        return await _photo_delete()
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: info, upload, delete"}
+
+
+# ---------------------------------------------------------------------------
+# Private helpers — resume
+# ---------------------------------------------------------------------------
+
+
+@api_tool("Get resume info")
+async def _resume_info() -> dict:
     data = await api_get(PROFILE_API, params={"expand_level": "4"})
 
-    # Extract profile info
     profiles = data.get("profile", [])
     profile = profiles[0] if isinstance(profiles, list) and profiles else data.get("profile", {})
     if not isinstance(profile, dict):
@@ -43,20 +113,7 @@ async def naukri_get_resume_info() -> dict:
     }
 
 
-@mcp.tool()
-async def naukri_download_resume(save_path: str) -> dict:
-    """Download your uploaded resume to a local file.
-
-    Fetches the resume binary from Naukri's API using your auth credentials
-    and saves it to the specified path.
-
-    Args:
-        save_path: Absolute file path to save the resume (e.g., "C:/Users/me/resume.pdf")
-
-    Returns:
-        - {status: "success", file_path, file_size_bytes, message}
-        - {status: "error", message}
-    """
+async def _resume_download(save_path: str) -> dict:
     from naukri_server.api import get_session
     from naukri_server.config import API_HEADERS
 
@@ -94,15 +151,67 @@ async def naukri_download_resume(save_path: str) -> dict:
         return {"status": "error", "message": f"Resume download failed: {type(e).__name__}: {e}"}
 
 
-@mcp.tool()
-@api_tool("Get photo info")
-async def naukri_get_photo_info() -> dict:
-    """Get your profile photo details — URL, dimensions, and upload status.
+async def _resume_upload(file_path: str) -> dict:
+    path = Path(file_path)
 
-    Returns:
-        - {status: "success", has_photo, photo_url, ...}
-        - {status: "error", message}
-    """
+    # Validate file exists
+    if not path.exists():
+        return {"status": "error", "message": f"File not found: {file_path}"}
+
+    # Validate format
+    if path.suffix.lower() not in RESUME_ALLOWED_FORMATS:
+        return {"status": "error", "message": f"Unsupported format '{path.suffix}'. Use: {', '.join(RESUME_ALLOWED_FORMATS)}"}
+
+    # Validate size
+    size_mb = path.stat().st_size / (1024 * 1024)
+    if size_mb > RESUME_MAX_SIZE_MB:
+        return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {RESUME_MAX_SIZE_MB}MB"}
+
+    async with browser.page_pool.acquire() as page:
+        try:
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
+            await asyncio.sleep(3)
+
+            if "/nlogin" in page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first."}
+
+            # Find the resume upload input
+            file_input = await page.query_selector('input[type="file"]')
+            if not file_input:
+                # Try clicking an upload button first to reveal the file input
+                upload_btn = await page.query_selector(
+                    '[class*="upload"] button, button:has-text("Upload"), '
+                    '[class*="resume"] button, [class*="Resume"] [class*="edit"]'
+                )
+                if upload_btn:
+                    await upload_btn.click()
+                    await asyncio.sleep(2)
+                    file_input = await page.query_selector('input[type="file"]')
+
+            if not file_input:
+                return {"status": "error", "message": "Could not find file upload input on profile page"}
+
+            # Upload the file
+            await file_input.set_input_files(str(path.resolve()))
+            await asyncio.sleep(5)  # Wait for upload to complete
+
+            return {
+                "status": "uploaded",
+                "file": path.name,
+                "size_mb": round(size_mb, 2),
+                "message": f"Resume '{path.name}' uploaded to Naukri profile.",
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Upload failed: {type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# Private helpers — photo
+# ---------------------------------------------------------------------------
+
+
+@api_tool("Get photo info")
+async def _photo_info() -> dict:
     data = await api_get(PROFILE_API, params={"expand_level": "4"})
 
     profiles = data.get("profile", [])
@@ -128,19 +237,7 @@ async def naukri_get_photo_info() -> dict:
     }
 
 
-@mcp.tool()
-async def naukri_upload_photo(file_path: str) -> dict:
-    """Upload a profile photo to Naukri. Supports PNG, JPG, JPEG, GIF formats.
-
-    Uses browser automation to upload through Naukri's profile page.
-
-    Args:
-        file_path: Absolute path to the photo file
-
-    Returns:
-        - {status: "uploaded", file, message}
-        - {status: "error", message}
-    """
+async def _photo_upload(file_path: str) -> dict:
     path = Path(file_path)
 
     # Validate file exists
@@ -231,23 +328,7 @@ async def naukri_upload_photo(file_path: str) -> dict:
             return {"status": "error", "message": f"Photo upload failed: {type(e).__name__}: {e}"}
 
 
-# ============================================================================
-# Tool: Delete Profile Photo (Browser automation)
-# ============================================================================
-
-
-@mcp.tool()
-async def naukri_delete_photo() -> dict:
-    """Delete your profile photo from Naukri. Uses browser automation.
-
-    Navigates to the profile page, opens the photo cropper modal,
-    and clicks the delete button to remove the current profile photo.
-
-    Returns:
-        - {status: "deleted", message}
-        - {status: "no_photo", message}
-        - {status: "error", message}
-    """
+async def _photo_delete() -> dict:
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
@@ -328,8 +409,6 @@ async def naukri_delete_photo() -> dict:
             logger.info("Clicked initial delete option: %s", delete_clicked)
 
             # Step 2: Click the confirmation "Delete" button
-            # After clicking .delBtn, a confirmation overlay appears with "Are you sure"
-            # text and a separate Delete button (NOT inside #photoCropper)
             await asyncio.sleep(2)
             confirm_clicked = await page.evaluate("""() => {
                 // Find all visible Delete buttons, click the one in the confirmation overlay

@@ -20,7 +20,7 @@ async def naukri_daily_brief() -> dict:
            recruiter_activity, activity_level, todays_applications, dashboard, errors}
     """
     from naukri_server.tools.inbox import naukri_get_inbox
-    from naukri_server.tools.notifications import naukri_get_notifications
+    from naukri_server.tools.notifications import _fetch_notifications
     from naukri_server.tools.search import naukri_get_recommendations
     from naukri_server.tools.performance import naukri_get_recruiter_activity, naukri_get_activity_level
     from naukri_server.tools.tracking import naukri_get_applications
@@ -33,7 +33,7 @@ async def naukri_daily_brief() -> dict:
 
     results = await asyncio.gather(
         naukri_get_inbox(limit=5, unread_only=True),
-        naukri_get_notifications(limit=5),
+        _fetch_notifications(limit=5),
         naukri_get_recommendations(limit=5),
         naukri_get_recruiter_activity(size=5),
         naukri_get_activity_level(),
