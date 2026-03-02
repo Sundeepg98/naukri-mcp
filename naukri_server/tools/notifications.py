@@ -12,8 +12,17 @@ from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_REA
 # Internal helpers (not MCP tools — used by the unified tool)
 # ---------------------------------------------------------------------------
 
-async def _fetch_notifications(limit: int = 20, page: int = 1) -> dict:
-    """Fetch notifications from the API and return structured result."""
+async def _fetch_notifications(limit: int = 20, page: int = 1, notif_type: Optional[str] = None) -> dict:
+    """Fetch notifications from the API and return structured result.
+
+    Args:
+        limit: Max notifications to return (capped at 50).
+        page: Page number (1-based).
+        notif_type: Optional type filter — case-insensitive substring match
+                    against the notification ``type`` field.  Common values
+                    include ``"JA"`` (job alerts), ``"RA"`` (recruiter
+                    activity), ``"SYSTEM"``, ``"APPLICATION_UPDATE"``.
+    """
     limit = min(limit, 50)
     if page < 1:
         return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
@@ -38,12 +47,20 @@ async def _fetch_notifications(limit: int = 20, page: int = 1) -> dict:
             "metadata": notif.get("metadata", {}),
         })
 
-    return {
+    # Client-side type filtering (API does not support server-side filtering)
+    if notif_type:
+        notif_type_lower = notif_type.lower()
+        notifications = [n for n in notifications if notif_type_lower in n["type"].lower()]
+
+    result: dict = {
         "status": "success",
         "total": data.get("totalCount", len(notifications)) if isinstance(data, dict) else len(notifications),
         "count": len(notifications),
         "notifications": notifications,
     }
+    if notif_type:
+        result["filtered_by"] = notif_type
+    return result
 
 
 async def _mark_single_read(notification_id: str, date: str) -> dict:
@@ -69,11 +86,12 @@ async def naukri_notifications(
     date: Optional[str] = None,
     limit: int = 20,
     page: int = 1,
+    notif_type: Optional[str] = None,
 ) -> dict:
     """Unified notification management — list, count, and mark read.
 
     Actions:
-      - "list": Fetch notifications (use limit/page for pagination)
+      - "list": Fetch notifications (use limit/page for pagination, notif_type to filter)
       - "count": Get unread notification count
       - "mark_read": Mark a single notification as read (requires notification_id, date)
       - "mark_all_read": Mark ALL unread notifications as read
@@ -84,18 +102,21 @@ async def naukri_notifications(
         date: Required for mark_read — the notification date string
         limit: Max notifications for list action (default 20)
         page: Page number for list action (default 1)
+        notif_type: For list — filter by notification type (case-insensitive substring).
+                    Common types: "JA" (job alerts), "RA" (recruiter activity),
+                    "SYSTEM", "APPLICATION_UPDATE".  Omit for all types.
 
     Returns:
-        - list: {status, count, notifications: [...]}
-        - count: {status, unread_count}
+        - list: {status, count, notifications: [...], filtered_by?}
+        - count: {status, count}
         - mark_read: {status, notification_id}
-        - mark_all_read: {status, total_read}
+        - mark_all_read: {status, marked_count, already_read, total_processed}
         - {status: "error", message} on failure
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
         try:
-            return await _fetch_notifications(limit=limit, page=page)
+            return await _fetch_notifications(limit=limit, page=page, notif_type=notif_type)
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:

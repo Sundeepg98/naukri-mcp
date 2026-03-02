@@ -40,16 +40,24 @@ async def naukri_settings(
     recruiter_notification: Optional[bool] = None,
     promotional_notification: Optional[bool] = None,
 ) -> dict:
-    """Account settings management — get, update, and check status.
+    """Account settings management — get, update, visibility, notifications, and verification.
 
     Actions:
       - "get": Fetch all current settings (job search status, notifications, etc.)
       - "update": Modify settings (pass only fields to change)
       - "blocked_companies": List companies you've blocked
       - "check_email": Check email verification status
+      - "visibility": Show profile visibility toggles (Resdex visibility, search visibility, etc.)
+      - "notification_prefs": Show notification preferences (email, SMS, push, WhatsApp toggles)
+
+    Disambiguation:
+      - Use "get" for the raw formatted-settings structure (section/id/value).
+      - Use "visibility" for a human-readable summary of who can see your profile.
+      - Use "notification_prefs" for communication channel toggles (email/SMS/push/WhatsApp).
+      - Use "blocked_companies" to see which recruiters/companies are blocked.
 
     Args:
-        action: "get" | "update" | "blocked_companies" | "check_email"
+        action: "get" | "update" | "blocked_companies" | "check_email" | "visibility" | "notification_prefs"
         job_search_status: For update — "actively_searching", "open_to_opportunities", "not_looking"
         recommended_job_frequency: For update — frequency setting
         recommended_job_notification: For update — enable/disable
@@ -288,5 +296,116 @@ async def naukri_settings(
         except Exception as e:
             return {"status": "error", "message": f"Check email verification failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    elif action == "visibility":
+        try:
+            data = await api_get(PROFILE_API, params={"expand_level": "4"})
+
+            # resdexVisibility lives at top-level, inside profile[0], or inside user
+            resdex = (
+                data.get("resdexVisibility")
+                or data.get("profileVisibility")
+                or (data.get("profile", [{}])[0] if isinstance(data.get("profile"), list) else {}).get("resdexVisibility")
+                or data.get("profileAdditional", {}).get("resdexVisibility")
+                or data.get("user", {}).get("resdexVisibility")
+            )
+
+            if resdex and isinstance(resdex, dict):
+                visibility = {
+                    "show_profile": resdex.get("showProfile") or resdex.get("profileVisible"),
+                    "show_current_employer": resdex.get("showCurrentEmployer") or resdex.get("currentEmployerVisible"),
+                    "show_email": resdex.get("showEmail") or resdex.get("emailVisible"),
+                    "show_phone": resdex.get("showPhone") or resdex.get("mobileVisible"),
+                    "show_resume": resdex.get("showResume") or resdex.get("resumeVisible"),
+                    "hide_from_companies": resdex.get("hideFromCompanies") or resdex.get("blockedCompanies"),
+                    "search_visible": resdex.get("searchVisible") or resdex.get("isSearchable"),
+                    "active_job_seeker": resdex.get("activeJobSeeker") or resdex.get("isActivelySearching"),
+                }
+                # Strip None values for cleaner output
+                visibility = {k: v for k, v in visibility.items() if v is not None}
+
+                if not visibility:
+                    return {
+                        "status": "success",
+                        "message": "resdexVisibility object found but all fields are null — API may have changed.",
+                        "raw_keys": list(resdex.keys()),
+                        "visibility": {},
+                    }
+
+                return {
+                    "status": "success",
+                    "visibility": visibility,
+                    "hint": "These reflect Resdex (recruiter database) visibility. Use naukri_profile(action='get') for full profile context.",
+                }
+            elif resdex and isinstance(resdex, str):
+                # Sometimes returned as a simple string like "visible" / "hidden"
+                return {
+                    "status": "success",
+                    "visibility": resdex,
+                    "hint": "Visibility returned as a simple status string.",
+                }
+            else:
+                return {
+                    "status": "success",
+                    "message": "No resdexVisibility data found in profile API response. "
+                               "This field may not be populated for all accounts.",
+                    "visibility": {},
+                    "api_top_keys": list(data.keys())[:20],
+                }
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Visibility fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    elif action == "notification_prefs":
+        try:
+            data = await api_get(PROFILE_API, params={"expand_level": "4"})
+
+            # communicationSettings can be at top level, inside profile[0], or inside user
+            comm = (
+                data.get("communicationSettings")
+                or data.get("communicationPreferences")
+                or (data.get("profile", [{}])[0] if isinstance(data.get("profile"), list) else {}).get("communicationSettings")
+                or data.get("user", {}).get("communicationSettings")
+            )
+
+            if comm and isinstance(comm, dict):
+                prefs = {
+                    "email_notifications": comm.get("emailNotifications") or comm.get("emailAlerts"),
+                    "sms_notifications": comm.get("smsNotifications") or comm.get("smsAlerts"),
+                    "push_notifications": comm.get("pushNotifications"),
+                    "job_alerts": comm.get("jobAlerts") or comm.get("jobAlert"),
+                    "recruiter_messages": comm.get("recruiterMessages") or comm.get("recruiterMail"),
+                    "promotional": comm.get("promotional") or comm.get("marketingMail"),
+                    "whatsapp_notifications": comm.get("whatsappNotifications") or comm.get("whatsappAlerts"),
+                }
+                # Strip None values for cleaner output
+                prefs = {k: v for k, v in prefs.items() if v is not None}
+
+                if not prefs:
+                    return {
+                        "status": "success",
+                        "message": "communicationSettings object found but all fields are null — API may have changed.",
+                        "raw_keys": list(comm.keys()),
+                        "notification_prefs": {},
+                    }
+
+                return {
+                    "status": "success",
+                    "notification_prefs": prefs,
+                    "hint": "Use naukri_settings(action='update') to toggle recruiter_notification, promotional_notification, etc.",
+                }
+            else:
+                return {
+                    "status": "success",
+                    "message": "No communicationSettings data found in profile API response. "
+                               "This field may not be populated for all accounts.",
+                    "notification_prefs": {},
+                    "api_top_keys": list(data.keys())[:20],
+                }
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Notification prefs fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email, visibility, notification_prefs", "error_code": "VALIDATION_ERROR"}

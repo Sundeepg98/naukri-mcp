@@ -20,6 +20,10 @@ async def naukri_search_jobs(
     work_mode: Optional[str] = None,
     job_type: Optional[str] = None,
     company_type: Optional[str] = None,
+    industry: Optional[str] = None,
+    education: Optional[str] = None,
+    role_category: Optional[str] = None,
+    posted_within: Optional[int] = None,
     limit: int = 20,
     page: int = 1,
 ) -> dict:
@@ -39,6 +43,10 @@ async def naukri_search_jobs(
         work_mode: Work arrangement — "wfh", "hybrid", or "office"
         job_type: Filter by job type — "fulltime", "parttime", "contract", "internship", "temporary"
         company_type: Filter by company type — "startup", "mnc", "indian_mnc", "corporate"
+        industry: Industry sector (e.g., "IT-Software", "Banking", "Healthcare")
+        education: Minimum education — "any_graduate", "b_tech", "mba", "m_tech", "diploma", "phd"
+        role_category: Role category (e.g., "Software Development", "Data Science")
+        posted_within: Jobs posted within N days (overrides freshness if both set)
         limit: Max jobs to return (default 20, max 50)
         page: Page number for pagination (default 1)
 
@@ -85,6 +93,16 @@ async def naukri_search_jobs(
                 ct = _COMPANY_TYPE_MAP.get(company_type.lower())
                 if ct:
                     params.append(f"companyType={ct}")
+            if industry:
+                params.append(f"industry={industry}")
+            if education:
+                _EDU_MAP = {"any_graduate": "0", "b_tech": "35", "mba": "41", "m_tech": "36", "diploma": "23", "phd": "46"}
+                edu = _EDU_MAP.get(education.lower(), education)
+                params.append(f"education={edu}")
+            if role_category:
+                params.append(f"roleCategory={role_category}")
+            if posted_within is not None:
+                params.append(f"jobAge={posted_within}")
             if page_no > 1:
                 params.append(f"pageNo={page_no}")
             if params:
@@ -115,6 +133,10 @@ async def naukri_search_jobs(
                     "work_mode": work_mode,
                     "job_type": job_type,
                     "company_type": company_type,
+                    "industry": industry,
+                    "education": education,
+                    "role_category": role_category,
+                    "posted_within": posted_within,
                 }.items() if v is not None},
                 "jobs": jobs,
             }

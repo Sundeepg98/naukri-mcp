@@ -175,10 +175,10 @@ class TestSkillGapAnalysis:
 class TestDailyBrief:
     """Tests for naukri_server.tools.daily_brief.naukri_daily_brief.
 
-    All 11 internal helpers are mocked at their source modules — no network, no browser.
+    All 16 internal helpers are mocked at their source modules — no network, no browser.
     """
 
-    # All 11 helpers patched at their source modules (where they are defined).
+    # All 16 helpers patched at their source modules (where they are defined).
     # daily_brief imports them locally, so the local import resolves to the source.
     _DAILY_BRIEF_PATCHES = [
         "naukri_server.tools.inbox._fetch_inbox",
@@ -192,6 +192,11 @@ class TestDailyBrief:
         "naukri_server.tools.subscription.naukri_get_subscription_status",
         "naukri_server.tools.reminders._list_reminders",
         "naukri_server.tools.tracking._get_stale_applications",
+        "naukri_server.tools.alerts._get_alerts_list",
+        "naukri_server.tools.assessments._get_profile_completeness",
+        "naukri_server.tools.tracking._list_saved_jobs",
+        "naukri_server.tools.performance._get_search_impressions",
+        "naukri_server.tools.assessments._list_assessments",
     ]
 
     # Corresponding mock return values (order matches _DAILY_BRIEF_PATCHES)
@@ -207,6 +212,11 @@ class TestDailyBrief:
         {"status": "success", "plan": "premium", "days_left": 15},
         {"status": "success", "total": 1, "due_count": 1, "reminders": [{"job_id": "rm1", "is_due": True}]},
         {"status": "success", "stale_count": 2, "stale_applications": [{"job_id": "s1"}, {"job_id": "s2"}]},
+        {"status": "success", "alerts": [{"id": "al1"}, {"id": "al2"}]},
+        {"status": "success", "completeness_percent": 85},
+        {"status": "success", "total": 5, "saved_jobs": []},
+        {"status": "success", "total_appearances": 200, "days": 7},
+        {"status": "success", "assessments": [{"skill": "Python", "status": "passed"}]},
     ]
 
     # Short labels matching the patch order (for override dict keys)
@@ -214,6 +224,8 @@ class TestDailyBrief:
         "inbox", "notifications", "recommendations", "recruiter_activity",
         "activity_level", "applications", "dashboard", "early_access",
         "subscription", "reminders", "stale_applications",
+        "job_alerts", "profile_completeness", "saved_jobs",
+        "search_impressions", "assessments",
     ]
 
     def _build_patches(self, overrides=None):
@@ -256,7 +268,7 @@ class TestDailyBrief:
         assert result["status"] == "success"
         assert "date" in result
 
-        # All 11 sections must be present
+        # All 16 sections must be present
         expected_sections = [
             "unread_messages",
             "notifications",
@@ -269,6 +281,11 @@ class TestDailyBrief:
             "subscription",
             "due_reminders",
             "stale_applications",
+            "job_alerts",
+            "profile_completeness",
+            "saved_jobs",
+            "search_impressions",
+            "assessments",
         ]
         for section in expected_sections:
             assert section in result, f"Missing section: {section}"
@@ -286,6 +303,12 @@ class TestDailyBrief:
         assert result["subscription"]["plan"] == "premium"
         assert result["due_reminders"]["count"] == 1
         assert result["stale_applications"]["count"] == 2
+        # New sections
+        assert result["job_alerts"]["triggered_count"] == 2
+        assert result["profile_completeness"]["completeness_percent"] == 85
+        assert result["saved_jobs"]["total"] == 5
+        assert result["search_impressions"]["total_appearances"] == 200
+        assert result["assessments"]["total"] == 1
 
         # No errors when all succeed
         assert "errors" not in result
@@ -376,8 +399,13 @@ class TestDailyBrief:
                 cm.__exit__(None, None, None)
 
         assert result["status"] == "partial_success"
-        assert len(result["errors"]) == 11
+        assert len(result["errors"]) == 16
         # All sections should be zeroed/default
         assert result["unread_messages"]["count"] == 0
         assert result["activity_level"] == "UNKNOWN"
         assert result["subscription"] is None
+        assert result["profile_completeness"] is None
+        assert result["search_impressions"] is None
+        assert result["saved_jobs"]["total"] == 0
+        assert result["assessments"]["total"] == 0
+        assert result["job_alerts"]["triggered_count"] == 0

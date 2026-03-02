@@ -48,7 +48,7 @@ class TestNotifications:
         with patch("naukri_server.tools.notifications._fetch_notifications", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "count": 0, "notifications": []}
             result = await naukri_notifications(action="list", limit=10, page=2)
-            mock_helper.assert_awaited_once_with(limit=10, page=2)
+            mock_helper.assert_awaited_once_with(limit=10, page=2, notif_type=None)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
