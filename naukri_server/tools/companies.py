@@ -7,12 +7,10 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
-from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
+from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
-
-_COMPANY_HEADERS = {"appid": "103"}
 
 
 def _parse_company(group: dict) -> dict:
@@ -73,7 +71,7 @@ async def _search_companies(keyword: str, page: int = 1, limit: int = 20) -> dic
             "qcount": str(limit),
             "searchType": "companySearch",
         },
-        extra_headers=_COMPANY_HEADERS,
+        extra_headers=COMPANY_API_HEADERS,
     )
 
     groups = data.get("groupDetails", [])
@@ -159,9 +157,9 @@ async def _get_company_slug(group_id: str) -> dict:
             try:
                 await page_goto(page, page_url)
                 try:
-                    await asyncio.wait_for(event.wait(), timeout=10)
+                    await asyncio.wait_for(event.wait(), timeout=INTERCEPT_WAIT_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.warning("Company API response not captured after 10s for group_id: %s", group_id)
+                    logger.warning("Company API response not captured after %ss for group_id: %s", INTERCEPT_WAIT_TIMEOUT, group_id)
             finally:
                 page.remove_listener("response", on_response)
 
@@ -492,7 +490,3 @@ async def _company_follow(
     # ── unknown action ────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
-
-
-# Backward-compat alias (no longer an MCP tool)
-naukri_company_follow = _company_follow

@@ -4,12 +4,9 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.config import DAILY_APPLY_QUOTA, logger
+from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
 from naukri_server.scoring import compute_fit_score, parse_skills
 
-
-# ── Concurrency limit for bulk job detail fetches ──
-_BULK_FETCH_CONCURRENCY = 3
 
 
 def _score_job(job_result: dict, profile_result: dict) -> dict:
@@ -62,7 +59,7 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
             return {"status": "success", "total_saved": 0, "scored_count": 0, "min_fit_score": min_fit_score, "scored_jobs": [], "message": "No saved jobs found"}
 
         # Fetch full details for each saved job (need skills/experience for scoring)
-        sem = asyncio.Semaphore(_BULK_FETCH_CONCURRENCY)
+        sem = asyncio.Semaphore(BULK_FETCH_CONCURRENCY)
         errors = []
 
         async def _fetch_detail(job):
@@ -304,6 +301,7 @@ async def naukri_smart_apply(
         return {"status": "error", "message": "job_id is required for single-job assessment", "error_code": "VALIDATION_ERROR"}
 
     from naukri_server.tools.jobs import naukri_get_job
+    from naukri_server.tools.jobs import _fetch_match_score
     from naukri_server.tools.profile import get_cached_profile
     from naukri_server.tools.apply import _apply_single
 
@@ -322,6 +320,13 @@ async def naukri_smart_apply(
         msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
         return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
+    # Fetch Naukri's own match score (non-blocking — don't fail if unavailable)
+    naukri_match = None
+    try:
+        naukri_match = await _fetch_match_score(job_id)
+    except Exception:
+        pass
+
     # Compute fit — use tags-or-skills fallback, pass enrichment data
     fit = _score_job(job_result, profile_result)
 
@@ -337,6 +342,7 @@ async def naukri_smart_apply(
         },
         "fit_assessment": fit,
         "applied": False,
+        "naukri_match": naukri_match,
     }
 
     # Auto-apply if requested and fit

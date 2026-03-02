@@ -170,7 +170,7 @@ async def naukri_job_alerts(
             alerts_result = await _get_alerts_list()
         except Exception as e:
             logger.debug("Failed to fetch alerts list for update lookup: %s", e)
-            alerts_result = {"status": "error"}
+            alerts_result = {"status": "error", "message": "Failed to fetch alerts list", "error_code": "API_ERROR"}
 
         alert_name = str(alert_id)  # fallback
         if alerts_result.get("status") == "success":

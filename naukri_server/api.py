@@ -9,13 +9,11 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, logger
+from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, API_MAX_RETRIES, API_BACKOFF_BASE, API_MAX_BACKOFF_SECONDS, logger
 from naukri_server.browser import browser
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
 SUCCESS_STATUSES = {200, 201, 202, 204}
-MAX_RETRIES = 2
-BACKOFF_BASE = 1.0
 
 # --- Global shared session (avoids per-call ClientSession creation) ---
 _session: aiohttp.ClientSession = None
@@ -186,15 +184,15 @@ async def _api_request(method: str, path: str, params: dict = None,
                                           extra_headers, _attempt=1)
 
             # 429 — rate limit with Retry-After / exponential backoff
-            if resp.status == 429 and _attempt < MAX_RETRIES:
+            if resp.status == 429 and _attempt < API_MAX_RETRIES:
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after is not None:
                     try:
                         delay = float(retry_after)
                     except (ValueError, TypeError):
-                        delay = min(2 ** _attempt, 8)
+                        delay = min(2 ** _attempt, API_MAX_BACKOFF_SECONDS)
                 else:
-                    delay = min(2 ** _attempt, 8)
+                    delay = min(2 ** _attempt, API_MAX_BACKOFF_SECONDS)
                 api_metrics.retries += 1
                 logger.info("Rate limited (429), retrying after %.1fs...", delay)
                 await asyncio.sleep(delay)
@@ -202,8 +200,8 @@ async def _api_request(method: str, path: str, params: dict = None,
                                           extra_headers, _attempt=_attempt + 1)
 
             # Transient server errors — exponential backoff retry
-            if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < MAX_RETRIES:
-                delay = BACKOFF_BASE * (2 ** _attempt)
+            if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < API_MAX_RETRIES:
+                delay = API_BACKOFF_BASE * (2 ** _attempt)
                 api_metrics.retries += 1
                 logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
                 await asyncio.sleep(delay)
@@ -213,8 +211,8 @@ async def _api_request(method: str, path: str, params: dict = None,
             api_metrics.errors += 1
             _raise_api_error(resp.status, text)
     except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-        if _attempt < MAX_RETRIES:
-            delay = BACKOFF_BASE * (2 ** _attempt)
+        if _attempt < API_MAX_RETRIES:
+            delay = API_BACKOFF_BASE * (2 ** _attempt)
             api_metrics.retries += 1
             logger.info("Transport error (%s), retrying in %.1fs (attempt %d)...",
                         type(e).__name__, delay, _attempt + 1)
@@ -222,7 +220,7 @@ async def _api_request(method: str, path: str, params: dict = None,
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
         api_metrics.errors += 1
-        raise NaukriAPIError(0, f"Connection failed after {MAX_RETRIES} retries: {type(e).__name__}: {e}")
+        raise NaukriAPIError(0, f"Connection failed after {API_MAX_RETRIES} retries: {type(e).__name__}: {e}")
 
 
 # --- Public thin wrappers (preserve existing signatures) ---

@@ -7,11 +7,10 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_tool
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, logger
+from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB, logger
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
 RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
-RESUME_MAX_SIZE_MB = 5
 
 _VALID_ACTIONS = {
     "resume": {"info", "download", "upload"},

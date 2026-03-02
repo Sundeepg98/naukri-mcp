@@ -7,6 +7,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.scoring import compute_fit_score, parse_skills
 
 
 def _build_early_access_section(early_access: dict | None, errors: list) -> dict:
@@ -135,6 +136,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.reminders import _list_reminders
     from naukri_server.tools.alerts import _get_alerts_list
     from naukri_server.tools.assessments import _get_profile_completeness, _list_assessments
+    from naukri_server.tools.insights import _match_quality
 
     today = datetime.now(IST).strftime("%Y-%m-%d")
     errors = []
@@ -156,6 +158,7 @@ async def naukri_daily_brief() -> dict:
         _list_saved_jobs(limit=1),                         # 13
         _get_search_impressions(days=7),                   # 14
         _list_assessments(),                               # 15
+        _match_quality(days=7),                              # 16
         return_exceptions=True,
     )
 
@@ -185,6 +188,7 @@ async def naukri_daily_brief() -> dict:
     saved = _extract(13, "Saved jobs")
     impressions = _extract(14, "Search impressions")
     assessments_result = _extract(15, "Assessments")
+    match_quality = _extract(16, "Match quality")
 
     # Count pending assessments (those without a completed status)
     pending_count = 0
@@ -247,7 +251,29 @@ async def naukri_daily_brief() -> dict:
             "total": len(assessments_result.get("assessments", [])) if assessments_result else 0,
             "pending": pending_count,
         },
+        "match_quality": match_quality if match_quality else None,
     }
+
+    # Enrich top recommendations with fit scores
+    if recs and dashboard:
+        try:
+            from naukri_server.tools.profile import get_cached_profile
+            profile_data = await get_cached_profile()
+            if profile_data:
+                profile_skills = parse_skills(profile_data.get("key_skills", []))
+                for job in brief["recommendations"]["jobs"][:3]:
+                    try:
+                        job_skills = parse_skills(job.get("tags", []))
+                        fit = compute_fit_score(
+                            job_skills, profile_skills,
+                            job.get("experience", ""),
+                            profile_data.get("total_experience"),
+                        )
+                        job["fit_score"] = fit.get("overall_score")
+                    except Exception:
+                        pass
+        except Exception as exc:
+            errors.append(f"Fit scoring: {type(exc).__name__}: {exc}")
 
     brief["recommended_actions"] = _build_recommended_actions(brief)
 

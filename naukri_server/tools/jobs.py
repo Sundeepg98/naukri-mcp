@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import JOB_DETAIL_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, logger
+from naukri_server.config import JOB_DETAIL_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, logger
 from naukri_server.validation import validate_job_detail
 
 
@@ -305,9 +305,9 @@ async def _get_job(job_id_or_url: str) -> dict:
             try:
                 await page_goto(page, page_url)
                 try:
-                    await asyncio.wait_for(response_event.wait(), timeout=10)
+                    await asyncio.wait_for(response_event.wait(), timeout=INTERCEPT_WAIT_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.warning("Job details response capture timed out after 10s for job: %s", job_id)
+                    logger.warning("Job details response capture timed out after %ss for job: %s", INTERCEPT_WAIT_TIMEOUT, job_id)
                 # Give a moment for match score to arrive too
                 if "score" not in captured:
                     await asyncio.sleep(1)

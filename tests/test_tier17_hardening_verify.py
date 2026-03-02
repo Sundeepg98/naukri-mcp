@@ -48,7 +48,8 @@ class TestBackoff502SingleRetry:
 
     @pytest.mark.asyncio
     async def test_502_then_200_sleeps_once(self):
-        from naukri_server.api import _api_request, BACKOFF_BASE
+        from naukri_server.api import _api_request
+        from naukri_server.config import API_BACKOFF_BASE as BACKOFF_BASE
 
         resp_502 = _make_mock_response(502, text="Bad Gateway")
         resp_200 = _make_mock_response(200, json_data={"ok": True})
@@ -75,7 +76,8 @@ class TestBackoff503TwiceIncreasingDelays:
 
     @pytest.mark.asyncio
     async def test_503_503_200_sleeps_twice(self):
-        from naukri_server.api import _api_request, BACKOFF_BASE
+        from naukri_server.api import _api_request
+        from naukri_server.config import API_BACKOFF_BASE as BACKOFF_BASE
 
         resp_503_a = _make_mock_response(503, text="Service Unavailable")
         resp_503_b = _make_mock_response(503, text="Service Unavailable")
@@ -107,7 +109,8 @@ class TestBackoff504ExhaustsRetries:
 
     @pytest.mark.asyncio
     async def test_504_exhausts_retries_raises_error(self):
-        from naukri_server.api import _api_request, MAX_RETRIES, NaukriAPIError
+        from naukri_server.api import _api_request, NaukriAPIError
+        from naukri_server.config import API_MAX_RETRIES as MAX_RETRIES
 
         # Need MAX_RETRIES + 1 responses (initial call + MAX_RETRIES retries)
         # All return 504

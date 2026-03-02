@@ -156,3 +156,27 @@ TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation
 
 # Cache purge threshold
 CACHE_PURGE_DAYS = 30  # Days before cached answers are purged
+
+# Apply timeouts (seconds)
+BATCH_APPLY_PER_JOB_TIMEOUT = 30    # Per-job apply timeout
+BATCH_APPLY_TOTAL_TIMEOUT = 120     # Overall batch gather timeout
+
+# Browser intercept wait (seconds)
+INTERCEPT_WAIT_TIMEOUT = 10         # Wait for API response intercept
+
+# API retry behavior
+API_MAX_RETRIES = 2                 # Max retries for retriable HTTP status codes
+API_BACKOFF_BASE = 1.0              # Base delay (seconds) for exponential backoff
+API_MAX_BACKOFF_SECONDS = 8         # Cap on backoff delay
+
+# Additional operational limits
+MAX_MARK_ALL_ITERATIONS = 10        # Cap on mark-all-read loop iterations
+RESUME_MAX_SIZE_MB = 5              # Max resume upload size in MB
+BULK_FETCH_CONCURRENCY = 3          # Concurrency limit for bulk job detail fetches
+BATCH_APPLY_DEFAULT_CONCURRENCY = 3 # Default max_concurrent for batch operations
+
+# Company API (different appid from main API — discovered via webpack analysis)
+COMPANY_API_HEADERS = {
+    "appid": "103",
+    "systemid": "Naukri",
+}

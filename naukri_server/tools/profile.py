@@ -8,43 +8,15 @@ from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, logger
+from naukri_server.utils import TtlCache
 from naukri_server.validation import validate_profile
 
-
-# ---------------------------------------------------------------------------
-# Unified TTL cache helper
-# ---------------------------------------------------------------------------
-
-class _TtlCache:
-    """Simple async TTL cache for a single value."""
-    def __init__(self, ttl: float):
-        self._ttl = ttl
-        self._data = None
-        self._ts = 0.0
-        self._lock = asyncio.Lock()
-
-    async def get(self, fetch_fn):
-        """Return cached data or call fetch_fn() if stale."""
-        now = time.time()
-        if self._data is not None and (now - self._ts) < self._ttl:
-            return self._data
-        async with self._lock:
-            now = time.time()
-            if self._data is not None and (now - self._ts) < self._ttl:
-                return self._data
-            self._data = await fetch_fn()
-            self._ts = time.time()
-            return self._data
-
-    def invalidate(self):
-        """Clear cached data."""
-        self._data = None
-        self._ts = 0.0
-
+# Backward-compat alias — tests import _TtlCache from here
+_TtlCache = TtlCache
 
 # --- Profile & dashboard TTL caches for composite tools ---
-_profile_ttl_cache = _TtlCache(PROFILE_CACHE_TTL)
-_dashboard_ttl_cache = _TtlCache(PROFILE_CACHE_TTL)
+_profile_ttl_cache = TtlCache(PROFILE_CACHE_TTL)
+_dashboard_ttl_cache = TtlCache(PROFILE_CACHE_TTL)
 
 
 async def _fetch_raw_profile() -> dict:
@@ -1268,7 +1240,3 @@ async def _get_dashboard() -> dict:
         return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-
-# Backward-compat alias
-naukri_get_dashboard = _get_dashboard

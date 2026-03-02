@@ -386,7 +386,7 @@ class TestDailyBrief:
     All 16 internal helpers are mocked at their source modules — no network, no browser.
     """
 
-    # All 16 helpers patched at their source modules (where they are defined).
+    # All 17 helpers patched at their source modules (where they are defined).
     # daily_brief imports them locally, so the local import resolves to the source.
     _DAILY_BRIEF_PATCHES = [
         "naukri_server.tools.inbox._fetch_inbox",
@@ -405,6 +405,7 @@ class TestDailyBrief:
         "naukri_server.tools.tracking._list_saved_jobs",
         "naukri_server.tools.performance._get_search_impressions",
         "naukri_server.tools.assessments._list_assessments",
+        "naukri_server.tools.insights._match_quality",
     ]
 
     # Corresponding mock return values (order matches _DAILY_BRIEF_PATCHES)
@@ -425,6 +426,7 @@ class TestDailyBrief:
         {"status": "success", "total": 5, "saved_jobs": []},
         {"status": "success", "total_appearances": 200, "days": 7},
         {"status": "success", "assessments": [{"skill": "Python", "status": "passed"}]},
+        {"status": "success", "match_quality": {"score": 75, "breakdown": {}}},
     ]
 
     # Short labels matching the patch order (for override dict keys)
@@ -433,16 +435,19 @@ class TestDailyBrief:
         "activity_level", "applications", "dashboard", "early_access",
         "subscription", "reminders", "stale_applications",
         "job_alerts", "profile_completeness", "saved_jobs",
-        "search_impressions", "assessments",
+        "search_impressions", "assessments", "match_quality",
     ]
 
     # Patch for _detect_new_roles (called synchronously from _build_early_access_section).
     _DETECT_NEW_ROLES_PATCH = "naukri_server.tools.early_access._detect_new_roles"
+    # Patch for get_cached_profile (used in fit scoring block).
+    _GET_CACHED_PROFILE_PATCH = "naukri_server.tools.profile.get_cached_profile"
 
     def _build_patches(self, overrides=None):
         """Create a dict of patch path -> AsyncMock with return values.
 
-        Also includes a default mock for _detect_new_roles (sync, returns no new roles).
+        Also includes a default mock for _detect_new_roles (sync, returns no new roles)
+        and get_cached_profile (async, returns None to skip fit scoring).
 
         Args:
             overrides: dict mapping patch path to a side_effect (Exception) or return_value (dict).
@@ -469,6 +474,16 @@ class TestDailyBrief:
             else:
                 dnr_mock.return_value = override
         patches[dnr_path] = dnr_mock
+        # get_cached_profile is async; return None to skip fit scoring in tests
+        gcp_path = self._GET_CACHED_PROFILE_PATCH
+        gcp_mock = AsyncMock(return_value=None)
+        if overrides and gcp_path in overrides:
+            override = overrides[gcp_path]
+            if isinstance(override, Exception):
+                gcp_mock.side_effect = override
+            else:
+                gcp_mock.return_value = override
+        patches[gcp_path] = gcp_mock
         return patches
 
     @pytest.mark.asyncio
@@ -622,7 +637,7 @@ class TestDailyBrief:
                 cm.__exit__(None, None, None)
 
         assert result["status"] == "partial_success"
-        assert len(result["errors"]) == 16
+        assert len(result["errors"]) == 17
         # All sections should be zeroed/default
         assert result["unread_messages"]["count"] == 0
         assert result["activity_level"] == "UNKNOWN"

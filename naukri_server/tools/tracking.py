@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -14,6 +13,7 @@ from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
     SAVE_JOB_API, UNSAVE_JOB_API, BATCH_APPLY_DEFAULT_DELAY_MS,
+    BATCH_APPLY_DEFAULT_CONCURRENCY,
 )
 from naukri_server.validation import validate_limit, validate_page
 
@@ -521,7 +521,7 @@ async def naukri_applications(
     job_type: Optional[str] = None,
     company_type: Optional[str] = None,
     delay_ms: int = BATCH_APPLY_DEFAULT_DELAY_MS,
-    max_concurrent: int = 3,
+    max_concurrent: int = BATCH_APPLY_DEFAULT_CONCURRENCY,
     set_reminder_days: Optional[int] = None,
 ) -> dict:
     """Unified application tracking — list, detail, purge, stale detection, follow-up, apply, and batch apply.
@@ -877,6 +877,3 @@ async def _get_match_analytics(days: int = 7) -> dict:
         "field_breakdown": data.get("relevantFieldMatch"),
         "user_details": data.get("userDetails"),
     }
-
-
-naukri_get_match_analytics = _get_match_analytics

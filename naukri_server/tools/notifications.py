@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
+from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -154,7 +154,6 @@ async def naukri_notifications(
             total_processed = 0
             all_errors = []
 
-            MAX_MARK_ALL_ITERATIONS = 10
             iteration = 0
             while iteration < MAX_MARK_ALL_ITERATIONS:
                 iteration += 1

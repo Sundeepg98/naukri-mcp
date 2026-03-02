@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server — Tier 18 (26 tools)
+"""Naukri.com Job Automation MCP Server — Tier 20 (26 tools)
 
 Quick Start for AI consumers:
   1. naukri_auth(action="login|verify_otp|status") → authenticate first

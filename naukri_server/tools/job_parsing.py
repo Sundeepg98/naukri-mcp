@@ -29,6 +29,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "title": job.get("title"),
             "company": job.get("companyName"),
             "salary": salary_str,
+            "salary_min_lakhs": round(sal_min / LAKHS_MULTIPLIER, 1) if sal_min else None,
+            "salary_max_lakhs": round(sal_max / LAKHS_MULTIPLIER, 1) if sal_max else None,
             "location": loc_label,
             "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
             "experience_min": job.get("minimumExperience"),

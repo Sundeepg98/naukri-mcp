@@ -1,0 +1,552 @@
+"""Deep tests for naukri_server/tools/reminders.py.
+
+Every test is PURE — no network, no browser, no file I/O.
+We patch _load_reminders / _save_reminders at the source module so that
+asyncio.Lock is still exercised without any disk access.
+"""
+
+import asyncio
+from datetime import datetime, timezone, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+# =====================================================================
+# Helpers
+# =====================================================================
+
+def _utc(offset_days: float = 0) -> datetime:
+    """Return a UTC datetime offset_days from now (negative = past)."""
+    return datetime.now(timezone.utc) + timedelta(days=offset_days)
+
+
+def _iso(offset_days: float = 0) -> str:
+    return _utc(offset_days).isoformat()
+
+
+# =====================================================================
+# 1. Action routing — naukri_reminders (unified MCP tool)
+# =====================================================================
+
+class TestActionRouting:
+    """Tests for the top-level naukri_reminders tool action dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_list_action_calls_list_reminders(self):
+        """action='list' should delegate to _list_reminders with correct kwargs."""
+        from naukri_server.tools.reminders import naukri_reminders
+
+        list_result = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
+
+        with patch(
+            "naukri_server.tools.reminders._list_reminders",
+            new_callable=AsyncMock,
+            return_value=list_result,
+        ) as mock_list:
+            result = await naukri_reminders(action="list", include_past=False, include_app_status=False)
+
+        mock_list.assert_awaited_once_with(include_past=False, include_app_status=False)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_set_action_calls_set_reminder(self):
+        """action='set' with a valid job_id should delegate to _set_reminder."""
+        from naukri_server.tools.reminders import naukri_reminders
+
+        set_result = {
+            "status": "success",
+            "job_id": "J001",
+            "remind_at": _iso(7),
+            "note": "Call recruiter",
+            "message": "Reminder set — due in 7 days.",
+        }
+
+        with patch(
+            "naukri_server.tools.reminders._set_reminder",
+            new_callable=AsyncMock,
+            return_value=set_result,
+        ) as mock_set:
+            result = await naukri_reminders(
+                action="set",
+                job_id="J001",
+                days=7,
+                note="Call recruiter",
+                title="SDE",
+                company="Acme",
+            )
+
+        mock_set.assert_awaited_once_with(
+            job_id="J001", days=7, note="Call recruiter", title="SDE", company="Acme"
+        )
+        assert result["status"] == "success"
+        assert result["job_id"] == "J001"
+
+    @pytest.mark.asyncio
+    async def test_unknown_action_returns_validation_error(self):
+        """An unrecognised action string should return VALIDATION_ERROR immediately."""
+        from naukri_server.tools.reminders import naukri_reminders
+
+        result = await naukri_reminders(action="delete")
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "delete" in result["message"]
+
+
+# =====================================================================
+# 2. Validation — set action
+# =====================================================================
+
+class TestSetValidation:
+    """Validation tests for action='set' in naukri_reminders."""
+
+    @pytest.mark.asyncio
+    async def test_set_missing_job_id_returns_error(self):
+        """action='set' without job_id must return VALIDATION_ERROR before calling helper."""
+        from naukri_server.tools.reminders import naukri_reminders
+
+        with patch(
+            "naukri_server.tools.reminders._set_reminder",
+            new_callable=AsyncMock,
+        ) as mock_set:
+            result = await naukri_reminders(action="set", job_id=None, days=7)
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "job_id" in result["message"]
+        mock_set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_days_less_than_1_returns_validation_error(self):
+        """days=0 must return VALIDATION_ERROR from _set_reminder."""
+        from naukri_server.tools.reminders import _set_reminder
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
+             patch("naukri_server.tools.reminders._save_reminders") as mock_save:
+            result = await _set_reminder(job_id="J002", days=0)
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "365" in result["message"]
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_days_greater_than_365_returns_validation_error(self):
+        """days=366 must return VALIDATION_ERROR from _set_reminder."""
+        from naukri_server.tools.reminders import _set_reminder
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
+             patch("naukri_server.tools.reminders._save_reminders") as mock_save:
+            result = await _set_reminder(job_id="J003", days=366)
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        mock_save.assert_not_called()
+
+
+# =====================================================================
+# 3. _set_reminder — create and update paths
+# =====================================================================
+
+class TestSetReminder:
+    """Tests for the _set_reminder internal helper."""
+
+    @pytest.mark.asyncio
+    async def test_creates_new_reminder(self):
+        """A job_id not already in reminders should be appended as a new entry."""
+        from naukri_server.tools.reminders import _set_reminder
+
+        captured = {}
+
+        def fake_save(data):
+            captured["data"] = data
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
+             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+            result = await _set_reminder(
+                job_id="J010",
+                days=14,
+                note="Follow up",
+                title="Backend Dev",
+                company="StartupCo",
+            )
+
+        assert result["status"] == "success"
+        assert result["job_id"] == "J010"
+        assert "14 days" in result["message"]
+        assert "set" in result["message"]
+
+        saved = captured["data"]
+        assert len(saved) == 1
+        entry = saved[0]
+        assert entry["job_id"] == "J010"
+        assert entry["title"] == "Backend Dev"
+        assert entry["company"] == "StartupCo"
+        assert entry["note"] == "Follow up"
+        assert "created_at" in entry
+        assert "remind_at" in entry
+
+    @pytest.mark.asyncio
+    async def test_updates_existing_reminder_by_job_id(self):
+        """An existing job_id must be updated in-place — not duplicated."""
+        from naukri_server.tools.reminders import _set_reminder
+
+        existing_remind_at = _iso(-1)  # already overdue
+        existing = [
+            {
+                "job_id": "J020",
+                "title": "Old Title",
+                "company": "OldCo",
+                "remind_at": existing_remind_at,
+                "note": "Old note",
+                "created_at": _iso(-10),
+            }
+        ]
+        captured = {}
+
+        def fake_save(data):
+            captured["data"] = data
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=existing), \
+             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+            result = await _set_reminder(
+                job_id="J020",
+                days=5,
+                note="New note",
+                title="New Title",
+                company="NewCo",
+            )
+
+        assert result["status"] == "success"
+        assert "updated" in result["message"]
+
+        saved = captured["data"]
+        assert len(saved) == 1  # no duplication
+        entry = saved[0]
+        assert entry["job_id"] == "J020"
+        assert entry["title"] == "New Title"
+        assert entry["company"] == "NewCo"
+        assert entry["note"] == "New note"
+        assert entry["remind_at"] != existing_remind_at
+        assert "updated_at" in entry
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_existing_note_when_none_passed(self):
+        """When note=None is passed on update, the existing note must be preserved."""
+        from naukri_server.tools.reminders import _set_reminder
+
+        existing = [
+            {
+                "job_id": "J021",
+                "title": "Dev",
+                "company": "Corp",
+                "remind_at": _iso(-2),
+                "note": "Original note",
+                "created_at": _iso(-5),
+            }
+        ]
+        captured = {}
+
+        def fake_save(data):
+            captured["data"] = data
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=existing), \
+             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+            result = await _set_reminder(job_id="J021", days=3, note=None)
+
+        # note=None means "keep existing note"
+        entry = captured["data"][0]
+        assert entry["note"] == "Original note"
+
+
+# =====================================================================
+# 4. _list_reminders — is_due, days_until_due, filtering, sorting
+# =====================================================================
+
+class TestListReminders:
+    """Tests for the _list_reminders internal helper."""
+
+    @pytest.mark.asyncio
+    async def test_is_due_flag_set_for_past_reminder(self):
+        """A reminder whose remind_at is in the past must have is_due=True."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {
+                "job_id": "J100",
+                "remind_at": _iso(-3),
+                "title": "Dev",
+                "company": "A",
+                "note": None,
+                "created_at": _iso(-10),
+            }
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        assert result["status"] == "success"
+        assert result["total"] == 1
+        r = result["reminders"][0]
+        assert r["is_due"] is True
+        assert r["days_until_due"] <= 0
+
+    @pytest.mark.asyncio
+    async def test_is_due_false_for_future_reminder(self):
+        """A reminder whose remind_at is in the future must have is_due=False."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {
+                "job_id": "J101",
+                "remind_at": _iso(10),
+                "title": "QA",
+                "company": "B",
+                "note": None,
+                "created_at": _iso(-1),
+            }
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        r = result["reminders"][0]
+        assert r["is_due"] is False
+        assert r["days_until_due"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_include_past_false_excludes_due_reminders(self):
+        """include_past=False must exclude reminders that are already due."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J200", "remind_at": _iso(-1), "title": "Past", "company": "X",
+             "note": None, "created_at": _iso(-5)},
+            {"job_id": "J201", "remind_at": _iso(5), "title": "Future", "company": "Y",
+             "note": None, "created_at": _iso(-1)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=False, include_app_status=False)
+
+        job_ids = [r["job_id"] for r in result["reminders"]]
+        assert "J200" not in job_ids
+        assert "J201" in job_ids
+        assert result["total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_sort_due_first(self):
+        """Due reminders must come before upcoming ones in the returned list."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J300", "remind_at": _iso(10), "title": "Future", "company": "A",
+             "note": None, "created_at": _iso(-1)},
+            {"job_id": "J301", "remind_at": _iso(-2), "title": "Due", "company": "B",
+             "note": None, "created_at": _iso(-5)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        assert result["reminders"][0]["job_id"] == "J301"  # due first
+        assert result["reminders"][1]["job_id"] == "J300"  # upcoming second
+
+    @pytest.mark.asyncio
+    async def test_due_count_calculation(self):
+        """due_count must reflect the exact number of reminders with is_due=True."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J400", "remind_at": _iso(-5), "title": "A", "company": "C1",
+             "note": None, "created_at": _iso(-10)},
+            {"job_id": "J401", "remind_at": _iso(-1), "title": "B", "company": "C2",
+             "note": None, "created_at": _iso(-3)},
+            {"job_id": "J402", "remind_at": _iso(7), "title": "C", "company": "C3",
+             "note": None, "created_at": _iso(-1)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        assert result["due_count"] == 2
+        assert result["total"] == 3
+
+    @pytest.mark.asyncio
+    async def test_malformed_datetime_skipped_gracefully(self):
+        """A reminder with an unparseable remind_at must be silently skipped."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J500", "remind_at": "not-a-date", "title": "Bad", "company": "X",
+             "note": None, "created_at": _iso(-2)},
+            {"job_id": "J501", "remind_at": _iso(3), "title": "Good", "company": "Y",
+             "note": None, "created_at": _iso(-1)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        job_ids = [r["job_id"] for r in result["reminders"]]
+        assert "J500" not in job_ids  # malformed skipped
+        assert "J501" in job_ids
+        assert result["total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_remind_at_skipped_gracefully(self):
+        """A reminder dict with no remind_at key must also be silently skipped."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J502", "title": "No date", "company": "Z",
+             "note": None, "created_at": _iso(-1)},
+            {"job_id": "J503", "remind_at": _iso(2), "title": "OK", "company": "W",
+             "note": None, "created_at": _iso(-1)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+            result = await _list_reminders(include_past=True, include_app_status=False)
+
+        job_ids = [r["job_id"] for r in result["reminders"]]
+        assert "J502" not in job_ids
+        assert "J503" in job_ids
+
+
+# =====================================================================
+# 5. _list_reminders — include_app_status enrichment
+# =====================================================================
+
+class TestListRemindersAppStatus:
+    """Tests for the include_app_status enrichment path in _list_reminders."""
+
+    @pytest.mark.asyncio
+    async def test_enriches_with_app_status_when_requested(self):
+        """With include_app_status=True, each reminder should get application_status."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J600", "remind_at": _iso(5), "title": "Dev", "company": "Co",
+             "note": None, "created_at": _iso(-1)},
+        ]
+        detail_result = {
+            "status": "success",
+            "current_status": "viewed",
+            "view_count": 3,
+            "ars_score": 78,
+        }
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+             patch(
+                 "naukri_server.tools.tracking._get_application_detail",
+                 new_callable=AsyncMock,
+                 return_value=detail_result,
+             ):
+            result = await _list_reminders(include_past=True, include_app_status=True)
+
+        r = result["reminders"][0]
+        assert "application_status" in r
+        assert r["application_status"]["current_status"] == "viewed"
+        assert r["application_status"]["view_count"] == 3
+        assert r["application_status"]["ars_score"] == 78
+
+    @pytest.mark.asyncio
+    async def test_app_status_error_detail_not_attached(self):
+        """If _get_application_detail returns an error dict, no application_status should appear."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J601", "remind_at": _iso(5), "title": "QA", "company": "Co",
+             "note": None, "created_at": _iso(-1)},
+        ]
+        detail_result = {"status": "error", "message": "Not found"}
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+             patch(
+                 "naukri_server.tools.tracking._get_application_detail",
+                 new_callable=AsyncMock,
+                 return_value=detail_result,
+             ):
+            result = await _list_reminders(include_past=True, include_app_status=True)
+
+        r = result["reminders"][0]
+        assert "application_status" not in r
+
+    @pytest.mark.asyncio
+    async def test_app_status_exception_not_attached(self):
+        """If _get_application_detail raises, that reminder should not get application_status."""
+        from naukri_server.tools.reminders import _list_reminders
+
+        reminders = [
+            {"job_id": "J602", "remind_at": _iso(5), "title": "Ops", "company": "Co",
+             "note": None, "created_at": _iso(-1)},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+             patch(
+                 "naukri_server.tools.tracking._get_application_detail",
+                 new_callable=AsyncMock,
+                 side_effect=RuntimeError("Timeout"),
+             ):
+            result = await _list_reminders(include_past=True, include_app_status=True)
+
+        r = result["reminders"][0]
+        assert "application_status" not in r
+
+
+# =====================================================================
+# 6. Error paths — NaukriAPIError caught by naukri_reminders tool
+# =====================================================================
+
+class TestErrorPaths:
+    """Tests for exception handling in the naukri_reminders MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_list_error_returns_api_error(self):
+        """If _list_reminders raises any exception, naukri_reminders returns API_ERROR."""
+        from naukri_server.tools.reminders import naukri_reminders
+        from naukri_server.api import NaukriAPIError
+
+        with patch(
+            "naukri_server.tools.reminders._list_reminders",
+            new_callable=AsyncMock,
+            side_effect=NaukriAPIError(500, "Internal Server Error"),
+        ):
+            result = await naukri_reminders(action="list")
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "API_ERROR"
+        assert "NaukriAPIError" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_set_error_returns_api_error(self):
+        """If _set_reminder raises any exception, naukri_reminders returns API_ERROR."""
+        from naukri_server.tools.reminders import naukri_reminders
+        from naukri_server.api import NaukriAPIError
+
+        with patch(
+            "naukri_server.tools.reminders._set_reminder",
+            new_callable=AsyncMock,
+            side_effect=NaukriAPIError(503, "Service Unavailable"),
+        ):
+            result = await naukri_reminders(action="set", job_id="J999", days=7)
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "API_ERROR"
+        assert "NaukriAPIError" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_generic_exception_caught(self):
+        """A plain RuntimeError from _list_reminders is also caught as API_ERROR."""
+        from naukri_server.tools.reminders import naukri_reminders
+
+        with patch(
+            "naukri_server.tools.reminders._list_reminders",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("Disk full"),
+        ):
+            result = await naukri_reminders(action="list")
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "API_ERROR"
+        assert "RuntimeError" in result["message"]
