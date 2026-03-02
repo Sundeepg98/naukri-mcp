@@ -126,6 +126,103 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
         return {"status": "error", "message": f"Bulk scoring timed out after {timeout_seconds}s", "error_code": "API_ERROR"}
 
 
+async def _apply_top_fits(
+    min_fit_score: int = 60,
+    limit: int = 10,
+    set_reminder_days: Optional[int] = None,
+    answers: Optional[dict] = None,
+    timeout_seconds: int = 120,
+) -> dict:
+    """Score saved jobs and apply to top fits above min_fit_score."""
+    from naukri_server.tools.apply import _apply_single
+    from naukri_server.validation import validate_limit
+
+    limit = validate_limit(limit, max_allowed=20)
+
+    # Step 1: Get scored jobs
+    scored_result = await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+    if scored_result.get("status") == "error":
+        return scored_result
+
+    scored_jobs = scored_result.get("scored_jobs", [])
+    if not scored_jobs:
+        return {
+            "status": "success",
+            "message": f"No saved jobs with fit score >= {min_fit_score}",
+            "applied": 0,
+            "skipped": scored_result.get("total_saved", 0),
+            "results": [],
+        }
+
+    # Step 2: Apply to top N
+    to_apply = scored_jobs[:limit]
+    results = []
+    applied_count = 0
+    errors = []
+
+    for job in to_apply:
+        jid = job.get("job_id")
+        if not jid:
+            continue
+        try:
+            apply_result = await _apply_single(
+                job_id=jid,
+                answers=answers,
+                title=job.get("title"),
+                company=job.get("company"),
+                tracking_extra={"source": "apply_top_fits", "fit_score": job.get("fit_score")},
+            )
+            status = apply_result.get("status")
+            entry = {
+                "job_id": jid,
+                "title": job.get("title"),
+                "company": job.get("company"),
+                "fit_score": job.get("fit_score"),
+                "apply_status": status,
+            }
+
+            if status == "applied":
+                applied_count += 1
+                # Auto-reminder
+                if set_reminder_days:
+                    from naukri_server.tools.reminders import _set_reminder
+                    try:
+                        await _set_reminder(
+                            job_id=jid,
+                            days=set_reminder_days,
+                            note=f"Follow up on {job.get('company', 'unknown')} application",
+                        )
+                        entry["reminder_set"] = True
+                    except Exception:
+                        entry["reminder_set"] = False
+
+            results.append(entry)
+        except Exception as e:
+            errors.append(f"Job {jid}: {type(e).__name__}: {e}")
+            results.append({
+                "job_id": jid,
+                "title": job.get("title"),
+                "fit_score": job.get("fit_score"),
+                "apply_status": "error",
+                "error": str(e),
+            })
+
+    result = {
+        "status": "success" if applied_count > 0 else "error",
+        "applied": applied_count,
+        "attempted": len(to_apply),
+        "total_scored": len(scored_jobs),
+        "min_fit_score": min_fit_score,
+        "results": results,
+    }
+    if errors:
+        result["errors"] = errors
+    if set_reminder_days and applied_count:
+        result["reminder_days"] = set_reminder_days
+
+    return result
+
+
 @mcp.tool()
 async def naukri_smart_apply(
     job_id: Optional[str] = None,
@@ -134,6 +231,8 @@ async def naukri_smart_apply(
     min_fit_score: int = 60,
     answers: Optional[dict] = None,
     timeout_seconds: int = 120,
+    set_reminder_days: Optional[int] = None,
+    limit: int = 10,
 ) -> dict:
     """Assess job fit before applying — compares your profile against the job.
 
@@ -149,6 +248,9 @@ async def naukri_smart_apply(
                       Returns a ranked list sorted by fit_score descending.
                       Uses min_fit_score to filter results (default 60).
                       Does NOT require job_id.
+      - "apply_top_fits": Score saved jobs and auto-apply to top fits.
+                         Uses min_fit_score to filter, limit to cap applications.
+                         Optionally sets follow-up reminders via set_reminder_days.
 
     Args:
         job_id: Naukri job ID (required for single-job assessment, ignored for bulk_saved)
@@ -157,6 +259,8 @@ async def naukri_smart_apply(
         min_fit_score: Minimum fit score threshold (default 60, range 0-100)
         answers: Optional screening question answers (for auto-apply, single-job only)
         timeout_seconds: Timeout for bulk operations (default 120)
+        set_reminder_days: Days until follow-up reminder (for apply_top_fits and single-job auto-apply)
+        limit: Max jobs to apply to in apply_top_fits (default 10, max 20)
 
     Returns:
         Single-job:
@@ -168,6 +272,11 @@ async def naukri_smart_apply(
         - {status: "success", total_saved, scored_count, min_fit_score,
            scored_jobs: [{job_id, title, company, salary, location, fit_score, fit_details}, ...]}
         - {status: "error", message}
+
+        apply_top_fits:
+        - {status: "success", applied, attempted, total_scored, min_fit_score,
+           results: [{job_id, title, company, fit_score, apply_status, reminder_set}]}
+        - {status: "error", message}
     """
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
@@ -176,9 +285,19 @@ async def naukri_smart_apply(
     if action == "bulk_saved":
         return await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
 
+    # ── Apply top fits ────────────────────────────────────────────────
+    if action == "apply_top_fits":
+        return await _apply_top_fits(
+            min_fit_score=min_fit_score,
+            limit=limit,
+            set_reminder_days=set_reminder_days,
+            answers=answers,
+            timeout_seconds=timeout_seconds,
+        )
+
     # ── Unknown action ───────────────────────────────────────────────
     if action is not None:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: bulk_saved (or omit for single-job assessment)", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: bulk_saved, apply_top_fits (or omit for single-job assessment)", "error_code": "VALIDATION_ERROR"}
 
     # ── Single-job assessment (default) ──────────────────────────────
     if not job_id:

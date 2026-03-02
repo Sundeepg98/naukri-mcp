@@ -541,6 +541,7 @@ async def naukri_applications(
     company_type: Optional[str] = None,
     delay_ms: int = 500,
     max_concurrent: int = 3,
+    set_reminder_days: Optional[int] = None,
 ) -> dict:
     """Unified application tracking — list, detail, purge, stale detection, follow-up, apply, and batch apply.
 
@@ -551,8 +552,10 @@ async def naukri_applications(
       - "stale": Detect stale applications needing follow-up (use days_threshold/min_stale_score/limit/page)
       - "follow_up": Cross-reference stale apps with inbox & reminders for prioritized action items
         (use days_threshold/min_stale_score/limit)
-      - "apply": Apply to a single job (requires job_id; optional answers for screening questions)
-      - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters)
+      - "apply": Apply to a single job (requires job_id; optional answers for screening questions).
+        If set_reminder_days is provided and apply succeeds, a follow-up reminder is auto-created.
+      - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters).
+        If set_reminder_days is provided, reminders are auto-created for each successful application.
 
     Args:
         action: "list" | "detail" | "purge" | "stale" | "follow_up" | "apply" | "batch_apply"
@@ -580,6 +583,8 @@ async def naukri_applications(
         company_type: (batch_apply) "startup", "mnc", "indian_mnc", "corporate"
         delay_ms: (batch_apply) Delay in ms between submissions (default 500)
         max_concurrent: (batch_apply) Max parallel applications (default 3)
+        set_reminder_days: (apply/batch_apply) If set, auto-create a follow-up reminder N days after
+                           successful application. Ignored if apply fails.
 
     Returns:
         - list: {status, total, count, page, has_more, summary: {total_all_statuses, by_status}, applications: [...]}
@@ -656,7 +661,22 @@ async def naukri_applications(
                     "job_id": job_id,
                 }
         try:
-            return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
+            result = await _apply_single(job_id, answers, tracking_extra={"source": "single"})
+            # Auto-set reminder if requested and apply succeeded
+            if set_reminder_days and result.get("status") == "applied":
+                from naukri_server.tools.reminders import _set_reminder
+                try:
+                    await _set_reminder(
+                        job_id=job_id,
+                        days=set_reminder_days,
+                        note=f"Follow up on application to {result.get('company', 'unknown')}",
+                    )
+                    result["reminder_set"] = True
+                    result["reminder_days"] = set_reminder_days
+                except Exception as e:
+                    result["reminder_set"] = False
+                    result["reminder_error"] = str(e)
+            return result
         except Exception as e:
             return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
@@ -666,13 +686,32 @@ async def naukri_applications(
             return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.apply import _batch_apply
         try:
-            return await _batch_apply(
+            result = await _batch_apply(
                 keywords=keywords, location=location, experience=experience,
                 salary_min=salary_min, salary_max=salary_max, sort_by=sort_by,
                 freshness=freshness, work_mode=work_mode, job_type=job_type,
                 company_type=company_type, limit=limit, answers=answers,
                 delay_ms=delay_ms, max_concurrent=max_concurrent,
             )
+            # Auto-set reminders for successful batch applications
+            if set_reminder_days and result.get("results"):
+                from naukri_server.tools.reminders import _set_reminder
+                reminder_count = 0
+                for r in result["results"]:
+                    if r.get("status") == "applied":
+                        try:
+                            await _set_reminder(
+                                job_id=r.get("job_id", ""),
+                                days=set_reminder_days,
+                                note=f"Follow up on application to {r.get('company', 'unknown')}",
+                            )
+                            reminder_count += 1
+                        except Exception:
+                            pass
+                if reminder_count:
+                    result["reminders_set"] = reminder_count
+                    result["reminder_days"] = set_reminder_days
+            return result
         except Exception as e:
             return {"status": "error", "message": f"Batch apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 

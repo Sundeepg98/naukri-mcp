@@ -27,6 +27,85 @@ def _build_early_access_section(early_access: dict | None, errors: list) -> dict
     return section
 
 
+def _build_recommended_actions(brief: dict) -> list:
+    """Synthesize prioritized action recommendations from brief data."""
+    actions = []
+
+    # High priority: unread recruiter messages
+    inbox = brief.get("unread_messages", {})
+    if inbox.get("count", 0) > 0:
+        actions.append({
+            "priority": "high",
+            "action": f"Respond to {inbox['count']} unread recruiter message(s)",
+            "tool": "naukri_inbox(action='list', unread_only=True)",
+        })
+
+    # High priority: due reminders
+    reminders = brief.get("due_reminders", {})
+    due_count = reminders.get("count", 0)
+    if due_count > 0:
+        actions.append({
+            "priority": "high",
+            "action": f"Follow up on {due_count} due reminder(s)",
+            "tool": "naukri_reminders(action='list')",
+        })
+
+    # Medium priority: stale applications
+    stale = brief.get("stale_applications", {})
+    stale_count = stale.get("count", 0)
+    if stale_count > 0:
+        actions.append({
+            "priority": "medium",
+            "action": f"Review {stale_count} stale application(s)",
+            "tool": "naukri_applications(action='follow_up')",
+        })
+
+    # Medium priority: new early access roles
+    ea = brief.get("early_access_roles", {})
+    new_count = ea.get("newly_posted_count", 0)
+    if new_count > 0:
+        actions.append({
+            "priority": "medium",
+            "action": f"Check {new_count} new early access role(s)",
+            "tool": "naukri_early_access(action='list')",
+        })
+
+    # Medium priority: pending assessments
+    assessments = brief.get("assessments", {})
+    pending = assessments.get("pending", 0)
+    if pending > 0:
+        actions.append({
+            "priority": "medium",
+            "action": f"Complete {pending} pending assessment(s)",
+            "tool": "naukri_assessments(action='list')",
+        })
+
+    # Low priority: profile completeness
+    profile = brief.get("profile_completeness") or {}
+    completeness = profile.get("completeness_percent") or profile.get("completeness", 100)
+    if isinstance(completeness, (int, float)) and completeness < 80:
+        actions.append({
+            "priority": "low",
+            "action": f"Improve profile completeness ({completeness}%)",
+            "tool": "naukri_profile(action='audit')",
+        })
+
+    # Low priority: no recent applications (only when data is present)
+    apps = brief.get("todays_applications")
+    if apps is not None and apps.get("count", 0) == 0:
+        actions.append({
+            "priority": "low",
+            "action": "Apply to some jobs today — no applications yet",
+            "tool": "naukri_smart_apply(action='apply_top_fits')",
+        })
+
+    # Sort by priority
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    actions.sort(key=lambda x: priority_order.get(x["priority"], 3))
+
+    return actions
+
+
 @mcp.tool()
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
@@ -41,7 +120,7 @@ async def naukri_daily_brief() -> dict:
         - {status: "success", unread_messages, notifications, recommendations,
            recruiter_activity, activity_level, todays_applications, dashboard,
            due_reminders, stale_applications, job_alerts, profile_completeness,
-           saved_jobs, search_impressions, assessments, errors}
+           saved_jobs, search_impressions, assessments, recommended_actions, errors}
     """
     from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications
@@ -167,6 +246,8 @@ async def naukri_daily_brief() -> dict:
             "pending": pending_count,
         },
     }
+
+    brief["recommended_actions"] = _build_recommended_actions(brief)
 
     if errors:
         brief["status"] = "partial_success"
