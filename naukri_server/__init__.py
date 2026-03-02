@@ -18,7 +18,7 @@ Consolidated tools (action-parameter pattern):
   - naukri_auth(action="login|verify_otp|status")
   - naukri_profile(action="get|update|audit|boost")
   - naukri_inbox(action="list|read|mark_interested|accept_nvite")
-  - naukri_performance(metric="impressions|recruiter_activity|activity_level|search_impressions")
+  - naukri_performance(metric="impressions|recruiter_activity|activity_level")
   - naukri_mock_interview(action="topics|history|start|answer")
   - naukri_company_intel(company, intel_type="salary|reviews|interviews")
   - naukri_company(action="search|jobs|slug")
