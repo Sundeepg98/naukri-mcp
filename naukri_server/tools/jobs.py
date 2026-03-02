@@ -104,20 +104,33 @@ def _parse_company_data(job: dict, details_data: dict) -> dict:
 
 
 def _parse_match_score(score_data: dict) -> dict:
-    """Build match_details from job scoring data."""
+    """Build normalized match_score dict from job scoring data (browser or REST)."""
     if not score_data:
         return {"match_score": None, "match_details": None}
 
-    match_score = score_data.get("Keyskills")
     skill_mismatch_str = score_data.get("skillMismatch") or ""
+    # Normalize to consistent dict format (same shape as _fetch_match_score REST path)
+    match_score = {
+        "education": (score_data.get("education", {}).get("userMatching", False)
+                      if isinstance(score_data.get("education"), dict)
+                      else score_data.get("education")),
+        "functional_area": (score_data.get("functionalArea", {}).get("userMatching", False)
+                            if isinstance(score_data.get("functionalArea"), dict)
+                            else score_data.get("functionalArea")),
+        "key_skills": score_data.get("Keyskills"),
+        "work_experience": (score_data.get("Experience", {}).get("userMatching", False)
+                            if isinstance(score_data.get("Experience"), dict)
+                            else score_data.get("workExperience")),
+        "industry": (score_data.get("Industry", {}).get("userMatching", False)
+                     if isinstance(score_data.get("Industry"), dict)
+                     else score_data.get("industry")),
+        "location": (score_data.get("Location", {}).get("userMatching", False)
+                     if isinstance(score_data.get("Location"), dict)
+                     else score_data.get("location")),
+        "early_applicant": score_data.get("earlyApplicant", False),
+    }
     match_details = {
         "skill_mismatch": [s.strip() for s in skill_mismatch_str.split(",") if s.strip()],
-        "early_applicant": score_data.get("earlyApplicant", False),
-        "dimensions": {
-            dim: (score_data.get(dim, {}).get("userMatching", False)
-                  if isinstance(score_data.get(dim), dict) else False)
-            for dim in ("education", "Experience", "Location", "Industry", "functionalArea")
-        },
     }
     return {"match_score": match_score, "match_details": match_details}
 

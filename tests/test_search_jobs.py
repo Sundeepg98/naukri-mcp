@@ -324,9 +324,10 @@ class TestJobDetailParsers:
         from naukri_server.tools.jobs import _parse_match_score
         score = {"Keyskills": 85, "skillMismatch": "Docker, K8s", "earlyApplicant": True, "education": {"userMatching": True}}
         result = _parse_match_score(score)
-        assert result["match_score"] == 85
+        assert result["match_score"]["key_skills"] == 85
+        assert result["match_score"]["education"] is True
+        assert result["match_score"]["early_applicant"] is True
         assert "Docker" in result["match_details"]["skill_mismatch"]
-        assert result["match_details"]["early_applicant"] is True
 
     def test_parse_match_score_none(self):
         from naukri_server.tools.jobs import _parse_match_score
