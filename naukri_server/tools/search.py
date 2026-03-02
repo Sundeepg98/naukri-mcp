@@ -27,9 +27,10 @@ async def naukri_search_jobs(
     limit: int = 20,
     page: int = 1,
 ) -> dict:
-    """Search for jobs on Naukri.com by keywords, location, and experience.
+    """Search for jobs on Naukri.com by keywords, location, and filters.
 
-    Search by keywords/location. For personalized suggestions based on your profile,
+    This tool searches by keywords and filters — it does NOT use your Naukri profile.
+    For AI-recommended jobs based on your profile (no keywords needed),
     use naukri_get_recommendations instead.
 
     Args:
@@ -202,8 +203,9 @@ async def naukri_search_jobs(
 async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     """Get personalized job recommendations from Naukri's algorithm based on your profile.
 
-    AI-recommended jobs based on your profile, skills, and activity.
-    For keyword-based search, use naukri_search_jobs instead.
+    Returns jobs matched to YOUR profile, skills, and activity — no keywords or
+    filters needed (the algorithm decides). For keyword/filter-based search,
+    use naukri_search_jobs instead.
 
     Args:
         limit: Max jobs to return (default 20, max 50)

@@ -1,41 +1,64 @@
 """Profile tools — get, update, audit, boost, and dashboard."""
 
 import asyncio
+import time
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, logger
+from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, logger
 from naukri_server.validation import validate_profile
 
-import time as _time
 
-# --- Profile TTL cache (30s) for composite tools ---
-_profile_cache: dict = {}
-_PROFILE_TTL = 30  # seconds
-_profile_lock = asyncio.Lock()
+# ---------------------------------------------------------------------------
+# Unified TTL cache helper
+# ---------------------------------------------------------------------------
+
+class _TtlCache:
+    """Simple async TTL cache for a single value."""
+    def __init__(self, ttl: float):
+        self._ttl = ttl
+        self._data = None
+        self._ts = 0.0
+        self._lock = asyncio.Lock()
+
+    async def get(self, fetch_fn):
+        """Return cached data or call fetch_fn() if stale."""
+        now = time.time()
+        if self._data is not None and (now - self._ts) < self._ttl:
+            return self._data
+        async with self._lock:
+            now = time.time()
+            if self._data is not None and (now - self._ts) < self._ttl:
+                return self._data
+            self._data = await fetch_fn()
+            self._ts = time.time()
+            return self._data
+
+    def invalidate(self):
+        """Clear cached data."""
+        self._data = None
+        self._ts = 0.0
 
 
-async def get_cached_profile(ttl: int = _PROFILE_TTL) -> dict:
+# --- Profile & dashboard TTL caches for composite tools ---
+_profile_ttl_cache = _TtlCache(PROFILE_CACHE_TTL)
+_dashboard_ttl_cache = _TtlCache(PROFILE_CACHE_TTL)
+
+
+async def _fetch_raw_profile() -> dict:
+    """Fetch profile via API (used by _TtlCache)."""
+    return await _get_profile()
+
+
+async def get_cached_profile() -> dict:
     """Return cached profile if fresh, otherwise fetch and cache.
 
     Used by composite tools (smart_apply, auto_hunt, compare, skill_gap,
     resume_tailor, daily_brief) to avoid redundant profile API calls.
     """
-    now = _time.monotonic()
-    if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
-        return _profile_cache["data"]
-    async with _profile_lock:
-        # Double-check after acquiring lock (another caller may have fetched)
-        now = _time.monotonic()
-        if _profile_cache.get("data") and (now - _profile_cache.get("ts", 0)) < ttl:
-            return _profile_cache["data"]
-        result = await _get_profile()
-        if isinstance(result, dict) and result.get("status") != "error":
-            _profile_cache["data"] = result
-            _profile_cache["ts"] = now
-        return result
+    return await _profile_ttl_cache.get(_fetch_raw_profile)
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +279,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                     try:
                         endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
                         await api_post(endpoint, {"resumeHeadline": headline})
-                        _profile_cache.clear()
+                        _profile_ttl_cache.invalidate()
                         return {
                             "status": "refreshed",
                             "method": f"rest_api_{version}",
@@ -333,7 +356,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
             finally:
                 page.remove_listener("response", on_response)
 
-            _profile_cache.clear()
+            _profile_ttl_cache.invalidate()
             return {
                 "status": "refreshed",
                 "method": f"browser_{edit_clicked}",
@@ -855,7 +878,7 @@ async def _update_profile(
             finally:
                 page.remove_listener("response", on_response)
 
-            _profile_cache.clear()
+            _profile_ttl_cache.invalidate()
             return {
                 "status": "updated",
                 "method": "browser_ui",
@@ -1102,31 +1125,14 @@ async def naukri_profile(
         return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost, dashboard", "error_code": "VALIDATION_ERROR"}
 
 
-# ---------------------------------------------------------------------------
-# Dashboard TTL cache (30s) for composite tools
-# ---------------------------------------------------------------------------
-
-_dashboard_cache: dict | None = None
-_dashboard_cache_time: float = 0
-_dashboard_lock = asyncio.Lock()
-_DASHBOARD_TTL = 30  # seconds
+async def _fetch_raw_dashboard() -> dict:
+    """Fetch dashboard via API (used by _TtlCache)."""
+    return await _get_dashboard()
 
 
-async def get_cached_dashboard(ttl: int = _DASHBOARD_TTL) -> dict:
-    """Dashboard data with TTL cache (30s default)."""
-    global _dashboard_cache, _dashboard_cache_time
-    now = _time.monotonic()
-    if _dashboard_cache and (now - _dashboard_cache_time) < ttl:
-        return _dashboard_cache
-    async with _dashboard_lock:
-        now = _time.monotonic()
-        if _dashboard_cache and (now - _dashboard_cache_time) < ttl:
-            return _dashboard_cache
-        result = await _get_dashboard()
-        if result.get("status") == "success":
-            _dashboard_cache = result
-            _dashboard_cache_time = now
-        return result
+async def get_cached_dashboard() -> dict:
+    """Dashboard data with TTL cache."""
+    return await _dashboard_ttl_cache.get(_fetch_raw_dashboard)
 
 
 # ---------------------------------------------------------------------------

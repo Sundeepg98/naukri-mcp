@@ -687,8 +687,8 @@ async def naukri_applications(
                                 note=f"Follow up on application to {r.get('company', 'unknown')}",
                             )
                             reminder_count += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Failed to set reminder for job %s: %s", r.get("job_id", ""), e)
                 if reminder_count:
                     result["reminders_set"] = reminder_count
                     result["reminder_days"] = set_reminder_days

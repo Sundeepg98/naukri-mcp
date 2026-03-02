@@ -89,7 +89,7 @@ async def _export_data(
         records = result.get("jobs", [])
 
     if not records:
-        return {"status": "error", "message": f"No {data_type} records to export.", "error_code": "API_ERROR"}
+        return {"status": "error", "message": f"No {data_type} records to export.", "error_code": "NOT_FOUND"}
 
     # Determine output path
     _EXPORTS_DIR.mkdir(exist_ok=True)
@@ -110,7 +110,7 @@ async def _export_data(
         else:  # csv
             flat = _flatten_for_csv(records)
             if not flat:
-                return {"status": "error", "message": "No data to write after flattening.", "error_code": "API_ERROR"}
+                return {"status": "error", "message": "No data to write after flattening.", "error_code": "NOT_FOUND"}
             # Collect all keys across all rows for header
             all_keys = []
             seen = set()

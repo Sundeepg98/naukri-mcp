@@ -453,34 +453,34 @@ class TestInsights:
 
 
 # =====================================================================
-# 10. naukri_company_follow
+# 10. naukri_company — follow actions (consolidated from naukri_company_follow)
 # =====================================================================
 
 class TestCompanyFollow:
-    """Tests for naukri_server.tools.companies.naukri_company_follow."""
+    """Tests for follow actions in naukri_server.tools.companies.naukri_company."""
 
     @pytest.mark.asyncio
     async def test_invalid_action(self):
-        from naukri_server.tools.companies import naukri_company_follow
-        result = await naukri_company_follow(action="invalid", group_ids=["123"])
+        from naukri_server.tools.companies import naukri_company
+        result = await naukri_company(action="invalid")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "Unknown action" in result["message"]
 
     @pytest.mark.asyncio
     async def test_empty_group_ids(self):
-        from naukri_server.tools.companies import naukri_company_follow
-        result = await naukri_company_follow(action="status", group_ids=[])
+        from naukri_server.tools.companies import naukri_company
+        result = await naukri_company(action="follow_status")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "group_ids" in result["message"]
+        assert "group_id" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_status_routes_to_helper(self):
-        from naukri_server.tools.companies import naukri_company_follow
+    async def test_follow_status_routes_to_helper(self):
+        from naukri_server.tools.companies import naukri_company
         with patch("naukri_server.tools.companies._get_follow_status", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "followed": ["123"]}
-            result = await naukri_company_follow(action="status", group_ids=["123"])
+            result = await naukri_company(action="follow_status", group_id="123")
             mock_helper.assert_awaited_once_with(["123"])
             assert result["status"] == "success"
 
@@ -736,11 +736,11 @@ class TestResumeBuilder:
 
 
 # =====================================================================
-# 14. naukri_assessments
+# 14. naukri_assessments (no longer an MCP tool — backward-compat alias)
 # =====================================================================
 
 class TestAssessments:
-    """Tests for naukri_server.tools.assessments.naukri_assessments."""
+    """Tests for naukri_server.tools.assessments._assessments_dispatch (via naukri_assessments alias)."""
 
     @pytest.mark.asyncio
     async def test_invalid_action(self):

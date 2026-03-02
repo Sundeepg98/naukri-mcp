@@ -168,7 +168,8 @@ async def naukri_job_alerts(
         # Look up alert name for logging
         try:
             alerts_result = await _get_alerts_list()
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to fetch alerts list for update lookup: %s", e)
             alerts_result = {"status": "error"}
 
         alert_name = str(alert_id)  # fallback
@@ -292,7 +293,8 @@ async def naukri_job_alerts(
         # Get all alerts to find the target
         try:
             alerts_result = await _get_alerts_list()
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to fetch alerts list for delete lookup: %s", e)
             alerts_result = {"status": "error"}
 
         if alerts_result.get("status") != "success":

@@ -1,4 +1,4 @@
-"""Debug tool subpackage — 3 tools: browser, API, and discovery debugging."""
+"""Debug tool subpackage — 1 merged tool with prefixed actions for browser, API, and discovery debugging."""
 
 import asyncio
 from typing import Optional
@@ -30,125 +30,89 @@ from naukri_server.tools.debug.discovery_actions import (
 )
 
 
-# ── Browser debugging ────────────────────────────────────────────────
+# ── Merged handler dict ─────────────────────────────────────────────
 
-_BROWSER_HANDLERS = {
-    "snapshot": do_snapshot,
-    "screenshot": do_screenshot,
-    "scan": do_scan,
-    "deepscan": do_deepscan,
-    "explore": do_explore,
-    "notif_explore": do_notif_explore,
+_HANDLERS = {
+    # Browser actions (Signature A: page, current_url, title)
+    "browser_snapshot":      do_snapshot,
+    "browser_screenshot":    do_screenshot,
+    "browser_scan":          do_scan,
+    "browser_deepscan":      do_deepscan,
+    "browser_explore":       do_explore,
+    "browser_notif_explore": do_notif_explore,
+    # API actions (Signature B: page, url)
+    "api_fetch":             do_fetch_api,
+    "api_post":              do_post_api,
+    "api_put":               do_put_api,
+    "api_delete":            do_delete_api,
+    "api_fetch_widget":      do_fetch_widget,
+    "api_settings":          do_settings_api,
+    # Discovery actions (Signature B: page, url)
+    "discover_pages":        do_discover,
+    "discover_statuses":     do_fetch_all_statuses,
+    "discover_intercept":    do_intercept_requests,
+    "discover_click":        do_click_discover,
 }
+
+_BROWSER_ACTIONS = {k for k in _HANDLERS if k.startswith("browser_")}
 
 
 @mcp.tool()
-async def naukri_debug_browser(action: str = "snapshot", url: Optional[str] = None) -> dict:
-    """Browser-based debugging — inspect page state, take screenshots, scan for elements.
+async def naukri_debug(action: str = "browser_snapshot", url: str = "") -> dict:
+    """Debug toolkit — inspect browser state, test APIs, discover endpoints.
 
-    Actions:
-        - snapshot: Get page title, URL, and visible text content
-        - screenshot: Take a screenshot (saves to file, returns path)
-        - scan: Scan for interactive elements (buttons, inputs, links)
-        - deepscan: Deep scan including hidden elements and iframes
-        - explore: Explore page structure and JavaScript data
-        - notif_explore: Explore notification center elements
+    BROWSER actions (inspect page DOM, take screenshots):
+        - browser_snapshot: Get page title, URL, and visible text content
+        - browser_screenshot: Take a screenshot (saves to file, returns path)
+        - browser_scan: Scan for interactive elements (buttons, inputs, links)
+        - browser_deepscan: Deep scan including hidden elements and iframes
+        - browser_explore: Explore page structure and JavaScript data
+        - browser_notif_explore: Explore notification center elements
+
+    API actions (test Naukri REST endpoints directly):
+        - api_fetch: GET request to a Naukri API path
+        - api_post: POST to API. Format url as "PATH|JSON_BODY"
+        - api_put: PUT to API. Format url as "PATH|JSON_BODY"
+        - api_delete: DELETE request to API path
+        - api_fetch_widget: Fetch using widget headers (appid:109)
+        - api_settings: Fetch all account settings from Naukri
+
+    DISCOVERY actions (intercept network traffic to find endpoints):
+        - discover_pages: Navigate to a page and capture all JSON API responses
+        - discover_statuses: Navigate + scroll, capture ALL HTTP statuses
+        - discover_intercept: Capture outgoing POST request bodies
+        - discover_click: Click element and capture resulting API calls
 
     Args:
-        action: One of "snapshot", "screenshot", "scan", "deepscan", "explore", "notif_explore"
-        url: Optional URL to navigate to before action (uses current page if omitted)
+        action: See groups above (default "browser_snapshot")
+        url: URL or API path. Context-dependent:
+             - Browser actions: page URL to navigate to (uses current page if omitted)
+             - API actions: API path (e.g., "/jobapi/v3/search"). For post/put: "PATH|{json}"
+             - discover_click: "PAGE_URL|CSS_SELECTOR"
 
     Returns:
         - {status: "ok", ...action-specific data}
-        - {status: "error", message}
+        - {status: "error", message, error_code}
     """
-    handler = _BROWSER_HANDLERS.get(action)
+    handler = _HANDLERS.get(action)
     if handler is None:
-        valid = ", ".join(sorted(_BROWSER_HANDLERS))
-        return {"status": "error", "message": f"Unknown browser action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
+        valid = ", ".join(sorted(_HANDLERS))
+        return {"status": "error", "message": f"Unknown action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
 
     async with browser.page_pool.acquire() as page:
-        if url:
-            await page_goto(page, url)
-            await asyncio.sleep(3)
-        current_url = page.url
-        title = await page.title()
-        return await handler(page, current_url, title)
+        if action in _BROWSER_ACTIONS:
+            if url:
+                await page_goto(page, url)
+                await asyncio.sleep(3)
+            current_url = page.url
+            title = await page.title()
+            return await handler(page, current_url, title)
+        else:
+            return await handler(page, url)
 
 
-# ── API debugging ────────────────────────────────────────────────────
+# ── Backward-compat aliases ─────────────────────────────────────────
 
-_API_HANDLERS = {
-    "fetch_api": do_fetch_api,
-    "post_api": do_post_api,
-    "put_api": do_put_api,
-    "delete_api": do_delete_api,
-    "fetch_widget": do_fetch_widget,
-    "settings_api": do_settings_api,
-}
-
-
-@mcp.tool()
-async def naukri_debug_api(action: str = "fetch_api", url: str = "") -> dict:
-    """API debugging — test Naukri REST endpoints directly.
-
-    Actions:
-        - fetch_api: GET request to a Naukri API path (e.g., "/jobapi/v3/search")
-        - post_api: POST to API. Format url as "PATH|JSON_BODY"
-        - put_api: PUT to API. Format url as "PATH|JSON_BODY"
-        - delete_api: DELETE request to API path
-        - fetch_widget: Fetch a Naukri widget/component endpoint
-        - settings_api: Fetch all account settings from Naukri
-
-    Args:
-        action: One of "fetch_api", "post_api", "put_api", "delete_api", "fetch_widget", "settings_api"
-        url: API path for fetch/post/put/delete (e.g., "/jobapi/v3/job/123"). For post/put, use "PATH|{json_body}"
-
-    Returns:
-        - {status: "ok", ...response data}
-        - {status: "error", message}
-    """
-    handler = _API_HANDLERS.get(action)
-    if handler is None:
-        valid = ", ".join(sorted(_API_HANDLERS))
-        return {"status": "error", "message": f"Unknown API action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
-
-    async with browser.page_pool.acquire() as page:
-        return await handler(page, url)
-
-
-# ── Discovery debugging ─────────────────────────────────────────────
-
-_DISCOVERY_HANDLERS = {
-    "discover": do_discover,
-    "fetch_all_statuses": do_fetch_all_statuses,
-    "intercept_requests": do_intercept_requests,
-    "click_discover": do_click_discover,
-}
-
-
-@mcp.tool()
-async def naukri_debug_discovery(action: str = "discover", url: Optional[str] = None) -> dict:
-    """API discovery — find undocumented Naukri endpoints by intercepting network traffic.
-
-    Actions:
-        - discover: Navigate to a page and capture all JSON API responses
-        - fetch_all_statuses: Navigate + scroll to trigger lazy-loaded API calls, capture all
-        - intercept_requests: Capture outgoing POST request bodies (see what the page sends)
-        - click_discover: Click an element and capture resulting API calls. url = "PAGE_URL|CSS_SELECTOR"
-
-    Args:
-        action: One of "discover", "fetch_all_statuses", "intercept_requests", "click_discover"
-        url: Page URL to navigate to. For click_discover: "PAGE_URL|CSS_SELECTOR"
-
-    Returns:
-        - {status: "ok", captured_responses: [...]}
-        - {status: "error", message}
-    """
-    handler = _DISCOVERY_HANDLERS.get(action)
-    if handler is None:
-        valid = ", ".join(sorted(_DISCOVERY_HANDLERS))
-        return {"status": "error", "message": f"Unknown discovery action: {action!r}. Valid: {valid}", "error_code": "BROWSER_ERROR"}
-
-    async with browser.page_pool.acquire() as page:
-        return await handler(page, url)
+naukri_debug_browser = naukri_debug
+naukri_debug_api = naukri_debug
+naukri_debug_discovery = naukri_debug

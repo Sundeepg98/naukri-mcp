@@ -32,7 +32,8 @@ def _load_sync_state() -> dict:
     if _SYNC_STATE_FILE.exists():
         try:
             return json.loads(_SYNC_STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.debug("Corrupted sync state file, resetting: %s", e)
             return {}
     return {}
 
@@ -238,8 +239,8 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                 try:
                     body = await response.json()
                     captured_responses.append({"url": response.url, "body": body})
-                except Exception:
-                    logger.warning("Failed to parse response from %s: %s", response.url, "JSON parse error")
+                except Exception as e:
+                    logger.debug("Failed to parse JSON response from %s: %s", response.url, e)
                 response_event.set()
 
         page.on("response", on_response)

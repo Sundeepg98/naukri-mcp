@@ -27,7 +27,8 @@ async def _extract_next_data(page) -> dict | None:
     """Extract __NEXT_DATA__ JSON from the given page."""
     try:
         await page.wait_for_selector('script#__NEXT_DATA__', timeout=10000)
-    except Exception:
+    except Exception as e:
+        logger.debug("__NEXT_DATA__ selector not found, using fallback: %s", e)
         await asyncio.sleep(2)  # Fallback if selector not found
     return await page.evaluate("""
         () => {

@@ -5,7 +5,7 @@ import os
 import time
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.api import api_get, api_metrics, api_post
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
@@ -224,6 +224,7 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
         "checks": checks,
         "pool_stats": pool_stats,
     }
+    result["api_metrics"] = api_metrics.get_stats()
     if warnings:
         result["warnings"] = warnings
 

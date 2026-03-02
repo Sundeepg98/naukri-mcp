@@ -74,6 +74,38 @@ SKILL_ALIASES: dict[str, set[str]] = {
     "pytest": {"py.test"},
     "junit": {"junit5", "junit4"},
     "k3s": {"k3"},
+    # Mobile
+    "kotlin": {"kt"},
+    "swift": {"swiftui"},
+    "flutter": {"dart"},
+    # ML/AI
+    "tensorflow": {"keras"},
+    "pytorch": {"torch"},
+    "scikit-learn": {"sklearn"},
+    # Testing
+    "selenium": {"webdriver"},
+    "cypress": {"cypress.io"},
+    "playwright": {"pw"},
+    # Data
+    "airflow": {"apache airflow"},
+    "dbt": {"data build tool"},
+    # Frontend
+    "svelte": {"sveltekit"},
+    "nuxt": {"nuxtjs", "nuxt.js"},
+    "remix": {"remix.run"},
+    # BaaS/Cloud
+    "supabase": {"supa"},
+    "firebase": {"firestore"},
+    # Observability
+    "datadog": {"dd"},
+    "grafana": {"grafana cloud"},
+    "prometheus": {"prom"},
+    "splunk": {"splunk cloud"},
+    # AWS Messaging
+    "sqs": {"amazon sqs", "aws sqs"},
+    "sns": {"amazon sns", "aws sns"},
+    # Design
+    "figma": {"figma design"},
 }
 
 # Reverse lookup built once at import time

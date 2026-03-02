@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
-from naukri_server.config import ACTIVITY_LEVEL_API, NAUKRI_BASE
+from naukri_server.config import logger, ACTIVITY_LEVEL_API, NAUKRI_BASE
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,8 @@ async def _login(page, method: str, email: Optional[str], password: Optional[str
                     await el.click()
                     google_clicked = True
                     break
-            except Exception:
+            except Exception as e:
+                logger.debug("Google login button selector '%s' failed: %s", selector, e)
                 continue
 
         if not google_clicked:

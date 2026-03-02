@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.config import logger
+from naukri_server.config import DAILY_APPLY_QUOTA, logger
 from naukri_server.scoring import compute_fit_score, parse_skills
 
 
@@ -350,7 +350,7 @@ async def naukri_smart_apply(
         result["apply_result"] = apply_result
         # Quota warning
         daily = apply_result.get("daily_applied")
-        if daily is not None and daily >= 45:
-            result["quota_warning"] = f"Daily quota: {daily}/50 used. {50 - daily} remaining."
+        if daily is not None and daily >= DAILY_APPLY_QUOTA - 5:
+            result["quota_warning"] = f"Daily quota: {daily}/{DAILY_APPLY_QUOTA} used. {DAILY_APPLY_QUOTA - daily} remaining."
 
     return result

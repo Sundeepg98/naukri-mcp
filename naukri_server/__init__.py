@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server — Tier 17 (30 tools)
+"""Naukri.com Job Automation MCP Server — Tier 18 (26 tools)
 
 Quick Start for AI consumers:
   1. naukri_auth(action="login|verify_otp|status") → authenticate first
@@ -13,12 +13,13 @@ Quick Start for AI consumers:
   10. naukri_sync(entity="applications|saved_jobs|export") → sync + export
   11. naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark")
   12. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages
-  13. naukri_company(action="search|jobs|slug|research") / naukri_company_intel → company intel
+  13. naukri_company(action="search|jobs|slug|research|follow_status|follow|unfollow") / naukri_company_intel → company intel
   14. naukri_profile(action="dashboard") → profile dashboard stats
   15. naukri_settings(action="subscription") → subscription status
   16. naukri_resume_builder(action="templates|status|tailor") → resume building + tailoring
+  17. naukri_debug(action="browser_*|api_*|discover_*") → debugging tools
 
-Consolidated tools (action-parameter pattern — 21 dispatchers):
+Consolidated tools (action-parameter pattern — 19 dispatchers):
   - naukri_auth(action="login|verify_otp|status")
   - naukri_profile(action="get|update|audit|boost|dashboard")
   - naukri_inbox(action="list|read|mark_interested|accept_nvite")
@@ -26,21 +27,20 @@ Consolidated tools (action-parameter pattern — 21 dispatchers):
   - naukri_mock_interview(action="topics|history|start|answer|prep")
   - naukri_smart_apply(action="bulk_saved|apply_top_fits") or naukri_smart_apply(job_id=...)
   - naukri_company_intel(company, intel_type="salary|reviews|interviews")
-  - naukri_company(action="search|jobs|slug|research")
+  - naukri_company(action="search|jobs|slug|research|follow_status|follow|unfollow")
   - naukri_applications(action="list|detail|purge|stale|follow_up|apply|batch_apply")
   - naukri_saved_jobs(action="list|save|unsave")
   - naukri_early_access(action="list|share")
   - naukri_profile_media(media_type="resume|photo", action="info|upload|download|delete")
   - naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark")
-  - naukri_company_follow(action="status|follow|unfollow")
   - naukri_reminders(action="list|set")
   - naukri_sync(entity="applications|saved_jobs|export")
   - naukri_resume_builder(action="templates|status|tailor")
-  - naukri_assessments(action="list|completeness")
   - naukri_notifications(action="list|count|mark_read|mark_all_read")
   - naukri_settings(action="get|update|blocked_companies|check_email|visibility|notification_prefs|subscription")
   - naukri_job_alerts(action="list|detail|create|update|delete")
   - naukri_jobs(action="get|report_fraud|similar|compare")
+  - naukri_debug(action="browser_*|api_*|discover_*")
 
 Tier 17 changes (from 38→30 tools):
   - Consolidated: naukri_get_dashboard→naukri_profile(action="dashboard"),
@@ -52,13 +52,20 @@ Tier 17 changes (from 38→30 tools):
   - Internal callers updated to use private helpers (_get_dashboard, _get_subscription_status)
   - Backward-compat aliases preserved for all renamed functions
 
-For debugging: naukri_health_check, naukri_debug_browser/api/discovery
+Tier 18 changes (from 30→26 tools):
+  - Consolidated: naukri_company_follow→naukri_company(action="follow_status|follow|unfollow"),
+    naukri_debug_browser+naukri_debug_api+naukri_debug_discovery→naukri_debug(action="browser_*|api_*|discover_*"),
+    naukri_assessments removed as MCP tool (still callable via backward-compat alias)
+  - Backward-compat aliases preserved for all renamed functions
+
+For debugging: naukri_health_check, naukri_debug
 """
 
 from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import FastMCP
 
+from naukri_server.api import close_api_session
 from naukri_server.browser import browser
 
 
@@ -70,6 +77,7 @@ async def lifespan(server):
     finally:
         if browser.available:
             await browser.stop()
+        await close_api_session()
 
 
 mcp = FastMCP("naukri", lifespan=lifespan)

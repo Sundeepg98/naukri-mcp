@@ -1,7 +1,9 @@
 """Daily brief — morning dashboard combining notifications, inbox, recommendations, activity, and dashboard stats."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 from naukri_server import mcp
 from naukri_server.config import logger
@@ -134,7 +136,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.alerts import _get_alerts_list
     from naukri_server.tools.assessments import _get_profile_completeness, _list_assessments
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     errors = []
 
     results = await asyncio.gather(

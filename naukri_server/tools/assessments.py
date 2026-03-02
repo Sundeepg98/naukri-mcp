@@ -1,6 +1,5 @@
 """Assessment tools — skill test scores and profile completeness metrics."""
 
-from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.config import DASHBOARD_API
 
@@ -78,12 +77,11 @@ async def _get_profile_completeness() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
+# Internal dispatcher (was MCP tool — removed in Tier 18 consolidation)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def naukri_assessments(action: str = "list") -> dict:
-    """Unified assessment & profile completeness tool — skill tests and profile metrics.
+async def _assessments_dispatch(action: str = "list") -> dict:
+    """Internal dispatcher — no longer an MCP tool.
 
     Actions:
       - "list": Get your Naukri skill assessment results — DoSelect test scores for
@@ -120,3 +118,7 @@ async def naukri_assessments(action: str = "list") -> dict:
     # ── unknown action ────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, completeness", "error_code": "VALIDATION_ERROR"}
+
+
+# Backward-compat alias
+naukri_assessments = _assessments_dispatch

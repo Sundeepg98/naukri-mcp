@@ -325,6 +325,7 @@ async def naukri_company(
     action: str = "search",
     keyword: Optional[str] = None,
     group_id: Optional[str] = None,
+    group_ids: Optional[list[str]] = None,
     page: int = 1,
     limit: int = 20,
     # research params
@@ -334,18 +335,22 @@ async def naukri_company(
     jobs_limit: int = 5,
     timeout_seconds: int = 120,
 ) -> dict:
-    """Unified company discovery — search companies, browse jobs, get AmbitionBox slug, or research a company.
+    """Unified company discovery — search companies, browse jobs, get AmbitionBox slug, follow/unfollow, or research a company.
 
     Actions:
       - "search": Search companies by name/industry (requires keyword)
       - "jobs": Get job listings for a specific company (requires group_id)
       - "slug": Convert group_id to AmbitionBox company slug (requires group_id)
       - "research": Comprehensive company research — jobs, salary, reviews, interviews (requires keyword)
+      - "follow_status": Check follow status for companies (requires group_id or group_ids)
+      - "follow": Follow companies (requires group_id or group_ids)
+      - "unfollow": Unfollow companies (requires group_id or group_ids)
 
     Args:
-        action: "search" | "jobs" | "slug" | "research"
+        action: "search" | "jobs" | "slug" | "research" | "follow_status" | "follow" | "unfollow"
         keyword: Company name or industry keyword (required for search, research)
-        group_id: Company group ID from search results (required for jobs, slug)
+        group_id: Company group ID from search results (required for jobs, slug; also works for follow actions)
+        group_ids: List of company group IDs for batch follow actions
         page: Page number for pagination (default 1, used by search/jobs)
         limit: Max results per page (default 20, used by search/jobs)
         include_jobs: Include open job listings (default True, research only)
@@ -359,6 +364,8 @@ async def naukri_company(
         - jobs: {status, group_id, page, total, count, jobs: [...]}
         - slug: {status, group_id, company_slug, company_name}
         - research: {status, company_name, slug, jobs, salary, reviews, interviews, errors?}
+        - follow_status: {status, followed: [...ids...], not_followed: [...ids...]}
+        - follow/unfollow: {status, action, followed/unfollowed: [...ids...], errors?}
         - {status: "error", message} on failure
     """
     # ── search ─────────────────────────────────────────────────────────
@@ -408,17 +415,37 @@ async def naukri_company(
         except Exception as e:
             return {"status": "error", "message": f"Research failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── follow_status / follow / unfollow ──────────────────────────────
+    elif action in ("follow_status", "follow", "unfollow"):
+        ids = group_ids or ([group_id] if group_id else [])
+        if not ids:
+            return {"status": "error", "message": "group_id or group_ids is required for follow actions.", "error_code": "VALIDATION_ERROR"}
+
+        if action == "follow_status":
+            try:
+                return await _get_follow_status(ids)
+            except NaukriAPIError as e:
+                return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+            except Exception as e:
+                return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        else:
+            try:
+                return await _follow_or_unfollow(ids, action)
+            except NaukriAPIError as e:
+                return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+            except Exception as e:
+                return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, research", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, research, follow_status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool — company follow management
+# Legacy follow tool — kept as private helper, no longer registered as MCP tool
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def naukri_company_follow(
+async def _company_follow(
     action: str,
     group_ids: list[str] = [],
 ) -> dict:
@@ -465,3 +492,7 @@ async def naukri_company_follow(
     # ── unknown action ────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
+
+
+# Backward-compat alias (no longer an MCP tool)
+naukri_company_follow = _company_follow

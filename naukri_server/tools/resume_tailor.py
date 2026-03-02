@@ -198,7 +198,8 @@ async def _tailor_resume(
         keyword_gaps = [k for k in keyword_gaps if len(k) >= 3][:20]
 
         # Also check for technical phrases missing
-        phrase_gaps = sorted(list(jd_phrases - set(profile_text.split())))
+        profile_lower = profile_text.lower()
+        phrase_gaps = sorted([p for p in jd_phrases if p.lower() not in profile_lower])
 
         return {
             "status": "success",

@@ -134,3 +134,16 @@ AMBITIONBOX_BASE = "https://www.ambitionbox.com"
 
 # Conversion constants
 LAKHS_MULTIPLIER = 100_000  # 1 lakh = 100,000 — used for CTC conversion across alerts, jobs, parsing, insights
+
+# Operational limits
+DAILY_APPLY_QUOTA = 50  # Naukri's daily application limit
+BATCH_APPLY_DEFAULT_DELAY_MS = 500  # Delay between batch apply requests
+MAX_BULK_JOBS = 50  # Max jobs to score in bulk operations
+
+# Cache TTLs (seconds)
+PROFILE_CACHE_TTL = 30  # Profile + dashboard cache TTL
+STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale
+
+# AmbitionBox timeouts
+AMBITIONBOX_WAIT_TIMEOUT = 10000  # Playwright timeout for __NEXT_DATA__ selector (ms)
+AMBITIONBOX_FALLBACK_SLEEP = 2  # Seconds to wait if selector times out

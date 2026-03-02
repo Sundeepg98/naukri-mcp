@@ -22,6 +22,27 @@ _session: aiohttp.ClientSession = None
 _refresh_lock = asyncio.Lock()
 
 
+class _ApiMetrics:
+    """Simple request counters for observability."""
+    def __init__(self):
+        self.total = 0
+        self.success = 0
+        self.errors = 0
+        self.retries = 0
+        self.auth_refreshes = 0
+
+    def get_stats(self) -> dict:
+        return {
+            "total_requests": self.total,
+            "success": self.success,
+            "errors": self.errors,
+            "retries": self.retries,
+            "auth_refreshes": self.auth_refreshes,
+        }
+
+api_metrics = _ApiMetrics()
+
+
 class NaukriAPIError(Exception):
     """Structured API error with status code and parsed message."""
     def __init__(self, status: int, message: str, code: str = None):
@@ -104,10 +125,20 @@ async def close_session():
         _session = None
 
 
+async def close_api_session():
+    """Close the global aiohttp session if it exists."""
+    global _session
+    if _session is not None and not _session.closed:
+        await _session.close()
+        _session = None
+
+
 async def _api_request(method: str, path: str, params: dict = None,
                        body=None, extra_headers: dict = None,
                        _attempt: int = 0) -> dict:
     """Unified HTTP request handler with retry, 401 refresh, and error parsing."""
+    if _attempt == 0:
+        api_metrics.total += 1
     token = await browser.token_manager.ensure_token()
     cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
@@ -130,6 +161,7 @@ async def _api_request(method: str, path: str, params: dict = None,
     async with session.request(method, url, **kwargs) as resp:
         logger.info("API %s %s -> %s", method, path, resp.status)
         if resp.status in SUCCESS_STATUSES:
+            api_metrics.success += 1
             if resp.status == 204:
                 return {}
             return await resp.json()
@@ -137,6 +169,7 @@ async def _api_request(method: str, path: str, params: dict = None,
 
         # 401 — token refresh with lock to prevent parallel refresh storms
         if resp.status == 401 and _attempt == 0:
+            api_metrics.auth_refreshes += 1
             logger.info("Token expired, refreshing and retrying...")
             async with _refresh_lock:
                 # Re-get token — another caller may have refreshed while we waited
@@ -165,6 +198,7 @@ async def _api_request(method: str, path: str, params: dict = None,
                     delay = min(2 ** _attempt, 8)
             else:
                 delay = min(2 ** _attempt, 8)
+            api_metrics.retries += 1
             logger.info("Rate limited (429), retrying after %.1fs...", delay)
             await asyncio.sleep(delay)
             return await _api_request(method, path, params, body,
@@ -173,11 +207,13 @@ async def _api_request(method: str, path: str, params: dict = None,
         # Transient server errors — exponential backoff retry
         if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < MAX_RETRIES:
             delay = BACKOFF_BASE * (2 ** _attempt)
+            api_metrics.retries += 1
             logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
             await asyncio.sleep(delay)
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
 
+        api_metrics.errors += 1
         _raise_api_error(resp.status, text)
 
 

@@ -100,36 +100,36 @@ class TestCompany:
 
 
 # =====================================================================
-# 2. naukri_company_follow — edge cases beyond test_consolidation.py
+# 2. naukri_company follow actions — edge cases beyond test_consolidation.py
 # =====================================================================
 
 class TestCompanyFollowEdgeCases:
-    """Edge-case tests for naukri_server.tools.companies.naukri_company_follow."""
+    """Edge-case tests for follow actions in naukri_server.tools.companies.naukri_company."""
 
     @pytest.mark.asyncio
     async def test_empty_group_ids_list(self):
-        """An empty list [] should fail validation, same as missing."""
-        from naukri_server.tools.companies import naukri_company_follow
-        result = await naukri_company_follow(action="follow", group_ids=[])
+        """An empty list [] with no group_id should fail validation."""
+        from naukri_server.tools.companies import naukri_company
+        result = await naukri_company(action="follow", group_ids=[])
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "group_ids" in result["message"]
+        assert "group_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_follow_routes_to_helper(self):
-        from naukri_server.tools.companies import naukri_company_follow
+        from naukri_server.tools.companies import naukri_company
         with patch("naukri_server.tools.companies._follow_or_unfollow", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "action": "followed", "followed": ["111"]}
-            result = await naukri_company_follow(action="follow", group_ids=["111"])
+            result = await naukri_company(action="follow", group_id="111")
             mock_helper.assert_awaited_once_with(["111"], "follow")
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_unfollow_routes_to_helper(self):
-        from naukri_server.tools.companies import naukri_company_follow
+        from naukri_server.tools.companies import naukri_company
         with patch("naukri_server.tools.companies._follow_or_unfollow", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "action": "unfollowed", "unfollowed": ["222"]}
-            result = await naukri_company_follow(action="unfollow", group_ids=["222"])
+            result = await naukri_company(action="unfollow", group_id="222")
             mock_helper.assert_awaited_once_with(["222"], "unfollow")
             assert result["status"] == "success"
 
