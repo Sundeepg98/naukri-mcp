@@ -1,7 +1,7 @@
 # Naukri MCP Server — Developer Guide
 
 ## Architecture
-- **42 tools** across 28 modules using FastMCP (`@mcp.tool()` decorators)
+- **38 tools** across 27 modules using FastMCP (`@mcp.tool()` decorators)
 - **Playwright** persistent Chrome profile for browser automation
 - **aiohttp** global session for REST API calls
 - **PagePool** (3 tabs) for concurrent browser operations
@@ -44,11 +44,17 @@ async def naukri_get_subscription_status() -> dict:
 - Test files: `tests/test_<module_group>.py`
 - Run: `python -m pytest tests/ -q`
 
+## Validation Helpers (`naukri_server/validation.py`)
+- `validate_limit(value, max_allowed=50)` — clamps to [1, max_allowed], use for all limit params
+- `validate_page(value)` — clamps to [1, ∞), use for all page params
+- `validate_enum(value, allowed, field_name)` — case-insensitive enum check, returns matched value or None
+- All three silently clamp invalid values (AI-ergonomic: no VALIDATION_ERROR for off-by-one)
+
 ## How to Add a New Tool
 1. Choose the right module file in `naukri_server/tools/`
 2. Add `@mcp.tool()` decorator with complete docstring (Args + Returns)
 3. Use `error_code` field in all error returns (VALIDATION_ERROR, API_ERROR, BROWSER_ERROR, NOT_FOUND, AUTH_ERROR)
-4. Add parameter validation (limit clamped to 50, page >= 1)
+4. Use `validate_limit()` / `validate_page()` from `naukri_server.validation` for param validation
 5. Return `{total, count, page, has_more}` for list endpoints
 6. Register in `naukri_server/__init__.py` if new module
 7. Add tests in `tests/`
