@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import JOB_DETAIL_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, logger
+from naukri_server.config import JOB_DETAIL_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, logger
 from naukri_server.validation import validate_job_detail
 
 
@@ -211,6 +211,23 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
     return result
 
 
+async def _fetch_match_score(job_id: str) -> dict | None:
+    """Fetch per-job match score — optional enrichment, returns None on failure."""
+    try:
+        score_data = await api_get(f"{JOB_MATCH_SCORE_API}{job_id}/matchscore")
+        return {
+            "education": score_data.get("education"),
+            "functional_area": score_data.get("functionalArea"),
+            "key_skills": score_data.get("Keyskills"),
+            "work_experience": score_data.get("workExperience"),
+            "industry": score_data.get("industry"),
+            "location": score_data.get("location"),
+            "early_applicant": score_data.get("earlyApplicant"),
+        }
+    except Exception:
+        return None
+
+
 async def _get_job(job_id_or_url: str) -> dict:
     """Get full details for a specific Naukri job — description, skills, salary, match score, apply status.
 
@@ -238,10 +255,14 @@ async def _get_job(job_id_or_url: str) -> dict:
 
     # Strategy 1: Direct REST API (fast, no browser needed)
     try:
-        data = await api_get(JOB_DETAIL_API + job_id)
+        detail_task = api_get(JOB_DETAIL_API + job_id)
+        score_task = _fetch_match_score(job_id)
+        data, match_score = await asyncio.gather(detail_task, score_task)
         if data:
             result = _parse_job_detail(data, job_id, page_url)
             if result.get("title"):  # Sanity check — v3 returned meaningful data
+                if match_score:
+                    result["match_score"] = match_score
                 return result
             logger.info("REST v3 returned empty title for job %s, falling back to browser", job_id)
     except NaukriAPIError as e:

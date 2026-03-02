@@ -152,8 +152,8 @@ async def _get_company_slug(group_id: str) -> dict:
                         data = await response.json()
                         captured["company"] = data
                         event.set()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Company response intercept: %s", e)
 
             page.on("response", on_response)
             try:

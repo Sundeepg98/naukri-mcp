@@ -119,14 +119,14 @@ class TestEmptyResponses:
         from naukri_server.tools.insights import naukri_insights
         with patch("naukri_server.tools.insights._load_json", return_value=[]):
             result = await naukri_insights(insight_type="applications")
-            assert result["status"] == "no_data"
+            assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_insights_salary_no_applications(self):
         from naukri_server.tools.insights import naukri_insights
         with patch("naukri_server.tools.insights._load_json", return_value=[]):
             result = await naukri_insights(insight_type="salary")
-            assert result["status"] == "no_data"
+            assert result["status"] == "error"
 
 
 # ============================================================================

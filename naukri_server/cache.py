@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 
-from naukri_server.config import CACHE_FILE
+from naukri_server.config import CACHE_FILE, CACHE_PURGE_DAYS
 
 
 def _load_cache() -> dict:
@@ -33,8 +33,8 @@ def _save_cache(cache: dict):
     for key, entry in cache.items():
         if isinstance(entry, dict) and "cached_at" not in entry:
             entry["cached_at"] = time.time()
-    # Purge entries older than 30 days
-    cutoff = time.time() - (30 * 86400)
+    # Purge entries older than CACHE_PURGE_DAYS
+    cutoff = time.time() - (CACHE_PURGE_DAYS * 86400)
     cache = {k: v for k, v in cache.items() if not isinstance(v, dict) or v.get("cached_at", 0) > cutoff}
     # Atomic write with backup
     text = json.dumps(cache, indent=2, ensure_ascii=False)

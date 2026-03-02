@@ -6,7 +6,7 @@ import re
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import AMBITIONBOX_BASE
+from naukri_server.config import AMBITIONBOX_BASE, AMBITIONBOX_FALLBACK_SLEEP, AMBITIONBOX_WAIT_TIMEOUT
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_salary_data, validate_review_data, validate_page
 
@@ -26,10 +26,10 @@ def _ensure_slug(value: str) -> str:
 async def _extract_next_data(page) -> dict | None:
     """Extract __NEXT_DATA__ JSON from the given page."""
     try:
-        await page.wait_for_selector('script#__NEXT_DATA__', timeout=10000)
+        await page.wait_for_selector('script#__NEXT_DATA__', timeout=AMBITIONBOX_WAIT_TIMEOUT)
     except Exception as e:
         logger.debug("__NEXT_DATA__ selector not found, using fallback: %s", e)
-        await asyncio.sleep(2)  # Fallback if selector not found
+        await asyncio.sleep(AMBITIONBOX_FALLBACK_SLEEP)  # Fallback if selector not found
     return await page.evaluate("""
         () => {
             const el = document.getElementById('__NEXT_DATA__');

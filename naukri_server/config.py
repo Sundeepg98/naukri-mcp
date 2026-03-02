@@ -75,6 +75,7 @@ NOTIFICATION_READ_API = "/cloudgateway-mynaukri/notification-center-services/v0/
 # Dashboard & analytics
 DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
 MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"
+APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"  # GET ?days=7
 
 # Job Alerts (discovered via webpack chunk analysis of SRP page JS + live API research)
 # SSA = "Save Search Alert" — create-only endpoint (POST)
@@ -89,6 +90,7 @@ UNSAVE_JOB_API = "/jobapi/v3/user/unsavejob/"  # POST (append job_id)
 # Additional APIs discovered via webpack bundle analysis
 SEARCH_API = "/jobapi/v3/search"  # GET → {noOfJobs, clusters, jobDetails, ...}
 JOB_DETAIL_API = "/jobapi/v3/job/"  # GET (append job_id)
+JOB_MATCH_SCORE_API = "/jobapi/v3/job/"  # GET (append job_id + /matchscore)
 SIMILAR_JOBS_API = "/jobapi/v2/search/simjobs/"  # GET (append job_id)
 APPLY_WORKFLOW_API = "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply"  # POST
 REPORT_FRAUD_API = "/servicegateway-apply/fraud-detection/1.0/jobseeker/report"  # POST
@@ -147,3 +149,10 @@ STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale
 # AmbitionBox timeouts
 AMBITIONBOX_WAIT_TIMEOUT = 10000  # Playwright timeout for __NEXT_DATA__ selector (ms)
 AMBITIONBOX_FALLBACK_SLEEP = 2  # Seconds to wait if selector times out
+
+# Browser hardcoded timeouts
+SESSION_VALIDATE_TIMEOUT = 5  # Seconds for session validation on startup
+TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation
+
+# Cache purge threshold
+CACHE_PURGE_DAYS = 30  # Days before cached answers are purged

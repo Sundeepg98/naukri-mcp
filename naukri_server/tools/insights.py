@@ -6,8 +6,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.api import api_get
 from naukri_server.cache import _load_cache, _cache_lock
-from naukri_server.config import LAKHS_MULTIPLIER
+from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 
 
@@ -23,7 +24,7 @@ async def _application_insights(days: int = 30) -> dict:
         apps = _load_json(APPLICATIONS_FILE)
 
     if not apps:
-        return {"status": "no_data", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
+        return {"status": "error", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
 
     # Filter by date range
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -31,7 +32,7 @@ async def _application_insights(days: int = 30) -> dict:
 
     if not recent:
         return {
-            "status": "no_data",
+            "status": "error",
             "message": f"No applications in the last {days} days. Total tracked: {len(apps)}.",
             "total_all_time": len(apps),
             "error_code": "NOT_FOUND",
@@ -90,7 +91,7 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
             cache = _load_cache()
 
         if not cache:
-            return {"status": "no_data", "message": "No cached answers yet. Apply to jobs to build the cache.", "error_code": "NOT_FOUND"}
+            return {"status": "error", "message": "No cached answers yet. Apply to jobs to build the cache.", "error_code": "NOT_FOUND"}
 
         answers = []
         for k, entry in cache.items():
@@ -184,7 +185,7 @@ async def _salary_position(designation: Optional[str] = None) -> dict:
         apps = _load_json(APPLICATIONS_FILE)
 
     if not apps:
-        return {"status": "no_data", "message": "No applications tracked yet.", "error_code": "NOT_FOUND"}
+        return {"status": "error", "message": "No applications tracked yet.", "error_code": "NOT_FOUND"}
 
     if designation:
         keyword = designation.lower()
@@ -201,7 +202,7 @@ async def _salary_position(designation: Optional[str] = None) -> dict:
 
     if not salaries:
         return {
-            "status": "no_data",
+            "status": "error",
             "message": f"No salary data found in {len(apps)} applications. Most jobs may have 'Not disclosed' salary.",
             "error_code": "NOT_FOUND",
         }
@@ -244,6 +245,44 @@ async def _salary_position(designation: Optional[str] = None) -> dict:
     }
 
 
+async def _match_quality(days: int = 7) -> dict:
+    """Aggregate apply-match quality — how well recent applications matched your profile.
+
+    Args:
+        days: Number of days to analyze (default 7)
+
+    Returns:
+        - {status: "success", days, total_applies, complete_match, high_match, medium_match,
+           low_match, field_breakdown}
+        - {status: "error", message}
+    """
+    if days < 1:
+        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
+    data = await api_get(f"{APPLY_MATCH_SCORE_API}?days={days}")
+
+    field_breakdown = data.get("relevantFieldMatch", {})
+    formatted_fields = {}
+    for field_name, field_data in field_breakdown.items():
+        if isinstance(field_data, dict):
+            formatted_fields[field_name] = {
+                "count": field_data.get("count"),
+                "percent": field_data.get("percent"),
+            }
+        else:
+            formatted_fields[field_name] = field_data
+
+    return {
+        "status": "success",
+        "days": days,
+        "total_applies": data.get("totalApplies"),
+        "complete_match": data.get("completeMatch"),
+        "high_match": data.get("highMatch"),
+        "medium_match": data.get("mediumMatch"),
+        "low_match": data.get("lowMatch"),
+        "field_breakdown": formatted_fields,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
@@ -272,15 +311,16 @@ async def naukri_insights(
       - "salary": Analyze salary positioning across applied jobs
       - "cached_answers": Manage cached screening question answers (list/update/delete)
       - "match_analytics": Match-score analytics for recent applications (distribution + per-field breakdowns)
+      - "match_quality": Aggregate apply-match quality — how well recent applications matched your profile (uses days param, default 7)
       - "skill_gap": Analyze skill gaps between your profile and market demand
       - "salary_benchmark": Benchmark your salary against market for a given role
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "skill_gap" | "salary_benchmark"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
-        days: For applications — analyze last N days (default 30)
+        days: For applications/match_quality — analyze last N days (default 30 for applications, 7 for match_quality)
         designation: For salary — filter by job title keyword (optional)
         keywords: For skill_gap/salary_benchmark — search keywords (required for salary_benchmark; required for skill_gap if use_recommendations is False)
         use_recommendations: For skill_gap — use personalized recommendations (default True)
@@ -297,6 +337,7 @@ async def naukri_insights(
         - cached_answers update: {status, key, new_answer, message}
         - cached_answers delete: {status, key, message}
         - match_analytics: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}
+        - match_quality: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown}
         - skill_gap: {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
         - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
         - {status: "error", message} on failure
@@ -330,6 +371,13 @@ async def naukri_insights(
         except Exception as e:
             return {"status": "error", "message": f"Match analytics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── match_quality ────────────────────────────────────────────────
+    elif insight_type == "match_quality":
+        try:
+            return await _match_quality(days=days)
+        except Exception as e:
+            return {"status": "error", "message": f"Match quality failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── skill_gap ───────────────────────────────────────────────────
     elif insight_type == "skill_gap":
         from naukri_server.tools.skill_gap import _skill_gap_analysis
@@ -358,4 +406,4 @@ async def naukri_insights(
 
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, skill_gap, salary_benchmark", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark", "error_code": "VALIDATION_ERROR"}

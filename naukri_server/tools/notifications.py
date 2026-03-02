@@ -154,7 +154,10 @@ async def naukri_notifications(
             total_processed = 0
             all_errors = []
 
-            while True:
+            MAX_MARK_ALL_ITERATIONS = 10
+            iteration = 0
+            while iteration < MAX_MARK_ALL_ITERATIONS:
+                iteration += 1
                 result = await _fetch_notifications(limit=50)
                 if result.get("status") != "success":
                     if total_processed == 0:
@@ -185,6 +188,8 @@ async def naukri_notifications(
                         total_marked += 1
                     else:
                         all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
+
+                await asyncio.sleep(0.5)
 
                 # If we got fewer than 50, we've reached the end
                 if len(notifications) < 50:

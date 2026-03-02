@@ -37,7 +37,7 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "posted_date": job.get("createdDate") or job.get("footerPlaceholderLabel"),
             "tags": [t.strip() for t in job.get("tagsAndSkills", "").split(",") if t.strip()] if isinstance(job.get("tagsAndSkills"), str) else job.get("tagsAndSkills", []),
             "url": (
-                f"https://www.naukri.com{job['jdURL']}" if job.get("jdURL")
+                f"{NAUKRI_BASE}{job['jdURL']}" if job.get("jdURL")
                 else f"{NAUKRI_BASE}/job-listings-{job.get('jobId', '')}"
             ),
             "vacancies": job.get("vacancy") or job.get("vacany"),

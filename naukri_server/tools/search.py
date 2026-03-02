@@ -94,7 +94,7 @@ async def naukri_search_jobs(
         if data and isinstance(data, dict) and data.get("jobDetails"):
             jobs = _parse_job_list(data.get("jobDetails", []), limit)
             total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
-            return {
+            result = {
                 "status": "success",
                 "keywords": keywords,
                 "location": location,
@@ -102,9 +102,27 @@ async def naukri_search_jobs(
                 "total": total,
                 "count": len(jobs),
                 "has_more": (page_no * limit) < total if isinstance(total, int) else len(jobs) == limit,
+                "filters": {k: v for k, v in {
+                    "experience": experience,
+                    "salary_min": salary_min,
+                    "salary_max": salary_max,
+                    "sort_by": sort_by,
+                    "freshness": freshness,
+                    "work_mode": work_mode,
+                    "job_type": job_type,
+                    "company_type": company_type,
+                    "industry": industry,
+                    "education": education,
+                    "role_category": role_category,
+                    "posted_within": posted_within,
+                }.items() if v is not None},
                 "jobs": jobs,
                 "search_path": "rest",
             }
+            warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
+            if warnings:
+                result["warnings"] = warnings
+            return result
     except Exception as e:
         logger.info("REST search failed (%s), falling back to browser", e)
 
@@ -189,6 +207,7 @@ async def naukri_search_jobs(
                     "posted_within": posted_within,
                 }.items() if v is not None},
                 "jobs": jobs,
+                "search_path": "browser",
             }
             warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
             if warnings:

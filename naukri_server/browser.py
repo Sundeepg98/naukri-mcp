@@ -10,7 +10,7 @@ from typing import Optional
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
-from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, logger
+from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, logger
 
 
 class TokenManager:
@@ -92,7 +92,7 @@ class TokenManager:
                     pages = self._context.pages
                     page = pages[0] if pages else await self._context.new_page()
                     await page.goto(f"{NAUKRI_BASE}/mnjuser/homepage",
-                                    wait_until="domcontentloaded", timeout=15000)
+                                    wait_until="domcontentloaded", timeout=TOKEN_RENEWAL_TIMEOUT)
                     await self.extract()
                 except Exception as e:
                     logger.debug("Token renewal navigation failed: %s", e)
@@ -227,7 +227,10 @@ async def page_goto(page: Page, url: str, wait: str = "domcontentloaded") -> Non
 async def page_text(page: Page, selector: str) -> Optional[str]:
     """Get text content of an element on the page."""
     el = await page.query_selector(selector)
-    return (await el.text_content()).strip() if el else None
+    if not el:
+        return None
+    content = await el.text_content()
+    return content.strip() if content else None
 
 
 async def page_exists(page: Page, selector: str) -> bool:
@@ -327,13 +330,12 @@ class NaukriBrowser:
             if self.token_manager._token:
                 try:
                     from naukri_server.api import api_get
-                    from naukri_server.config import PROFILE_API as _PROFILE_API
                     await asyncio.wait_for(
                         api_get(
-                            _PROFILE_API,
+                            PROFILE_API,
                             {"expand_level": "1"},
                         ),
-                        timeout=5,
+                        timeout=SESSION_VALIDATE_TIMEOUT,
                     )
                     logger.info("Session validated — token is active")
                 except asyncio.TimeoutError:
@@ -346,10 +348,23 @@ class NaukriBrowser:
         except Exception as e:
             logger.error("Browser startup failed: %s. REST-only mode active.", e)
             self.available = False
+            # Clean up partial initialization
+            try:
+                if self.page_pool:
+                    await self.page_pool.close_all()
+                if self.context:
+                    await self.context.close()
+                if self.pw:
+                    await self.pw.stop()
+            except Exception:
+                pass
+            self.page_pool = None
+            self.context = None
+            self.pw = None
 
     async def stop(self):
-        from naukri_server.api import close_session
-        await close_session()
+        from naukri_server.api import close_api_session
+        await close_api_session()
         if self.page_pool:
             await self.page_pool.close_all()
         if self.context:

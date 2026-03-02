@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
-from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, logger
+from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, logger
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.validation import validate_limit
@@ -230,7 +230,7 @@ async def naukri_batch_apply(
     company_type: Optional[str] = None,
     limit: int = 5,
     answers: Optional[dict] = None,
-    delay_ms: int = 500,
+    delay_ms: int = BATCH_APPLY_DEFAULT_DELAY_MS,
     max_concurrent: int = 3,
 ) -> dict:
     """Search and apply to multiple jobs with rate limiting.

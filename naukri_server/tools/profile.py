@@ -281,12 +281,13 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                         await api_post(endpoint, {"resumeHeadline": headline})
                         _profile_ttl_cache.invalidate()
                         return {
-                            "status": "refreshed",
+                            "status": "success", "action": "refreshed",
                             "method": f"rest_api_{version}",
                             "headline_length": len(headline),
                             "message": f"Profile refreshed via REST API ({version}). You appear as 'recently active'.",
                         }
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Profile REST refresh %s: %s", version, e)
                         continue
     except Exception as e:
         logger.warning("REST refresh failed, falling back to browser: %s", e)
@@ -358,7 +359,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
 
             _profile_ttl_cache.invalidate()
             return {
-                "status": "refreshed",
+                "status": "success", "action": "refreshed",
                 "method": f"browser_{edit_clicked}",
                 "save": save_result,
                 "api_confirmed": api_confirmed.get("status") == 200,

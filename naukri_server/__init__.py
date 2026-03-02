@@ -19,7 +19,7 @@ Quick Start for AI consumers:
   16. naukri_resume_builder(action="templates|status|tailor") → resume building + tailoring
   17. naukri_debug(action="browser_*|api_*|discover_*") → debugging tools
 
-Consolidated tools (action-parameter pattern — 19 dispatchers):
+Consolidated tools (action-parameter pattern — 21 dispatchers):
   - naukri_auth(action="login|verify_otp|status")
   - naukri_profile(action="get|update|audit|boost|dashboard")
   - naukri_inbox(action="list|read|mark_interested|accept_nvite")
@@ -75,8 +75,10 @@ async def lifespan(server):
     try:
         yield
     finally:
-        if browser.available:
+        try:
             await browser.stop()
+        except Exception:
+            pass
         await close_api_session()
 
 

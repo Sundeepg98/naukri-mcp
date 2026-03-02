@@ -100,29 +100,25 @@ def _cookie_header() -> str:
     return browser.token_manager.get_cookies()
 
 
+_session_lock = asyncio.Lock()
+
 async def get_session() -> aiohttp.ClientSession:
     """Lazily create and return a shared aiohttp session."""
     global _session
     if _session is None or _session.closed:
-        connector = aiohttp.TCPConnector(
-            limit=20,
-            limit_per_host=10,
-            ttl_dns_cache=300,
-        )
-        _session = aiohttp.ClientSession(
-            connector=connector,
-            timeout=aiohttp.ClientTimeout(total=API_TIMEOUT),
-            trust_env=True,
-        )
+        async with _session_lock:
+            if _session is None or _session.closed:
+                connector = aiohttp.TCPConnector(
+                    limit=20,
+                    limit_per_host=10,
+                    ttl_dns_cache=300,
+                )
+                _session = aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=aiohttp.ClientTimeout(total=API_TIMEOUT),
+                    trust_env=True,
+                )
     return _session
-
-
-async def close_session():
-    """Close the shared aiohttp session (for cleanup)."""
-    global _session
-    if _session is not None and not _session.closed:
-        await _session.close()
-        _session = None
 
 
 async def close_api_session():
@@ -158,63 +154,75 @@ async def _api_request(method: str, path: str, params: dict = None,
     elif method == "DELETE" and body is not None:
         kwargs["json"] = body
 
-    async with session.request(method, url, **kwargs) as resp:
-        logger.info("API %s %s -> %s", method, path, resp.status)
-        if resp.status in SUCCESS_STATUSES:
-            api_metrics.success += 1
-            if resp.status == 204:
-                return {}
-            return await resp.json()
-        text = await resp.text()
+    try:
+        async with session.request(method, url, **kwargs) as resp:
+            logger.info("API %s %s -> %s", method, path, resp.status)
+            if resp.status in SUCCESS_STATUSES:
+                api_metrics.success += 1
+                if resp.status == 204:
+                    return {}
+                return await resp.json()
+            text = await resp.text()
 
-        # 401 — token refresh with lock to prevent parallel refresh storms
-        if resp.status == 401 and _attempt == 0:
-            api_metrics.auth_refreshes += 1
-            logger.info("Token expired, refreshing and retrying...")
-            async with _refresh_lock:
-                # Re-get token — another caller may have refreshed while we waited
-                new_token = await browser.token_manager.ensure_token()
-                if new_token == token:  # Still the same stale token
-                    browser.token_manager.invalidate()
+            # 401 — token refresh with lock to prevent parallel refresh storms
+            if resp.status == 401 and _attempt == 0:
+                api_metrics.auth_refreshes += 1
+                logger.info("Token expired, refreshing and retrying...")
+                async with _refresh_lock:
+                    # Re-get token — another caller may have refreshed while we waited
+                    new_token = await browser.token_manager.ensure_token()
+                    if new_token == token:  # Still the same stale token
+                        browser.token_manager.invalidate()
+                        try:
+                            async with browser.page_pool.acquire() as refresh_page:
+                                await browser.token_manager.refresh(refresh_page)
+                        except Exception as e:
+                            logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
+                            raise NaukriAPIError(
+                                401,
+                                f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.",
+                            )
+                return await _api_request(method, path, params, body,
+                                          extra_headers, _attempt=1)
+
+            # 429 — rate limit with Retry-After / exponential backoff
+            if resp.status == 429 and _attempt < MAX_RETRIES:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after is not None:
                     try:
-                        async with browser.page_pool.acquire() as refresh_page:
-                            await browser.token_manager.refresh(refresh_page)
-                    except Exception as e:
-                        logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
-                        raise NaukriAPIError(
-                            401,
-                            f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.",
-                        )
-            return await _api_request(method, path, params, body,
-                                      extra_headers, _attempt=1)
-
-        # 429 — rate limit with Retry-After / exponential backoff
-        if resp.status == 429 and _attempt < MAX_RETRIES:
-            retry_after = resp.headers.get("Retry-After")
-            if retry_after is not None:
-                try:
-                    delay = float(retry_after)
-                except (ValueError, TypeError):
+                        delay = float(retry_after)
+                    except (ValueError, TypeError):
+                        delay = min(2 ** _attempt, 8)
+                else:
                     delay = min(2 ** _attempt, 8)
-            else:
-                delay = min(2 ** _attempt, 8)
-            api_metrics.retries += 1
-            logger.info("Rate limited (429), retrying after %.1fs...", delay)
-            await asyncio.sleep(delay)
-            return await _api_request(method, path, params, body,
-                                      extra_headers, _attempt=_attempt + 1)
+                api_metrics.retries += 1
+                logger.info("Rate limited (429), retrying after %.1fs...", delay)
+                await asyncio.sleep(delay)
+                return await _api_request(method, path, params, body,
+                                          extra_headers, _attempt=_attempt + 1)
 
-        # Transient server errors — exponential backoff retry
-        if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < MAX_RETRIES:
+            # Transient server errors — exponential backoff retry
+            if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < MAX_RETRIES:
+                delay = BACKOFF_BASE * (2 ** _attempt)
+                api_metrics.retries += 1
+                logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
+                await asyncio.sleep(delay)
+                return await _api_request(method, path, params, body,
+                                          extra_headers, _attempt=_attempt + 1)
+
+            api_metrics.errors += 1
+            _raise_api_error(resp.status, text)
+    except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+        if _attempt < MAX_RETRIES:
             delay = BACKOFF_BASE * (2 ** _attempt)
             api_metrics.retries += 1
-            logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
+            logger.info("Transport error (%s), retrying in %.1fs (attempt %d)...",
+                        type(e).__name__, delay, _attempt + 1)
             await asyncio.sleep(delay)
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
-
         api_metrics.errors += 1
-        _raise_api_error(resp.status, text)
+        raise NaukriAPIError(0, f"Connection failed after {MAX_RETRIES} retries: {type(e).__name__}: {e}")
 
 
 # --- Public thin wrappers (preserve existing signatures) ---

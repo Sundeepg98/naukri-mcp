@@ -79,7 +79,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "medium",
             "action": f"Complete {pending} pending assessment(s)",
-            "tool": "naukri_assessments(action='list')",
+            "tool": "naukri_profile(action='get') — check assessments section",
         })
 
     # Low priority: profile completeness

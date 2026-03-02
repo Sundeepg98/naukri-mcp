@@ -290,7 +290,8 @@ class TestProfileInvalidationOnUpdate:
         with patch("naukri_server.tools.profile.api_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
             result = await naukri_profile(action="boost")
-            assert result["status"] == "refreshed"
+            assert result["status"] == "success"
+            assert result["action"] == "refreshed"
         # Cache should be invalidated after boost
         assert _profile_ttl_cache._data is None
 

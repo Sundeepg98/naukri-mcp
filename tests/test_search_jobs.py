@@ -199,7 +199,7 @@ class TestGetJob:
 
     @pytest.mark.asyncio
     async def test_get_job_extracts_id_from_url(self):
-        """Valid Naukri URL extracts job_id and proceeds to API call."""
+        """Valid Naukri URL extracts job_id and proceeds to API call (detail + match score)."""
         from naukri_server.tools.jobs import naukri_get_job
 
         fake_detail = {
@@ -213,15 +213,28 @@ class TestGetJob:
                 "placeholders": [],
             }
         }
+        fake_match_score = {
+            "education": False,
+            "functionalArea": True,
+            "Keyskills": 1.0,
+            "workExperience": True,
+            "industry": True,
+            "location": True,
+            "earlyApplicant": True,
+        }
 
         with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = fake_detail
+            mock_get.side_effect = [fake_detail, fake_match_score]
             result = await naukri_get_job(
                 job_id_or_url="https://www.naukri.com/job-listings-python-developer-123456789"
             )
-            mock_get.assert_awaited_once()
+            # api_get called twice: once for job detail, once for match score
+            assert mock_get.await_count == 2
             assert result["status"] == "success"
             assert result["job_id"] == "123456789"
+            # Match score should be enriched into the result
+            assert result["match_score"]["key_skills"] == 1.0
+            assert result["match_score"]["early_applicant"] is True
 
 
 # =====================================================================

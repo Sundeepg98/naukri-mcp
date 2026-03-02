@@ -202,7 +202,8 @@ async def _resume_upload(file_path: str) -> dict:
             await asyncio.sleep(5)  # Wait for upload to complete
 
             return {
-                "status": "uploaded",
+                "status": "success",
+                "action": "uploaded",
                 "file": path.name,
                 "size_mb": round(size_mb, 2),
                 "message": f"Resume '{path.name}' uploaded to Naukri profile.",
@@ -327,7 +328,8 @@ async def _photo_upload(file_path: str) -> dict:
                 await asyncio.sleep(5)
 
             return {
-                "status": "uploaded",
+                "status": "success",
+                "action": "uploaded",
                 "file": path.name,
                 "message": f"Photo '{path.name}' uploaded to Naukri profile.",
             }
@@ -439,7 +441,8 @@ async def _photo_delete() -> dict:
             await asyncio.sleep(5)  # Wait for deletion to complete
 
             return {
-                "status": "deleted",
+                "status": "success",
+                "action": "deleted",
                 "message": "Profile photo deleted successfully.",
             }
         except Exception as e:

@@ -155,7 +155,7 @@ class TestInsightsErrorCode:
              patch("naukri_server.tools.insights._applications_lock", new=asyncio.Lock()):
             result = await naukri_insights(insight_type="applications", days=30)
 
-        assert result["status"] == "no_data"
+        assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
 
     @pytest.mark.asyncio
@@ -167,7 +167,7 @@ class TestInsightsErrorCode:
              patch("naukri_server.tools.insights._applications_lock", new=asyncio.Lock()):
             result = await naukri_insights(insight_type="salary")
 
-        assert result["status"] == "no_data"
+        assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
 
     @pytest.mark.asyncio
@@ -179,7 +179,7 @@ class TestInsightsErrorCode:
              patch("naukri_server.tools.insights._cache_lock", new=asyncio.Lock()):
             result = await naukri_insights(insight_type="cached_answers", action="list")
 
-        assert result["status"] == "no_data"
+        assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
 
 

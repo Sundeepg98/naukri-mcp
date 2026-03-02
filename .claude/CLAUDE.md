@@ -1,7 +1,7 @@
 # Naukri MCP Server — Developer Guide
 
 ## Architecture
-- **30 tools** across 27 modules using FastMCP (`@mcp.tool()` decorators)
+- **26 tools** across 24 tool modules using FastMCP (`@mcp.tool()` decorators)
 - **Playwright** persistent Chrome profile for browser automation
 - **aiohttp** global session for REST API calls
 - **PagePool** (3 tabs) for concurrent browser operations

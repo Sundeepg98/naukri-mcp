@@ -13,7 +13,7 @@ from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
-    SAVE_JOB_API, UNSAVE_JOB_API,
+    SAVE_JOB_API, UNSAVE_JOB_API, BATCH_APPLY_DEFAULT_DELAY_MS,
 )
 from naukri_server.validation import validate_limit, validate_page
 
@@ -520,7 +520,7 @@ async def naukri_applications(
     work_mode: Optional[str] = None,
     job_type: Optional[str] = None,
     company_type: Optional[str] = None,
-    delay_ms: int = 500,
+    delay_ms: int = BATCH_APPLY_DEFAULT_DELAY_MS,
     max_concurrent: int = 3,
     set_reminder_days: Optional[int] = None,
 ) -> dict:
@@ -752,7 +752,7 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
 
         # Check for duplicate
         if any(j.get("job_id") == job_id for j in saved):
-            return {"status": "already_saved", "job_id": job_id}
+            return {"status": "success", "action": "already_saved", "job_id": job_id}
 
         saved.append({
             "job_id": job_id,
@@ -767,7 +767,7 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
     if sync_to_naukri:
         synced_remote = await _push_save_to_naukri(job_id)
 
-    return {"status": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
+    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
 
 
 async def _unsave_job(job_id: str) -> dict:
@@ -785,9 +785,9 @@ async def _unsave_job(job_id: str) -> dict:
         saved = [j for j in saved if j.get("job_id") != job_id]
         if len(saved) < original_len:
             _save_json(SAVED_JOBS_FILE, saved)
-            return {"status": "unsaved", "job_id": job_id}
+            return {"status": "success", "action": "unsaved", "job_id": job_id}
         else:
-            return {"status": "not_found", "job_id": job_id}
+            return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}
 
 
 # ---------------------------------------------------------------------------

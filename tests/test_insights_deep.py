@@ -85,7 +85,7 @@ async def test_application_insights_no_data(mock_load):
     mock_load.return_value = []
     from naukri_server.tools.insights import _application_insights
     result = await _application_insights()
-    assert result["status"] == "no_data"
+    assert result["status"] == "error"
 
 
 # ===========================================================================
