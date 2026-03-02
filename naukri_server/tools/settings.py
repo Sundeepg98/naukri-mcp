@@ -49,6 +49,7 @@ async def naukri_settings(
       - "check_email": Check email verification status
       - "visibility": Show profile visibility toggles (Resdex visibility, search visibility, etc.)
       - "notification_prefs": Show notification preferences (email, SMS, push, WhatsApp toggles)
+      - "subscription": Get Naukri 360 subscription status and features
 
     Disambiguation:
       - Use "get" for the raw formatted-settings structure (section/id/value).
@@ -57,7 +58,7 @@ async def naukri_settings(
       - Use "blocked_companies" to see which recruiters/companies are blocked.
 
     Args:
-        action: "get" | "update" | "blocked_companies" | "check_email" | "visibility" | "notification_prefs"
+        action: "get" | "update" | "blocked_companies" | "check_email" | "visibility" | "notification_prefs" | "subscription"
         job_search_status: For update — "actively_searching", "open_to_opportunities", "not_looking"
         recommended_job_frequency: For update — frequency setting
         recommended_job_notification: For update — enable/disable
@@ -407,5 +408,9 @@ async def naukri_settings(
         except Exception as e:
             return {"status": "error", "message": f"Notification prefs fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    elif action == "subscription":
+        from naukri_server.tools.subscription import _get_subscription_status
+        return await _get_subscription_status()
+
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email, visibility, notification_prefs", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email, visibility, notification_prefs, subscription", "error_code": "VALIDATION_ERROR"}

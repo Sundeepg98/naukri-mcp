@@ -1,5 +1,7 @@
 """Resume builder tools — templates and AI resume builder status."""
 
+from typing import Optional
+
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.config import RESUME_BUILDER_CONFIG_API, RESUME_BUILDER_STATUS_API
@@ -73,19 +75,25 @@ async def _get_status() -> dict:
 @mcp.tool()
 async def naukri_resume_builder(
     action: str = "templates",
+    job_id: Optional[str] = None,
+    timeout_seconds: int = 120,
 ) -> dict:
-    """Unified resume builder — browse templates and check builder status.
+    """Unified resume builder — browse templates, check builder status, or tailor resume for a job.
 
     Actions:
       - "templates": List available resume builder templates (free and pro with preview images)
       - "status": Get resume builder service status (AI rewrite attempts left, subscription tier, features)
+      - "tailor": Tailor resume for a specific job (requires job_id)
 
     Args:
-        action: "templates" | "status"
+        action: "templates" | "status" | "tailor"
+        job_id: Naukri job ID or URL (required for tailor)
+        timeout_seconds: Max seconds before timeout (default 120, used by tailor)
 
     Returns:
         - templates: {status, count, free_count, pro_count, templates: [{id, name, type, preview_url}]}
         - status: {status, attempts_left, is_paid, show_genai_features, ...}
+        - tailor: {status, job_title, company, suggestions: {headline, skills_to_add, ...}}
         - {status: "error", message} on failure
     """
     # -- templates ──────────────────────────────────────────────────────
@@ -106,6 +114,16 @@ async def naukri_resume_builder(
         except Exception as e:
             return {"status": "error", "message": f"Get resume builder status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # -- tailor ──────────────────────────────────────────────────────────
+    elif action == "tailor":
+        if not job_id:
+            return {"status": "error", "message": "tailor requires job_id.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.resume_tailor import _tailor_resume
+        try:
+            return await _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds)
+        except Exception as e:
+            return {"status": "error", "message": f"Resume tailor failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # -- unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status, tailor", "error_code": "VALIDATION_ERROR"}

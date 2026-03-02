@@ -63,8 +63,7 @@ def _extract_phrases(text: str) -> set:
     return phrases
 
 
-@mcp.tool()
-async def naukri_resume_tailor(
+async def _tailor_resume(
     job_id: str,
     timeout_seconds: int = 120,
 ) -> dict:
@@ -220,3 +219,7 @@ async def naukri_resume_tailor(
         return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return {"status": "partial_success", "message": f"Timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}
+
+
+# Backward-compat alias
+naukri_resume_tailor = _tailor_resume

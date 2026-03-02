@@ -7,8 +7,7 @@ from naukri_server.config import logger
 from naukri_server.utils import derive_slug
 
 
-@mcp.tool()
-async def naukri_research_company(
+async def _research_company(
     keyword: str,
     include_jobs: bool = True,
     include_reviews: bool = True,
@@ -162,8 +161,11 @@ async def naukri_research_company(
         return {"status": "partial_success", "message": f"Timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}
 
 
-@mcp.tool()
-async def naukri_salary_benchmark(
+# Backward-compat alias (was @mcp.tool, now dispatched via naukri_company(action="research"))
+naukri_research_company = _research_company
+
+
+async def _salary_benchmark(
     keywords: str,
     location: Optional[str] = None,
     sample_size: int = 15,
@@ -331,3 +333,7 @@ async def naukri_salary_benchmark(
         return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return {"status": "error", "message": f"Salary benchmark timed out after {timeout_seconds}s", "error_code": "API_ERROR"}
+
+
+# Backward-compat alias (was @mcp.tool, now dispatched via naukri_insights(insight_type="salary_benchmark"))
+naukri_salary_benchmark = _salary_benchmark

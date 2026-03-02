@@ -127,9 +127,9 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.search import naukri_get_recommendations
     from naukri_server.tools.performance import _get_recruiter_activity, _get_activity_level, _get_search_impressions
     from naukri_server.tools.tracking import _list_applications, _get_stale_applications, _list_saved_jobs
-    from naukri_server.tools.profile import naukri_get_dashboard
+    from naukri_server.tools.profile import get_cached_dashboard
     from naukri_server.tools.early_access import _list_early_access_roles, _detect_new_roles
-    from naukri_server.tools.subscription import naukri_get_subscription_status
+    from naukri_server.tools.subscription import _get_subscription_status
     from naukri_server.tools.reminders import _list_reminders
     from naukri_server.tools.alerts import _get_alerts_list
     from naukri_server.tools.assessments import _get_profile_completeness, _list_assessments
@@ -144,9 +144,9 @@ async def naukri_daily_brief() -> dict:
         _get_recruiter_activity(size=5),                   # 3
         _get_activity_level(),                             # 4
         _list_applications(date_from=today),               # 5
-        naukri_get_dashboard(),                            # 6
+        get_cached_dashboard(),                             # 6
         _list_early_access_roles(limit=3),                 # 7
-        naukri_get_subscription_status(),                  # 8
+        _get_subscription_status(),                        # 8
         _list_reminders(include_past=True),                # 9
         _get_stale_applications(days_threshold=14, min_stale_score=50),  # 10
         _get_alerts_list(),                                # 11
@@ -229,7 +229,7 @@ async def naukri_daily_brief() -> dict:
             "reminders": [r for r in (reminders_result.get("reminders") or []) if r.get("is_due")][:5] if reminders_result else [],
         },
         "stale_applications": {
-            "count": stale.get("stale_count", 0) if stale else 0,
+            "count": stale.get("total", 0) if stale else 0,
             "top_stale": stale.get("stale_applications", [])[:3] if stale else [],
         },
         "job_alerts": {

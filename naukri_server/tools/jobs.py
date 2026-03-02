@@ -322,26 +322,56 @@ async def naukri_jobs(
     action: str = "get",
     job_id: Optional[str] = None,
     reason: Optional[str] = None,
+    # similar params
+    limit: int = 10,
+    page: int = 1,
+    # compare params
+    job_ids: Optional[list[str]] = None,
+    timeout_seconds: int = 120,
 ) -> dict:
-    """Unified job operations — fetch details or report fraud.
+    """Unified job operations — fetch details, find similar, compare, or report fraud.
 
     Actions:
         get: Fetch full job details (REST-first, browser fallback). Accepts job_id or full URL.
+        similar: Find jobs similar to a given job_id.
+        compare: Compare 2-5 jobs side-by-side with fit scores.
         report_fraud: Report a fraudulent job listing.
 
     Args:
-        action: "get" or "report_fraud"
-        job_id: Job ID or full Naukri URL (required for both actions)
+        action: "get", "similar", "compare", or "report_fraud"
+        job_id: Job ID or full Naukri URL (required for get, similar, report_fraud)
         reason: Reason for fraud report (required for report_fraud)
+        limit: Max similar jobs to return (default 10, for similar action)
+        page: Page number for similar jobs (default 1, for similar action)
+        job_ids: List of 2-5 job IDs to compare (required for compare action)
+        timeout_seconds: Max seconds for compare before timeout (default 120)
 
     Returns:
         get: {status, title, company, salary, experience, location, skills, match_score, is_applied, can_apply, url, ...}
+        similar: {status, job_id, source, total, count, page, has_more, jobs: [...]}
+        compare: {status, count, jobs: [...], common_skills, all_skills, best_match_job_id, average_fit_score}
         report_fraud: {status, message}
     """
     if action == "get":
         if not job_id:
             return {"status": "error", "message": "job_id required", "error_code": "VALIDATION_ERROR"}
         return await _get_job(job_id_or_url=job_id)
+    elif action == "similar":
+        if not job_id:
+            return {"status": "error", "message": "similar requires job_id.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.search import _get_similar_jobs
+        try:
+            return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)
+        except Exception as e:
+            return {"status": "error", "message": f"Similar jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+    elif action == "compare":
+        if not job_ids:
+            return {"status": "error", "message": "compare requires job_ids (list of 2-5 IDs).", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.compare import _compare_jobs
+        try:
+            return await _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds)
+        except Exception as e:
+            return {"status": "error", "message": f"Compare failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
     elif action == "report_fraud":
         if not job_id:
             return {"status": "error", "message": "job_id required for report_fraud", "error_code": "VALIDATION_ERROR"}
@@ -352,4 +382,4 @@ async def naukri_jobs(
         except Exception as e:
             return {"status": "error", "message": f"Report fraud failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, report_fraud", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, report_fraud", "error_code": "VALIDATION_ERROR"}

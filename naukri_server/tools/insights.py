@@ -23,7 +23,7 @@ async def _application_insights(days: int = 30) -> dict:
         apps = _load_json(APPLICATIONS_FILE)
 
     if not apps:
-        return {"status": "no_data", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first."}
+        return {"status": "no_data", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
 
     # Filter by date range
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -34,6 +34,7 @@ async def _application_insights(days: int = 30) -> dict:
             "status": "no_data",
             "message": f"No applications in the last {days} days. Total tracked: {len(apps)}.",
             "total_all_time": len(apps),
+            "error_code": "NOT_FOUND",
         }
 
     # Status breakdown
@@ -89,7 +90,7 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
             cache = _load_cache()
 
         if not cache:
-            return {"status": "no_data", "message": "No cached answers yet. Apply to jobs to build the cache."}
+            return {"status": "no_data", "message": "No cached answers yet. Apply to jobs to build the cache.", "error_code": "NOT_FOUND"}
 
         answers = []
         for k, entry in cache.items():
@@ -183,7 +184,7 @@ async def _salary_position(designation: Optional[str] = None) -> dict:
         apps = _load_json(APPLICATIONS_FILE)
 
     if not apps:
-        return {"status": "no_data", "message": "No applications tracked yet."}
+        return {"status": "no_data", "message": "No applications tracked yet.", "error_code": "NOT_FOUND"}
 
     if designation:
         keyword = designation.lower()
@@ -202,6 +203,7 @@ async def _salary_position(designation: Optional[str] = None) -> dict:
         return {
             "status": "no_data",
             "message": f"No salary data found in {len(apps)} applications. Most jobs may have 'Not disclosed' salary.",
+            "error_code": "NOT_FOUND",
         }
 
     # Sort by midpoint
@@ -254,6 +256,14 @@ async def naukri_insights(
     new_answer: Optional[str] = None,
     days: int = 30,
     designation: Optional[str] = None,
+    # skill_gap / salary_benchmark params
+    keywords: Optional[str] = None,
+    use_recommendations: bool = True,
+    sample_size: int = 20,
+    include_assessments: bool = True,
+    timeout_seconds: int = 120,
+    location: Optional[str] = None,
+    freshness: Optional[int] = None,
 ) -> dict:
     """Unified intelligence layer — application insights, salary analysis, cached answers.
 
@@ -262,14 +272,23 @@ async def naukri_insights(
       - "salary": Analyze salary positioning across applied jobs
       - "cached_answers": Manage cached screening question answers (list/update/delete)
       - "match_analytics": Match-score analytics for recent applications (distribution + per-field breakdowns)
+      - "skill_gap": Analyze skill gaps between your profile and market demand
+      - "salary_benchmark": Benchmark your salary against market for a given role
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "skill_gap" | "salary_benchmark"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
         days: For applications — analyze last N days (default 30)
         designation: For salary — filter by job title keyword (optional)
+        keywords: For skill_gap/salary_benchmark — search keywords (required for salary_benchmark; required for skill_gap if use_recommendations is False)
+        use_recommendations: For skill_gap — use personalized recommendations (default True)
+        sample_size: For skill_gap/salary_benchmark — number of jobs to analyze (default 20, max 50)
+        include_assessments: For skill_gap — fetch assessments and boost passed-skill frequency (default True)
+        timeout_seconds: For skill_gap/salary_benchmark — max seconds before timeout (default 120)
+        location: For salary_benchmark — city to filter (e.g., "Bangalore"). None = all India.
+        freshness: For salary_benchmark — posted within N days (default None). None = no filter.
 
     Returns:
         - applications: {status, period_days, total_applications, status_breakdown, velocity, top_companies, insights}
@@ -278,6 +297,8 @@ async def naukri_insights(
         - cached_answers update: {status, key, new_answer, message}
         - cached_answers delete: {status, key, message}
         - match_analytics: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}
+        - skill_gap: {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
+        - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -309,6 +330,32 @@ async def naukri_insights(
         except Exception as e:
             return {"status": "error", "message": f"Match analytics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── skill_gap ───────────────────────────────────────────────────
+    elif insight_type == "skill_gap":
+        from naukri_server.tools.skill_gap import _skill_gap_analysis
+        try:
+            return await _skill_gap_analysis(
+                keywords=keywords, use_recommendations=use_recommendations,
+                sample_size=sample_size, include_assessments=include_assessments,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Skill gap analysis failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    # ── salary_benchmark ─────────────────────────────────────────────
+    elif insight_type == "salary_benchmark":
+        if not keywords:
+            return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.research import _salary_benchmark
+        try:
+            return await _salary_benchmark(
+                keywords=keywords, location=location,
+                sample_size=sample_size, freshness=freshness,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Salary benchmark failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, skill_gap, salary_benchmark", "error_code": "VALIDATION_ERROR"}

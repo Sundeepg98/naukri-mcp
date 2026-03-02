@@ -1044,7 +1044,7 @@ async def naukri_profile(
     current_ctc: Optional[float] = None,
     randomize: bool = False,
 ) -> dict:
-    """Unified profile management — get, update, audit, or boost visibility.
+    """Unified profile management — get, update, audit, boost, or dashboard.
 
     Actions:
       - "get": Fetch full profile (skills, employment, education, CTC, etc.)
@@ -1052,9 +1052,10 @@ async def naukri_profile(
                  Some fields may be silently ignored by the API.
       - "audit": Audit profile completeness and get improvement suggestions
       - "boost": Re-save headline to appear as 'recently active' in recruiter searches
+      - "dashboard": Get dashboard data (notifications, profile completeness, activity)
 
     Args:
-        action: "get" | "update" | "audit" | "boost"
+        action: "get" | "update" | "audit" | "boost" | "dashboard"
         fields: Required for update — dict of fields to change. Supported keys:
             resumeHeadline, keySkills, noticePeriod, expectedCtc, currentCtc
         notice_period: Shorthand for update — "Serving Notice Period", "15 Days or less",
@@ -1068,6 +1069,7 @@ async def naukri_profile(
         - update: {status: "updated", updated_fields, method, api_confirmed, message}
         - audit: {status, completeness_pct, grade, strengths, gaps, tips}
         - boost: {status: "refreshed", method, message}
+        - dashboard: {status, profile_views, recruiter_activity_date, ctc_lpa, experience_years, ...}
         - {status: "error", message} on failure
     """
     # ── get ─────────────────────────────────────────────────────────────
@@ -1091,17 +1093,47 @@ async def naukri_profile(
     elif action == "boost":
         return await _boost_visibility(randomize=randomize)
 
+    # ── dashboard ─────────────────────────────────────────────────────
+    elif action == "dashboard":
+        return await _get_dashboard()
+
     # ── unknown action ──────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost, dashboard", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------
-# Separate tool — different API, different purpose
+# Dashboard TTL cache (30s) for composite tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def naukri_get_dashboard() -> dict:
+_dashboard_cache: dict | None = None
+_dashboard_cache_time: float = 0
+_dashboard_lock = asyncio.Lock()
+_DASHBOARD_TTL = 30  # seconds
+
+
+async def get_cached_dashboard(ttl: int = _DASHBOARD_TTL) -> dict:
+    """Dashboard data with TTL cache (30s default)."""
+    global _dashboard_cache, _dashboard_cache_time
+    now = _time.monotonic()
+    if _dashboard_cache and (now - _dashboard_cache_time) < ttl:
+        return _dashboard_cache
+    async with _dashboard_lock:
+        now = _time.monotonic()
+        if _dashboard_cache and (now - _dashboard_cache_time) < ttl:
+            return _dashboard_cache
+        result = await _get_dashboard()
+        if result.get("status") == "success":
+            _dashboard_cache = result
+            _dashboard_cache_time = now
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Dashboard helper (merged into naukri_profile action="dashboard")
+# ---------------------------------------------------------------------------
+
+async def _get_dashboard() -> dict:
     """Get your Naukri dashboard summary via API.
 
     Returns profile views, recruiter activity, CTC, experience,
@@ -1229,3 +1261,7 @@ async def naukri_get_dashboard() -> dict:
         return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+# Backward-compat alias
+naukri_get_dashboard = _get_dashboard

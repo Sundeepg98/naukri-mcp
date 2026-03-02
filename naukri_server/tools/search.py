@@ -236,9 +236,7 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     return result
 
 
-@mcp.tool()
-@api_tool("Get similar jobs")
-async def naukri_get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
+async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
     """Get jobs similar to a given job posting on Naukri.com.
 
     Requires: a job_id from naukri_search_jobs or naukri_get_job results.
@@ -252,30 +250,38 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -
         - {status: "success", job_id, source: "similar", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    limit = validate_limit(limit)
-    page = validate_page(page)
-    data = await api_get(SIMILAR_JOBS_API + job_id, params={
-        "noOfResults": str(limit * page),
-        "searchType": "sim",
-    })
-    # Similar jobs uses simJobDetails with content + collaborative arrays
-    sim = data.get("simJobDetails", {})
-    job_details = sim.get("content", []) + sim.get("collaborative", [])
-    all_jobs = _parse_job_list(job_details, len(job_details))
-    total = data.get("noOfJobs") or len(all_jobs)
-    offset = (page - 1) * limit
-    jobs = all_jobs[offset:offset + limit]
-    result = {
-        "status": "success",
-        "job_id": job_id,
-        "source": "similar",
-        "total": total,
-        "count": len(jobs),
-        "page": page,
-        "has_more": (offset + limit) < total,
-        "jobs": jobs,
-    }
-    warnings = validate_job_list(jobs, total, "similar_jobs")
-    if warnings:
-        result["warnings"] = warnings
-    return result
+    try:
+        limit = validate_limit(limit)
+        page = validate_page(page)
+        data = await api_get(SIMILAR_JOBS_API + job_id, params={
+            "noOfResults": str(limit * page),
+            "searchType": "sim",
+        })
+        # Similar jobs uses simJobDetails with content + collaborative arrays
+        sim = data.get("simJobDetails", {})
+        job_details = sim.get("content", []) + sim.get("collaborative", [])
+        all_jobs = _parse_job_list(job_details, len(job_details))
+        total = data.get("noOfJobs") or len(all_jobs)
+        offset = (page - 1) * limit
+        jobs = all_jobs[offset:offset + limit]
+        result = {
+            "status": "success",
+            "job_id": job_id,
+            "source": "similar",
+            "total": total,
+            "count": len(jobs),
+            "page": page,
+            "has_more": (offset + limit) < total,
+            "jobs": jobs,
+        }
+        warnings = validate_job_list(jobs, total, "similar_jobs")
+        if warnings:
+            result["warnings"] = warnings
+        return result
+    except NaukriAPIError as e:
+        return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "AUTH_ERROR" if e.status == 401 else "API_ERROR"}
+    except Exception as e:
+        return {"status": "error", "message": f"Get similar jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+naukri_get_similar_jobs = _get_similar_jobs

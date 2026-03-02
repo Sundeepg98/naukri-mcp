@@ -9,8 +9,7 @@ from naukri_server.config import logger
 from naukri_server.scoring import normalize_skill, parse_skills
 
 
-@mcp.tool()
-async def naukri_skill_gap_analysis(
+async def _skill_gap_analysis(
     keywords: Optional[str] = None,
     use_recommendations: bool = True,
     sample_size: int = 20,
@@ -173,3 +172,6 @@ async def naukri_skill_gap_analysis(
         return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return {"status": "partial_success", "message": f"Timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}
+
+
+naukri_skill_gap_analysis = _skill_gap_analysis

@@ -298,47 +298,54 @@ class NaukriBrowser:
         self.context: Optional[BrowserContext] = None
         self.token_manager = TokenManager()
         self.page_pool: Optional[PagePool] = None
+        self.available = False
 
     async def start(self):
-        self.pw = await async_playwright().start()
-        self.context = await self.pw.chromium.launch_persistent_context(
-            user_data_dir=CHROME_PROFILE,
-            headless=False,
-            viewport={"width": 1280, "height": 800},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        try:
+            self.pw = await async_playwright().start()
+            self.context = await self.pw.chromium.launch_persistent_context(
+                user_data_dir=CHROME_PROFILE,
+                headless=False,
+                viewport={"width": 1280, "height": 800},
+                args=["--disable-blink-features=AutomationControlled"],
+            )
 
-        # Initialize token manager
-        self.token_manager.bind(self.context)
-        await self.token_manager.extract()
+            # Initialize token manager
+            self.token_manager.bind(self.context)
+            await self.token_manager.extract()
 
-        # Initialize page pool with first page
-        first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+            # Initialize page pool with first page
+            first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
 
-        self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
-        await self.page_pool.initialize(first_page)
+            self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
+            await self.page_pool.initialize(first_page)
 
-        logger.info("Browser started (pool: %d max tabs), token: %s",
-                     MAX_TABS, "found" if self.token_manager._token else "none")
+            logger.info("Browser started (pool: %d max tabs), token: %s",
+                         MAX_TABS, "found" if self.token_manager._token else "none")
 
-        # Validate session
-        if self.token_manager._token:
-            try:
-                from naukri_server.api import api_get
-                from naukri_server.config import PROFILE_API as _PROFILE_API
-                await asyncio.wait_for(
-                    api_get(
-                        _PROFILE_API,
-                        {"expand_level": "1"},
-                    ),
-                    timeout=5,
-                )
-                logger.info("Session validated — token is active")
-            except asyncio.TimeoutError:
-                logger.warning("Session validation timed out — will validate lazily on first tool call")
-            except Exception as e:
-                logger.warning("Token found but invalid: %s. Call naukri_login.", e)
-                self.token_manager.invalidate()
+            # Validate session
+            if self.token_manager._token:
+                try:
+                    from naukri_server.api import api_get
+                    from naukri_server.config import PROFILE_API as _PROFILE_API
+                    await asyncio.wait_for(
+                        api_get(
+                            _PROFILE_API,
+                            {"expand_level": "1"},
+                        ),
+                        timeout=5,
+                    )
+                    logger.info("Session validated — token is active")
+                except asyncio.TimeoutError:
+                    logger.warning("Session validation timed out — will validate lazily on first tool call")
+                except Exception as e:
+                    logger.warning("Token found but invalid: %s. Call naukri_login.", e)
+                    self.token_manager.invalidate()
+
+            self.available = True
+        except Exception as e:
+            logger.error("Browser startup failed: %s. REST-only mode active.", e)
+            self.available = False
 
     async def stop(self):
         from naukri_server.api import close_session

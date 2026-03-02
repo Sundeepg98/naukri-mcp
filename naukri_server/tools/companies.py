@@ -327,25 +327,38 @@ async def naukri_company(
     group_id: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
+    # research params
+    include_jobs: bool = True,
+    include_reviews: bool = True,
+    include_interviews: bool = True,
+    jobs_limit: int = 5,
+    timeout_seconds: int = 120,
 ) -> dict:
-    """Unified company discovery — search companies, browse jobs, or get AmbitionBox slug.
+    """Unified company discovery — search companies, browse jobs, get AmbitionBox slug, or research a company.
 
     Actions:
       - "search": Search companies by name/industry (requires keyword)
       - "jobs": Get job listings for a specific company (requires group_id)
       - "slug": Convert group_id to AmbitionBox company slug (requires group_id)
+      - "research": Comprehensive company research — jobs, salary, reviews, interviews (requires keyword)
 
     Args:
-        action: "search" | "jobs" | "slug"
-        keyword: Company name or industry keyword (required for search)
+        action: "search" | "jobs" | "slug" | "research"
+        keyword: Company name or industry keyword (required for search, research)
         group_id: Company group ID from search results (required for jobs, slug)
         page: Page number for pagination (default 1, used by search/jobs)
         limit: Max results per page (default 20, used by search/jobs)
+        include_jobs: Include open job listings (default True, research only)
+        include_reviews: Include AmbitionBox salary/review data (default True, research only)
+        include_interviews: Include AmbitionBox interview experiences (default True, research only)
+        jobs_limit: Max jobs to include (default 5, research only)
+        timeout_seconds: Max seconds before timeout (default 120, research only)
 
     Returns:
         - search: {status, keyword, page, total, count, companies: [...]}
         - jobs: {status, group_id, page, total, count, jobs: [...]}
         - slug: {status, group_id, company_slug, company_name}
+        - research: {status, company_name, slug, jobs, salary, reviews, interviews, errors?}
         - {status: "error", message} on failure
     """
     # ── search ─────────────────────────────────────────────────────────
@@ -381,9 +394,23 @@ async def naukri_company(
         except Exception as e:
             return {"status": "error", "message": f"Get company slug failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── research ────────────────────────────────────────────────────────
+    elif action == "research":
+        if not keyword:
+            return {"status": "error", "message": "research requires keyword.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.research import _research_company
+        try:
+            return await _research_company(
+                keyword=keyword, include_jobs=include_jobs,
+                include_reviews=include_reviews, include_interviews=include_interviews,
+                jobs_limit=jobs_limit, timeout_seconds=timeout_seconds,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Research failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, research", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------

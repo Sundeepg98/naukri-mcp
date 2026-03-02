@@ -170,9 +170,11 @@ async def _api_request(method: str, path: str, params: dict = None,
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
 
-        # Transient server errors — immediate retry (no backoff)
+        # Transient server errors — exponential backoff retry
         if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < MAX_RETRIES:
-            logger.info("Transient error %s, retrying (attempt %d)...", resp.status, _attempt + 1)
+            delay = BACKOFF_BASE * (2 ** _attempt)
+            logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
+            await asyncio.sleep(delay)
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
 

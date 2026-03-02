@@ -2,13 +2,11 @@
 
 import asyncio
 
-from naukri_server import mcp
 from naukri_server.config import logger
 from naukri_server.scoring import compute_fit_score, parse_skills
 
 
-@mcp.tool()
-async def naukri_compare_jobs(
+async def _compare_jobs(
     job_ids: list[str],
     timeout_seconds: int = 120,
 ) -> dict:
@@ -73,8 +71,8 @@ async def naukri_compare_jobs(
             async with _applications_lock:
                 local_apps = _load_json(APPLICATIONS_FILE)
                 local_applied_ids = {str(a.get("job_id")) for a in local_apps}
-        except Exception:
-            pass  # Non-critical — just use API is_applied
+        except Exception as e:
+            logger.debug("Scoring failed for job cross-ref: %s", e)
 
         jobs = []
         errors = []
@@ -164,3 +162,6 @@ async def naukri_compare_jobs(
         return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return {"status": "partial_success", "message": f"Timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}
+
+
+naukri_compare_jobs = _compare_jobs
