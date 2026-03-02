@@ -3,14 +3,16 @@ Browser state — Playwright browser with multi-tab page pool and cached token m
 """
 
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
-from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, logger
+from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, logger
 
 
 class TokenManager:
@@ -26,6 +28,8 @@ class TokenManager:
         """Bind to a browser context for cookie extraction."""
         self._context = context
 
+    _AUTH_STATE_FILE = Path(CHROME_PROFILE) / "auth_state.json"
+
     async def extract(self):
         """Pull token + cookies from browser context into cache."""
         if not self._context:
@@ -36,10 +40,21 @@ class TokenManager:
             for c in cookies:
                 if c["name"] == "nauk_at":
                     self._token = c["value"]
+                    self._export_auth_state()
                     return
         except Exception as e:
             logger.debug("Token extraction failed: %s", e)
         self._token = None
+
+    def _export_auth_state(self):
+        """Write current token + cookies to file for cross-process agents."""
+        try:
+            state = {"token": self._token, "cookies": self._cookies or "", "exported_at": time.time(), "cdp_port": CDP_PORT}
+            tmp = self._AUTH_STATE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state))
+            tmp.replace(self._AUTH_STATE_FILE)
+        except Exception as e:
+            logger.debug("Auth state export failed: %s", e)
 
     def get_token(self) -> str:
         """Get cached JWT token. Raises if not available."""
@@ -310,7 +325,10 @@ class NaukriBrowser:
                 user_data_dir=CHROME_PROFILE,
                 headless=False,
                 viewport={"width": 1280, "height": 800},
-                args=["--disable-blink-features=AutomationControlled"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    f"--remote-debugging-port={CDP_PORT}",
+                ],
             )
 
             # Initialize token manager

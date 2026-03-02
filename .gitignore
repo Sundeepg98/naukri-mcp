@@ -25,6 +25,9 @@ docs/plans/
 # Sync state
 sync_state.json
 
+# Early access tracking
+early_access_tracking.json
+
 # Exported data
 exports/
 
