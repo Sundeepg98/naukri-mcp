@@ -140,7 +140,8 @@ async def naukri_auth(
     """Unified authentication — login, OTP verification, and session status.
 
     Actions:
-      - "login": Login via Google SSO or email/password (use method, email, password)
+      - "login": Login via Google SSO or email/password (use method, email, password).
+                 Google login requires manual browser interaction.
       - "verify_otp": Submit OTP after login returns needs_otp (use otp)
       - "status": Quick check if your Naukri session is still active
 

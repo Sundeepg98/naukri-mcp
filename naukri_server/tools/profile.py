@@ -1048,7 +1048,8 @@ async def naukri_profile(
 
     Actions:
       - "get": Fetch full profile (skills, employment, education, CTC, etc.)
-      - "update": Update profile fields via browser UI (requires fields dict)
+      - "update": Update profile fields via browser UI (requires fields dict).
+                 Some fields may be silently ignored by the API.
       - "audit": Audit profile completeness and get improvement suggestions
       - "boost": Re-save headline to appear as 'recently active' in recruiter searches
 

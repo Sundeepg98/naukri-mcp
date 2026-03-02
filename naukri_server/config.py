@@ -114,7 +114,6 @@ MOCK_INTERVIEW_HISTORY_API = "/cloudgateway-naukri360/jobseeker-order-management
 MOCK_INTERVIEW_ROLE_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/role"
 MOCK_INTERVIEW_OTHER_TOPICS_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/other-topics"
 MOCK_INTERVIEW_QUESTION_API = "/cloudgateway-naukri360/jobseeker-order-management-services/v0/users/self/mock-interview/question"
-MOCK_INTERVIEW_CONFIG_API = "/n360-services/v1/config-mock-interview"
 
 # Resume & Photo
 RESUME_DOWNLOAD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/resume"

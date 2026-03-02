@@ -236,6 +236,8 @@ async def naukri_batch_apply(
     remaining jobs concurrently. Screening questions are auto-answered from
     the cache or the provided answers dict.
 
+    Note: No built-in rate limiting between applications.
+
     For applying to a single specific job, use naukri_apply instead.
 
     Args:

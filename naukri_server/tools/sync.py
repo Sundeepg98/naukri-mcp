@@ -698,6 +698,8 @@ async def naukri_sync(
 ) -> dict:
     """Unified sync — pull applied jobs or saved jobs from Naukri.com into local tracking.
 
+    Note: Uses 3-tier fallback (REST → browser → HTML scrape).
+
     Entities:
       - "applications": Sync applied jobs (3-tier fallback: REST API → browser intercept → HTML scrape).
                         Merges with local applications.json, preserves local-only fields.
