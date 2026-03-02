@@ -50,10 +50,10 @@ async def naukri_research_company(
     # Step 1: Search for jobs at this company
     if include_jobs:
         try:
-            from naukri_server.tools.companies import naukri_search_companies, naukri_get_company_jobs
+            from naukri_server.tools.companies import _search_companies, _get_company_jobs
 
             # Step 1: Find the company's group_id
-            company_result = await naukri_search_companies(keyword=keyword)
+            company_result = await _search_companies(keyword=keyword)
             group_id = None
             if company_result.get("status") == "success":
                 companies = company_result.get("companies", [])
@@ -63,7 +63,7 @@ async def naukri_research_company(
 
             if group_id:
                 # Step 2: Get company jobs by group_id (exact match)
-                jobs_result = await naukri_get_company_jobs(group_id=str(group_id), limit=jobs_limit)
+                jobs_result = await _get_company_jobs(group_id=str(group_id), limit=jobs_limit)
                 if jobs_result.get("status") == "success":
                     result["jobs"] = {
                         "total": jobs_result.get("total", 0),

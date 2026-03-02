@@ -701,7 +701,7 @@ async def naukri_sync(
     Entities:
       - "applications": Sync applied jobs (3-tier fallback: REST API → browser intercept → HTML scrape).
                         Merges with local applications.json, preserves local-only fields.
-                        For just viewing local applications, use naukri_get_applications instead.
+                        For just viewing local applications, use naukri_applications(action="list") instead.
       - "saved_jobs": Sync saved/bookmarked jobs (REST API → browser intercept).
                      Merges with local saved_jobs.json.
                      For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.

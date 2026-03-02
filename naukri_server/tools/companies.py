@@ -1,12 +1,15 @@
-"""Company tools — search companies, browse company jobs, follow/unfollow."""
+"""Company tools — search, browse jobs, get slug, follow/unfollow."""
 
+import asyncio
+import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
+from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list
 
 _COMPANY_HEADERS = {"appid": "103"}
@@ -37,24 +40,27 @@ def _first(lst):
     return lst[0] if isinstance(lst, list) and lst else None
 
 
-@mcp.tool()
-@api_tool("Company search")
-async def naukri_search_companies(
-    keyword: str,
-    page: int = 1,
-    limit: int = 20,
-) -> dict:
-    """Search for companies on Naukri.com by name or industry.
+def _extract_slug_from_url(url: str) -> str | None:
+    """Extract AmbitionBox company slug from a URL like /reviews/google-reviews or /salaries/tcs-salaries."""
+    if not url:
+        return None
+    # Match patterns: /reviews/{slug}-reviews, /salaries/{slug}-salaries, /overview/{slug}-overview
+    match = re.search(r'/(?:reviews|salaries|overview)/([a-z0-9-]+?)(?:-(?:reviews|salaries|overview))?(?:\?|$|/)', url, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Simpler pattern: ambitionbox.com/{section}/{slug}
+    match = re.search(r'ambitionbox\.com/\w+/([a-z0-9-]+)', url, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
 
-    Args:
-        keyword: Company name or industry keyword (e.g., "Google", "fintech")
-        page: Page number for pagination (default 1)
-        limit: Max results per page (default 20)
 
-    Returns:
-        - {status: "success", keyword, page, total, count, companies: [{group_id, name, type, industry, size, ownership, rating, review_count, logo_url, jobs_url}]}
-        - {status: "error", message}
-    """
+# ---------------------------------------------------------------------------
+# Internal helpers (not MCP tools — used by the unified naukri_company tool)
+# ---------------------------------------------------------------------------
+
+async def _search_companies(keyword: str, page: int = 1, limit: int = 20) -> dict:
+    """Search for companies on Naukri.com by name or industry."""
     limit = min(limit, 50)
     if page < 1:
         return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
@@ -88,25 +94,8 @@ async def naukri_search_companies(
     return result
 
 
-@mcp.tool()
-async def naukri_get_company_jobs(
-    group_id: str,
-    page: int = 1,
-    limit: int = 20,
-) -> dict:
-    """Get job listings from a specific company on Naukri.com.
-
-    Requires: group_id from naukri_search_companies results.
-
-    Args:
-        group_id: Company group ID (from naukri_search_companies results)
-        page: Page number for pagination (default 1)
-        limit: Max jobs to return (default 20, max 50)
-
-    Returns:
-        - {status: "success", group_id, page, total, count, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
-        - {status: "error", message}
-    """
+async def _get_company_jobs(group_id: str, page: int = 1, limit: int = 20) -> dict:
+    """Get job listings from a specific company on Naukri.com."""
     limit = min(limit, 50)
     if page < 1:
         return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
@@ -139,6 +128,141 @@ async def naukri_get_company_jobs(
             return result
         except Exception as e:
             return {"status": "error", "message": f"Failed to get company jobs: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+async def _get_company_slug(group_id: str) -> dict:
+    """Convert a Naukri company group_id to an AmbitionBox company slug."""
+    async with browser.page_pool.acquire() as page:
+        try:
+            # Navigate to the Naukri company overview page — it embeds AmbitionBox links
+            page_url = f"{NAUKRI_BASE}/company/{group_id}"
+            logger.info("Navigating to Naukri company page for slug extraction: %s", page_url)
+
+            # Intercept the company API response which contains ambitionBoxData
+            captured = {}
+            event = asyncio.Event()
+
+            async def on_response(response):
+                try:
+                    url = response.url
+                    # Company info API returns ambitionBoxData with Url field
+                    if response.status == 200 and (
+                        f"/companyapi/v1/company/{group_id}" in url
+                        or f"/companyapi/v2/company/{group_id}" in url
+                        or (f"/company/{group_id}" in url and "api" in url)
+                    ):
+                        data = await response.json()
+                        captured["company"] = data
+                        event.set()
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+            try:
+                await page_goto(page, page_url)
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.warning("Company API response not captured after 10s for group_id: %s", group_id)
+            finally:
+                page.remove_listener("response", on_response)
+
+            # Strategy 1: Extract from intercepted API response
+            company_data = captured.get("company", {})
+            ambition_data = (
+                company_data.get("ambitionBoxData")
+                or company_data.get("ambitionBox")
+                or {}
+            )
+            company_name = (
+                company_data.get("companyName")
+                or company_data.get("groupName")
+                or company_data.get("name")
+            )
+
+            # Look for AmbitionBox URL in the data — e.g., Url: "/reviews/google-reviews"
+            ab_url = ambition_data.get("Url") or ambition_data.get("url") or ""
+            slug = _extract_slug_from_url(ab_url)
+
+            if slug:
+                return {
+                    "status": "success",
+                    "group_id": group_id,
+                    "company_slug": slug,
+                    "company_name": company_name or slug.replace("-", " ").title(),
+                }
+
+            # Strategy 2: Scrape AmbitionBox links from the rendered page
+            logger.info("API interception didn't yield slug, trying DOM scrape")
+            await asyncio.sleep(2)  # Let page render fully
+            ab_link = await page.evaluate("""
+                () => {
+                    // Look for links to ambitionbox.com
+                    for (const a of document.querySelectorAll('a[href*="ambitionbox.com"]')) {
+                        return a.href;
+                    }
+                    // Fallback: look for data attributes or embedded JSON
+                    const scripts = document.querySelectorAll('script');
+                    for (const s of scripts) {
+                        const text = s.textContent || '';
+                        const match = text.match(/ambitionbox\\.com\\/(?:reviews|salaries)\\/([a-z0-9-]+)/i);
+                        if (match) return match[0];
+                    }
+                    return null;
+                }
+            """)
+
+            if ab_link:
+                slug = _extract_slug_from_url(ab_link)
+                if slug:
+                    # Get company name from page if not already found
+                    if not company_name:
+                        company_name = await page.evaluate("""
+                            () => {
+                                const h1 = document.querySelector('h1');
+                                return h1 ? h1.textContent.trim() : null;
+                            }
+                        """)
+                    return {
+                        "status": "success",
+                        "group_id": group_id,
+                        "company_slug": slug,
+                        "company_name": company_name or slug.replace("-", " ").title(),
+                    }
+
+            # Strategy 3: Derive slug from company name (fallback)
+            if not company_name:
+                company_name = await page.evaluate("""
+                    () => {
+                        const h1 = document.querySelector('h1');
+                        return h1 ? h1.textContent.trim() : null;
+                    }
+                """)
+
+            if company_name:
+                slug = derive_slug(company_name)
+                return {
+                    "status": "success",
+                    "group_id": group_id,
+                    "company_slug": slug,
+                    "company_name": company_name,
+                    "derived": True,
+                    "_note": "Slug derived from company name — may not match AmbitionBox exactly. Verify with naukri_company_intel.",
+                }
+
+            return {
+                "status": "error",
+                "message": f"Could not determine AmbitionBox slug for group_id '{group_id}'. The company page may not have AmbitionBox integration.",
+                "error_code": "NOT_FOUND",
+            }
+
+        except Exception as e:
+            logger.error("Failed to get company slug: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to get company slug: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +319,77 @@ async def _follow_or_unfollow(group_ids: list[str], action: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
+# Unified MCP tool — company discovery (search, jobs, slug)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_company(
+    action: str = "search",
+    keyword: Optional[str] = None,
+    group_id: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20,
+) -> dict:
+    """Unified company discovery — search companies, browse jobs, or get AmbitionBox slug.
+
+    Actions:
+      - "search": Search companies by name/industry (requires keyword)
+      - "jobs": Get job listings for a specific company (requires group_id)
+      - "slug": Convert group_id to AmbitionBox company slug (requires group_id)
+
+    Args:
+        action: "search" | "jobs" | "slug"
+        keyword: Company name or industry keyword (required for search)
+        group_id: Company group ID from search results (required for jobs, slug)
+        page: Page number for pagination (default 1, used by search/jobs)
+        limit: Max results per page (default 20, used by search/jobs)
+
+    Returns:
+        - search: {status, keyword, page, total, count, companies: [...]}
+        - jobs: {status, group_id, page, total, count, jobs: [...]}
+        - slug: {status, group_id, company_slug, company_name}
+        - {status: "error", message} on failure
+    """
+    # ── search ─────────────────────────────────────────────────────────
+    if action == "search":
+        if not keyword:
+            return {"status": "error", "message": "keyword is required for action='search'.", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _search_companies(keyword=keyword, page=page, limit=limit)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Company search failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    # ── jobs ───────────────────────────────────────────────────────────
+    elif action == "jobs":
+        if not group_id:
+            return {"status": "error", "message": "group_id is required for action='jobs'.", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _get_company_jobs(group_id=group_id, page=page, limit=limit)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Get company jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    # ── slug ───────────────────────────────────────────────────────────
+    elif action == "slug":
+        if not group_id:
+            return {"status": "error", "message": "group_id is required for action='slug'.", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _get_company_slug(group_id=group_id)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Get company slug failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    # ── unknown action ─────────────────────────────────────────────────
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Unified MCP tool — company follow management
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -205,7 +399,7 @@ async def naukri_company_follow(
 ) -> dict:
     """Unified company follow management — check status, follow, or unfollow.
 
-    Requires: group_ids from naukri_search_companies results.
+    Requires: group_ids from naukri_company(action="search") results.
 
     Actions:
       - "status": Check follow status for given company IDs
@@ -214,7 +408,7 @@ async def naukri_company_follow(
 
     Args:
         action: "status" | "follow" | "unfollow"
-        group_ids: List of company group IDs (from naukri_search_companies results)
+        group_ids: List of company group IDs (from naukri_company search results)
 
     Returns:
         - status: {status, followed: [...ids...], not_followed: [...ids...]}

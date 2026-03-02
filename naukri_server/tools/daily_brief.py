@@ -24,12 +24,12 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.notifications import _fetch_notifications
     from naukri_server.tools.search import naukri_get_recommendations
     from naukri_server.tools.performance import _get_recruiter_activity, _get_activity_level
-    from naukri_server.tools.tracking import naukri_get_applications
+    from naukri_server.tools.tracking import _list_applications
     from naukri_server.tools.profile import naukri_get_dashboard
     from naukri_server.tools.early_access import _list_early_access_roles
     from naukri_server.tools.subscription import naukri_get_subscription_status
     from naukri_server.tools.reminders import _list_reminders
-    from naukri_server.tools.tracking import naukri_get_stale_applications
+    from naukri_server.tools.tracking import _get_stale_applications
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors = []
@@ -40,12 +40,12 @@ async def naukri_daily_brief() -> dict:
         naukri_get_recommendations(limit=5),
         _get_recruiter_activity(size=5),
         _get_activity_level(),
-        naukri_get_applications(date_from=today),
+        _list_applications(date_from=today),
         naukri_get_dashboard(),
         _list_early_access_roles(limit=3),
         naukri_get_subscription_status(),
         _list_reminders(include_past=True),
-        naukri_get_stale_applications(days_threshold=14, min_stale_score=50),
+        _get_stale_applications(days_threshold=14, min_stale_score=50),
         return_exceptions=True,
     )
 

@@ -1,7 +1,7 @@
 """Naukri.com Job Automation MCP Server — Tier 13 (49 tools)
 
 Quick Start for AI consumers:
-  1. naukri_login / naukri_get_login_status → authenticate first
+  1. naukri_auth(action="login|verify_otp|status") → authenticate first
   2. naukri_daily_brief → morning dashboard (inbox, notifications, recommendations, activity)
   3. naukri_search_jobs / naukri_get_recommendations → find jobs
   4. naukri_smart_apply(job_id) → fit assessment before applying
@@ -9,17 +9,19 @@ Quick Start for AI consumers:
   6. naukri_compare_jobs([id1, id2]) → side-by-side comparison
   7. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages
   8. naukri_sync(entity="applications|saved_jobs") → sync tracking data
-  9. naukri_get_applications / naukri_saved_jobs(action="list|save|unsave") → track
+  9. naukri_applications(action="list|detail|purge|stale") / naukri_saved_jobs(action="list|save|unsave") → track
   10. naukri_research_company / naukri_company_intel(intel_type="salary|reviews|interviews") → company intel
   11. naukri_profile(action="get|update|audit|boost") → profile management
   12. naukri_get_dashboard → profile analytics
 
 Consolidated tools (action-parameter pattern):
+  - naukri_auth(action="login|verify_otp|status")
   - naukri_profile(action="get|update|audit|boost")
   - naukri_inbox(action="list|read|mark_interested|accept_nvite")
   - naukri_performance(metric="impressions|recruiter_activity|activity_level")
   - naukri_mock_interview(action="topics|history|start|answer")
   - naukri_company_intel(company, intel_type="salary|reviews|interviews")
+  - naukri_applications(action="list|detail|purge|stale")
   - naukri_saved_jobs(action="list|save|unsave")
   - naukri_early_access(action="list|share")
   - naukri_profile_media(media_type="resume|photo", action="info|upload|download|delete")
