@@ -5,7 +5,8 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import JOB_DETAIL_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, logger
+from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, logger
+from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
 
@@ -351,6 +352,91 @@ async def _report_fraud(job_id: str, reason: str) -> dict:
 naukri_report_fraud_job = _report_fraud
 
 
+async def _bulk_fetch_jobs(job_ids: list) -> dict:
+    """Fetch multiple jobs in a single API call. Max efficiency for batch operations."""
+    if not job_ids or len(job_ids) < 1:
+        return {"status": "error", "message": "Provide at least 1 job_id", "error_code": "VALIDATION_ERROR"}
+    if len(job_ids) > 20:
+        job_ids = job_ids[:20]
+
+    data = await api_post(BULK_JOBS_API, {"jobIds": job_ids})
+    raw_jobs = data.get("jobDetails", [])
+
+    jobs = _parse_job_list(raw_jobs, len(raw_jobs))
+
+    return {
+        "status": "success",
+        "count": len(jobs),
+        "jobs": jobs,
+    }
+
+
+async def _get_job_v1(job_id: str) -> dict:
+    """Get enriched job detail from V1 API — walk-in, contact, metrics, closing date."""
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+
+    data = await api_get(JOB_DETAIL_V1_API + job_id)
+    job = data.get("job", data)
+
+    result = {
+        "status": "success",
+        "job_id": job.get("jobId"),
+        "title": job.get("post"),
+        "company": job.get("companyName"),
+        "company_id": job.get("companyId"),
+        "group_id": job.get("groupId"),
+        # Walk-in (V1-unique)
+        "is_walk_in": job.get("isWalkIn", False),
+        "walkin_time": job.get("walkinTime"),
+        "walkin_venue": job.get("walkinVenue"),
+        "walkin_date_from": job.get("walkingDateFrom"),
+        "walkin_date_to": job.get("walkingDateTo"),
+        # Contact (V1-unique)
+        "contact_name": job.get("contactName"),
+        "contact_email": job.get("email") or None,
+        "contact_phone": job.get("tel") or None,
+        "contact_designation": job.get("CONTDESIG"),
+        # Metrics (V1-unique)
+        "jd_views": job.get("jdViews"),
+        "jd_applies": job.get("jdApplies"),
+        "vacancy": job.get("noOfVacancy") or None,
+        # Dates
+        "closing_date": job.get("closingDate"),
+        "is_expired": job.get("isExpiredJob", False),
+        "posted_date": job.get("addDate"),
+        # Salary
+        "salary_min": job.get("minSal"),
+        "salary_max": job.get("maxSal"),
+        "salary_hidden": job.get("showSal") == "n",
+        # Experience
+        "experience_min": job.get("minExp"),
+        "experience_max": job.get("maxExp"),
+        # Location
+        "location": job.get("city"),
+        "work_mode": {"0": "office", "2": "remote", "3": "hybrid"}.get(job.get("wfhType", "0"), "unknown"),
+        # Content
+        "description": job.get("jobDesc"),
+        "company_profile": job.get("companyProfile") or None,
+        "keywords": job.get("keywords"),
+        "employment_type": job.get("employmentType"),
+        # Education
+        "ug_course": job.get("ugCourse"),
+        "pg_course": job.get("pgCourse"),
+        # Internship (V1-unique)
+        "internship_start": job.get("internshipStartDate"),
+        "internship_duration": job.get("internshipDuration"),
+        "internship_ppo": job.get("internshipPpo"),
+        # Status
+        "is_saved": bool(job.get("isSavedJob", 0)),
+        "is_consultant": job.get("cons") == "y",
+        "hiring_for": job.get("hiringFor") or None,
+    }
+
+    # Strip None values
+    return {k: v for k, v in result.items() if v is not None}
+
+
 @mcp.tool()
 async def naukri_jobs(
     action: str = "get",
@@ -370,14 +456,16 @@ async def naukri_jobs(
         similar: Find jobs similar to a given job_id.
         compare: Compare 2-5 jobs side-by-side with fit scores.
         report_fraud: Report a fraudulent job listing.
+        detail_v1: Get V1 job detail — walk-in info, contact details, jd views/applies, closing date
+        bulk: Fetch multiple jobs at once — up to 20 job IDs in one call
 
     Args:
-        action: "get", "similar", "compare", or "report_fraud"
-        job_id: Job ID or full Naukri URL (required for get, similar, report_fraud)
+        action: "get", "similar", "compare", "report_fraud", "detail_v1", or "bulk"
+        job_id: Job ID or full Naukri URL (required for get, similar, report_fraud, detail_v1)
         reason: Reason for fraud report (required for report_fraud)
         limit: Max similar jobs to return (default 10, for similar action)
         page: Page number for similar jobs (default 1, for similar action)
-        job_ids: List of 2-5 job IDs to compare (required for compare action)
+        job_ids: List of 2-5 job IDs to compare (required for compare action), or up to 20 for bulk
         timeout_seconds: Max seconds for compare before timeout (default 120)
 
     Returns:
@@ -385,6 +473,8 @@ async def naukri_jobs(
         similar: {status, job_id, source, total, count, page, has_more, jobs: [...]}
         compare: {status, count, jobs: [...], common_skills, all_skills, best_match_job_id, average_fit_score}
         report_fraud: {status, message}
+        detail_v1: {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}
+        bulk: {status, count, jobs: [...]}
     """
     if action == "get":
         if not job_id:
@@ -406,6 +496,20 @@ async def naukri_jobs(
             return await _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds)
         except Exception as e:
             return {"status": "error", "message": f"Compare failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+    elif action == "bulk":
+        if not job_ids:
+            return {"status": "error", "message": "bulk requires job_ids (list of 1-20 IDs).", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _bulk_fetch_jobs(job_ids=job_ids)
+        except Exception as e:
+            return {"status": "error", "message": f"Bulk fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+    elif action == "detail_v1":
+        if not job_id:
+            return {"status": "error", "message": "job_id required for detail_v1", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _get_job_v1(job_id=job_id)
+        except Exception as e:
+            return {"status": "error", "message": f"V1 detail failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
     elif action == "report_fraud":
         if not job_id:
             return {"status": "error", "message": "job_id required for report_fraud", "error_code": "VALIDATION_ERROR"}
@@ -416,4 +520,4 @@ async def naukri_jobs(
         except Exception as e:
             return {"status": "error", "message": f"Report fraud failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, report_fraud", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, bulk, detail_v1, report_fraud", "error_code": "VALIDATION_ERROR"}

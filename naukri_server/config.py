@@ -176,6 +176,11 @@ RESUME_MAX_SIZE_MB = 5              # Max resume upload size in MB
 BULK_FETCH_CONCURRENCY = 3          # Concurrency limit for bulk job detail fetches
 BATCH_APPLY_DEFAULT_CONCURRENCY = 3 # Default max_concurrent for batch operations
 
+# Tier 21: Validated endpoints from deep probing (2026-03-02)
+BULK_JOBS_API = "/jobapi/v2/jobs"                          # POST {jobIds: [...]}
+JOB_DETAIL_V1_API = "/jobapi/v1/job/"                      # GET + job_id (97 keys, walk-in/contact/metrics)
+INBOX_REST_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/inbox/users/self/mails"  # GET with pageSize/pageNo/mailType
+
 # Company API (different appid from main API — discovered via webpack analysis)
 COMPANY_API_HEADERS = {
     "appid": "103",

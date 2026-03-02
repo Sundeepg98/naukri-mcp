@@ -85,7 +85,7 @@ class TestSettings:
         with patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"sections": []}
             result = await naukri_settings(action="get")
-            mock_api.assert_awaited_once()
+            assert mock_api.await_count >= 1  # formatted + raw settings APIs
             assert result["status"] == "success"
             assert "settings" in result
 

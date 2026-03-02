@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server — Tier 20 (26 tools)
+"""Naukri.com Job Automation MCP Server — Tier 21 (26 tools, 981 tests)
 
 Quick Start for AI consumers:
   1. naukri_auth(action="login|verify_otp|status") → authenticate first
@@ -9,13 +9,13 @@ Quick Start for AI consumers:
   6. naukri_applications(action="apply", set_reminder_days=7) → apply with auto-reminder
   7. naukri_applications(action="batch_apply", keywords=...) → bulk apply with reminders
   8. naukri_jobs(action="similar|compare") → similar jobs + side-by-side comparison
-  9. naukri_jobs(action="get|report_fraud") → job details + fraud reporting
+  9. naukri_jobs(action="get|bulk|detail_v1|report_fraud") → job details + V1 detail + bulk fetch + fraud reporting
   10. naukri_sync(entity="applications|saved_jobs|export") → sync + export
   11. naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark")
-  12. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages
+  12. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages (REST API)
   13. naukri_company(action="search|jobs|slug|research|follow_status|follow|unfollow") / naukri_company_intel → company intel
-  14. naukri_profile(action="dashboard") → profile dashboard stats
-  15. naukri_settings(action="subscription") → subscription status
+  14. naukri_profile(action="dashboard") → profile dashboard + assessments + feature flags
+  15. naukri_settings(action="subscription") → subscription status + consent flags
   16. naukri_resume_builder(action="templates|status|tailor") → resume building + tailoring
   17. naukri_debug(action="browser_*|api_*|discover_*") → debugging tools
 
@@ -61,6 +61,7 @@ Tier 18 changes (from 30→26 tools):
 For debugging: naukri_health_check, naukri_debug
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import FastMCP
@@ -68,18 +69,30 @@ from mcp.server.fastmcp import FastMCP
 from naukri_server.api import close_api_session
 from naukri_server.browser import browser
 
+# Ref-counted lifespan: browser starts once, stops when last session ends.
+# Needed for dual transport where stdio + HTTP sessions share one browser.
+_lifespan_refs = 0
+_lifespan_lock = asyncio.Lock()
+
 
 @asynccontextmanager
 async def lifespan(server):
-    await browser.start()
+    global _lifespan_refs
+    async with _lifespan_lock:
+        _lifespan_refs += 1
+        if _lifespan_refs == 1:
+            await browser.start()
     try:
         yield
     finally:
-        try:
-            await browser.stop()
-        except Exception:
-            pass
-        await close_api_session()
+        async with _lifespan_lock:
+            _lifespan_refs -= 1
+            if _lifespan_refs == 0:
+                try:
+                    await browser.stop()
+                except Exception:
+                    pass
+                await close_api_session()
 
 
 mcp = FastMCP("naukri", lifespan=lifespan)

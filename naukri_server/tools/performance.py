@@ -1,5 +1,6 @@
 """Performance tools — search impressions, recruiter activity, and profile activity level."""
 
+import json
 from typing import Optional
 
 from naukri_server import mcp
@@ -72,6 +73,8 @@ async def _get_recruiter_activity(
             buckets[bucket_name] = {
                 "count": bucket_data.get("count", 0),
                 "percentage_change": bucket_data.get("percentageChange", 0),
+                "label": bucket_data.get("label", ""),
+                "is_new": bool(bucket_data.get("isNew", 0)),
             }
         else:
             buckets[bucket_name] = {"count": bucket_data}
@@ -90,7 +93,18 @@ async def _get_recruiter_activity(
             "location": act.get("city") or act.get("location", ""),
             "recruiter_id": act.get("recruiterId") or act.get("recruiterProfileId", ""),
             "previous_actions_count": act.get("previousActionCount", 0),
+            "company_master_name": act.get("companyMasterName", ""),
+            "is_new": bool(act.get("isNew", 0)),
+            "activity_map": act.get("activityMap"),
+            "meta_job_id": None,
         })
+        meta_str = act.get("metaData", "")
+        if meta_str:
+            try:
+                meta = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                activities[-1]["meta_job_id"] = meta.get("jobId")
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     total = success.get("count", len(activities))
     has_more = (page * size) < total

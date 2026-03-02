@@ -97,10 +97,23 @@ async def naukri_settings(
                 for key, val in sections.items():
                     settings.append({"id": key, "label": key, "value": val})
 
+            # Fetch raw settings for consent/WhatsApp fields not in formatted API
+            try:
+                raw_data = await api_get(SETTINGS_API)
+                consent_fields = {
+                    "naukri_auto_apply_consent": bool(raw_data.get("naukriAutoApplyConsent", 0)),
+                    "linkedin_auto_apply_consent": bool(raw_data.get("linkedinAutoApplyConsent", 0)),
+                    "whatsapp_apply_notification": bool(raw_data.get("applyWhatsAppNotification", 0)),
+                    "whatsapp_profile_notification": bool(raw_data.get("profileWhatsAppNotification", 0)),
+                }
+            except Exception:
+                consent_fields = {}
+
             return {
                 "status": "success",
                 "count": len(settings),
                 "settings": settings,
+                **consent_fields,
             }
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}

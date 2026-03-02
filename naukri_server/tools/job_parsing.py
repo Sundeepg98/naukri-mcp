@@ -55,12 +55,19 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "description_snippet": job.get("jobDescription"),
             "jd_url": job.get("jdURL"),
             "is_consultant": job.get("consultant", False),
+            "hiring_for": job.get("hiringFor") or None,
             "client_company": job.get("clientTitleString"),
             "client_group_id": job.get("clientGroupId"),
-            "diversity_tags": job.get("diversityTagText"),
+            "diversity_tag": job.get("diversityTagText") or None,
+            "experience_text": job.get("experienceText") or None,
             "logo_url": job.get("logoPathV3") or job.get("logoPath"),
             "company_id": job.get("companyId"),
             "is_exclusive": job.get("exclusive", False),
             "freshness_color": job.get("footerPlaceholderColor"),
         })
+        # Structured salary detail from bulk fetch API — add raw fields if available
+        if isinstance(salary, dict):
+            jobs[-1]["salary_min_raw"] = salary.get("minimumSalary")
+            jobs[-1]["salary_max_raw"] = salary.get("maximumSalary")
+            jobs[-1]["salary_hidden"] = salary.get("hideSalary", False)
     return jobs

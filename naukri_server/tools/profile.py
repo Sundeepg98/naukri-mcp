@@ -219,6 +219,60 @@ async def _get_profile() -> dict:
             # Sometimes returned as a simple string like "visible" / "hidden"
             result["resdex_visibility"] = resdex
 
+        # --- lookupData (resume score, login times, subscription flags) ---
+        lookup = data.get("lookupData", {})
+        if lookup:
+            result["lookup_data"] = {
+                "resume_score": lookup.get("resumeScore"),
+                "last_login": lookup.get("lastLoginTime"),
+                "prev_login": lookup.get("prevLoginTime"),
+                "has_current_employment": lookup.get("hasCurrentFullTimeEmployment"),
+                "is_paid_user": lookup.get("isPaidUser"),
+                "is_agent_eligible": lookup.get("isJobseekerAgentEligible"),
+                "int360_expiry": lookup.get("int360RoleExp"),
+                "ff_rd_expiry": lookup.get("ffRDSubExp"),
+            }
+
+        # --- additionalDetails (AI feature eligibility) ---
+        additional_details = data.get("additionalDetails", {})
+        if additional_details:
+            result["ai_features"] = {
+                "is_ai_resume_eligible": additional_details.get("isAIResumeEligible"),
+                "employer_verification_eligible": additional_details.get("curEmpVerEligibility"),
+            }
+
+        # --- extendedProfile (job search status, career break, stale tags) ---
+        ext = data.get("extendedProfile", {})
+        if ext:
+            jb_status = ext.get("jbSearchStatus", {})
+            jb_data = (jb_status.get("data") or [{}])[0] if isinstance(jb_status.get("data"), list) else {}
+
+            career_break = ext.get("careerBreak", {})
+            cb_data = (career_break.get("data") or [{}])[0] if isinstance(career_break.get("data"), list) else {}
+
+            tags_data = ext.get("tags", {}).get("data", [])
+            stale_tags = [t.get("value") for t in tags_data if isinstance(t, dict) and t.get("meta", {}).get("status") == "inactive"]
+
+            result["extended_profile"] = {
+                "job_search_status": jb_data.get("value"),
+                "career_break": cb_data.get("comingFromBreak", False),
+                "stale_tags": stale_tags,
+            }
+
+        # --- schools (10th/12th education) ---
+        schools = data.get("schools", [])
+        if schools:
+            result["schools"] = [
+                {
+                    "level": (s.get("educationType", {}).get("value") or f"Class {s.get('schoolLevel')}"),
+                    "board": (s.get("schoolBoard", {}).get("value") or ""),
+                    "year": s.get("schoolCompletionYear"),
+                    "percentage_range": (s.get("schoolPercentage", {}).get("value") or ""),
+                    "medium": (s.get("schoolMedium", {}).get("value") or ""),
+                }
+                for s in schools if isinstance(s, dict)
+            ]
+
         warnings = validate_profile(result)
         if warnings:
             result["warnings"] = warnings
@@ -1229,6 +1283,56 @@ async def _get_dashboard() -> dict:
 
         # --- Recommendations ---
         result["recommended_jobs_count"] = db.get("recommendedJobsCount") or db.get("totalRecommendedJobs")
+
+        # --- Assessments ---
+        assessments_raw = db.get("assessments", [])
+        if assessments_raw:
+            result["assessments"] = [
+                {
+                    "skill": a.get("skill"),
+                    "level": (a.get("level", {}).get("name") if isinstance(a.get("level"), dict) else None),
+                    "question_count": a.get("questionCount"),
+                    "duration_mins": a.get("duration"),
+                    "max_attempts": a.get("maxAttempts"),
+                    "test_id": a.get("testId"),
+                    "results": {
+                        "score_percent": (a.get("results", {}) or {}).get("scorePercent"),
+                        "rank": (a.get("results", {}) or {}).get("rank"),
+                        "status": (a.get("results", {}) or {}).get("status"),
+                    } if a.get("results") else None,
+                }
+                for a in assessments_raw if isinstance(a, dict)
+            ]
+
+        # --- Expected CTC structured ---
+        expected_ctc = db.get("expectedCtc")
+        if isinstance(expected_ctc, dict):
+            lacs = expected_ctc.get("lacs", {})
+            thousands = expected_ctc.get("thousands", {})
+            result["expected_ctc_structured"] = {
+                "lacs": int(lacs.get("value", 0) or 0),
+                "thousands": int(thousands.get("value", 0) or 0),
+                "total_annual": int(lacs.get("value", 0) or 0) * 100000 + int(thousands.get("value", 0) or 0) * 1000,
+            }
+
+        # --- Similar companies to follow ---
+        sim_companies = db.get("similarCompToFollow", [])
+        if sim_companies:
+            result["recommended_companies"] = [
+                {
+                    "name": c.get("name"),
+                    "rating": c.get("rating"),
+                    "reviews_count": (c.get("reviews", {}) or {}).get("count"),
+                }
+                for c in sim_companies[:5] if isinstance(c, dict)
+            ]
+
+        # --- Feature flags ---
+        result["feature_flags"] = {
+            "ai_mock_interview": db.get("eligibleFlagForAIMockInterview"),
+            "ai_resume": db.get("isAIResumeEligible"),
+            "job_search_status": (db.get("jbSearchStatus", {}).get("data", [{}]) or [{}])[0].get("value") if isinstance(db.get("jbSearchStatus"), dict) else None,
+        }
 
         # --- Strip None values to keep response clean ---
         result = {k: v for k, v in result.items() if v is not None}

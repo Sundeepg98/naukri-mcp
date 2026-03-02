@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API
+from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API, INBOX_REST_API
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -28,20 +28,32 @@ async def _fetch_inbox(
     """Fetch inbox messages from the API and return structured result."""
     limit = validate_limit(limit)
     page = validate_page(page)
-    body = {
-        "pageSize": limit,
-        "pageNo": page,
-        "mailType": mail_type,
-        "isUnRead": unread_only,
-    }
-    data = await api_post(INBOX_API, body=body)
 
-    resp = data.get("successResponse") or data
+    # Try REST GET first (Tier 21 — simpler, richer response)
+    try:
+        params = {"pageSize": str(limit), "pageNo": str(page)}
+        if mail_type:
+            params["mailType"] = mail_type
+        data = await api_get(INBOX_REST_API, params=params)
+        resp = data
+    except Exception:
+        # Fallback to battle-tested POST endpoint
+        body = {
+            "pageSize": limit,
+            "pageNo": page,
+            "mailType": mail_type,
+            "isUnRead": unread_only,
+        }
+        data = await api_post(INBOX_API, body=body)
+        resp = data.get("successResponse") or data
+
     inbox_list = resp.get("inbox", [])
-    total = resp.get("total", len(inbox_list))
-    unread_count = resp.get("unread", 0)
+    total = resp.get("totalCount") or resp.get("total", len(inbox_list))
+    unread_count = resp.get("unreadCount") or resp.get("unread", 0)
     total_power_nvite = resp.get("totalPowerNvite", 0)
     unread_power_nvite = resp.get("unreadPowerNvite", 0)
+    relevant_count = resp.get("relevantCount", 0)
+    has_power_nvites = resp.get("hasPowerNvites", False)
 
     messages = []
     for msg in inbox_list:
@@ -127,6 +139,8 @@ async def _fetch_inbox(
         "unread": unread_count,
         "total_power_nvite": total_power_nvite,
         "unread_power_nvite": unread_power_nvite,
+        "relevant_count": relevant_count,
+        "has_power_nvites": has_power_nvites,
         "messages": messages,
     }
 
