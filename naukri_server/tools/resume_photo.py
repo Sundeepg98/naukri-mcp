@@ -58,7 +58,7 @@ async def naukri_profile_media(
     # ── validate media_type ───────────────────────────────────────────
     if media_type not in _VALID_ACTIONS:
         valid_types = ", ".join(sorted(_VALID_ACTIONS))
-        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}", "error_code": "API_ERROR"}
+        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}", "error_code": "VALIDATION_ERROR"}
 
     # ── validate action for the chosen media_type ─────────────────────
     valid = _VALID_ACTIONS[media_type]
@@ -171,7 +171,7 @@ async def _resume_upload(file_path: str) -> dict:
     # Validate size
     size_mb = path.stat().st_size / (1024 * 1024)
     if size_mb > RESUME_MAX_SIZE_MB:
-        return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {RESUME_MAX_SIZE_MB}MB", "error_code": "BROWSER_ERROR"}
+        return {"status": "error", "message": f"File too large ({size_mb:.1f}MB). Max: {RESUME_MAX_SIZE_MB}MB", "error_code": "VALIDATION_ERROR"}
 
     async with browser.page_pool.acquire() as page:
         try:

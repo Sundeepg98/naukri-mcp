@@ -8,7 +8,7 @@ from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import AMBITIONBOX_BASE
 from naukri_server.utils import derive_slug
-from naukri_server.validation import validate_salary_data, validate_review_data
+from naukri_server.validation import validate_salary_data, validate_review_data, validate_page
 
 logger = logging.getLogger(__name__)
 
@@ -421,8 +421,7 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
 
 async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
     """Fetch employee reviews for a company from AmbitionBox."""
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    page = validate_page(page)
     async with browser.page_pool.acquire() as tab:
         try:
             company_slug = _ensure_slug(company_slug)
@@ -561,8 +560,7 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
 
 async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
     """Fetch interview experiences for a company from AmbitionBox."""
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    page = validate_page(page)
     company_slug = _ensure_slug(company_slug)
     url = f"{AMBITIONBOX_BASE}/interviews/{company_slug}-interview-questions"
     if page > 1:

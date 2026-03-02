@@ -5,7 +5,7 @@ from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
-from naukri_server.validation import validate_job_list
+from naukri_server.validation import validate_job_list, validate_limit, validate_page
 
 
 @mcp.tool()
@@ -54,9 +54,8 @@ async def naukri_search_jobs(
         - {status: "success", keywords, location, page, total, count, has_more, filters, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}
         - {status: "error", message}
     """
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     page_no = page  # save before shadowing by page_pool
 
     # REST-first search — faster than browser intercept; falls back on failure
@@ -214,9 +213,8 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
         - {status: "success", source: "recommendations", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     data = await api_post(RECOMMENDED_JOBS_API, body={})
     job_details = data.get("jobDetails", [])
     all_jobs = _parse_job_list(job_details, len(job_details))
@@ -254,9 +252,8 @@ async def naukri_get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -
         - {status: "success", job_id, source: "similar", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     data = await api_get(SIMILAR_JOBS_API + job_id, params={
         "noOfResults": str(limit * page),
         "searchType": "sim",

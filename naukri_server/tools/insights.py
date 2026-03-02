@@ -261,9 +261,10 @@ async def naukri_insights(
       - "applications": Analyze application history for patterns (velocity, status, companies)
       - "salary": Analyze salary positioning across applied jobs
       - "cached_answers": Manage cached screening question answers (list/update/delete)
+      - "match_analytics": Match-score analytics for recent applications (distribution + per-field breakdowns)
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
@@ -276,6 +277,7 @@ async def naukri_insights(
         - cached_answers list: {status, total_cached, answers: [{key, question, answer, type, cached_at}]}
         - cached_answers update: {status, key, new_answer, message}
         - cached_answers delete: {status, key, message}
+        - match_analytics: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -299,6 +301,14 @@ async def naukri_insights(
         except Exception as e:
             return {"status": "error", "message": f"Failed to manage cached answers: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── match_analytics ───────────────────────────────────────────────
+    elif insight_type == "match_analytics":
+        from naukri_server.tools.tracking import _get_match_analytics
+        try:
+            return await _get_match_analytics(days=days)
+        except Exception as e:
+            return {"status": "error", "message": f"Match analytics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers", "error_code": "API_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics", "error_code": "VALIDATION_ERROR"}

@@ -187,10 +187,10 @@ class TestHelperValidation:
     """Validation inside internal helpers that runs before any API call."""
 
     @pytest.mark.asyncio
-    async def test_fetch_notifications_page_validation(self):
-        """_fetch_notifications rejects page < 1."""
+    async def test_fetch_notifications_page_clamped_zero(self):
+        """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.notifications import _fetch_notifications
-        result = await _fetch_notifications(page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"results": []}
+            result = await _fetch_notifications(page=0)
+            mock_api.assert_awaited()

@@ -230,7 +230,7 @@ class TestPerformance:
         from naukri_server.tools.performance import naukri_performance
         with patch("naukri_server.tools.performance._get_recruiter_activity", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "activities": []}
-            result = await naukri_performance(metric="recruiter_activity", page=2, size=10, filter_by="VIEWED")
+            result = await naukri_performance(metric="recruiter_activity", page=2, limit=10, filter_by="VIEWED")
             mock_helper.assert_awaited_once_with(page=2, size=10, filter_by="VIEWED")
 
     @pytest.mark.asyncio
@@ -812,19 +812,20 @@ class TestHelperValidation:
         assert "INVALID_FILTER" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_recruiter_activity_page_validation(self):
-        """_get_recruiter_activity rejects page < 1."""
+    async def test_recruiter_activity_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.performance import _get_recruiter_activity
-        result = await _get_recruiter_activity(page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"successResponse": {"jobseekerActivityList": [], "activityBucketCount": {}, "count": 0}}
+            result = await _get_recruiter_activity(page=0)
+            mock_api.assert_awaited()
+            assert result["status"] == "success"
 
     @pytest.mark.asyncio
-    async def test_fetch_inbox_page_validation(self):
-        """_fetch_inbox rejects page < 1."""
+    async def test_fetch_inbox_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.inbox import _fetch_inbox
-        result = await _fetch_inbox(page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"successResponse": {"inbox": [], "total": 0, "unread": 0}}
+            result = await _fetch_inbox(page=0)
+            mock_api.assert_awaited()

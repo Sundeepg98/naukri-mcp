@@ -5,6 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API
+from naukri_server.validation import validate_page
 
 # Valid filter values for recruiter activity (from activityBucketCount keys)
 ACTIVITY_FILTERS = {"VIEWED", "MOBILE_VIEWED", "DOWNLOADED", "CONTACTED", "ADD_TO_FOLDER"}
@@ -41,8 +42,7 @@ async def _get_recruiter_activity(
     filter_by: Optional[str] = None,
 ) -> dict:
     """Fetch recruiter activity from the API and return structured result."""
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    page = validate_page(page)
     # Validate filter_by
     if filter_by is not None:
         filter_by = filter_by.upper()
@@ -129,7 +129,7 @@ async def naukri_performance(
     metric: str,
     days: int = 7,
     page: int = 1,
-    size: int = 20,
+    limit: int = 20,
     filter_by: Optional[str] = None,
 ) -> dict:
     """Unified performance dashboard — impressions, recruiter activity, and activity level.
@@ -146,7 +146,7 @@ async def naukri_performance(
         metric: "impressions" | "recruiter_activity" | "activity_level"
         days: Time period — must be 7, 30, or 90 (default 7). Used by impressions.
         page: Page number for recruiter_activity (default 1).
-        size: Items per page for recruiter_activity (default 20).
+        limit: Items per page for recruiter_activity (default 20).
         filter_by: Filter recruiter_activity by type. One of:
                    "VIEWED" | "MOBILE_VIEWED" | "DOWNLOADED" | "CONTACTED" | "ADD_TO_FOLDER"
                    None = all actions (default).
@@ -171,7 +171,7 @@ async def naukri_performance(
     # ── recruiter_activity ────────────────────────────────────────────
     elif metric == "recruiter_activity":
         try:
-            return await _get_recruiter_activity(page=page, size=size, filter_by=filter_by)
+            return await _get_recruiter_activity(page=page, size=limit, filter_by=filter_by)
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
@@ -188,4 +188,4 @@ async def naukri_performance(
 
     # ── unknown metric ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level", "error_code": "API_ERROR"}
+        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level", "error_code": "VALIDATION_ERROR"}

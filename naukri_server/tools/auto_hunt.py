@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.config import logger
 from naukri_server.scoring import compute_fit_score, parse_skills
+from naukri_server.validation import validate_limit
 
 
 @mcp.tool()
@@ -48,7 +49,7 @@ async def naukri_auto_hunt(
            missing_skills, recommendation}]}
         - {status: "error", message}
     """
-    limit = min(limit, 50)
+    limit = validate_limit(limit)
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
 

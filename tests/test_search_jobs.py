@@ -16,22 +16,30 @@ class TestSearchJobs:
     """Tests for naukri_server.tools.search.naukri_search_jobs."""
 
     @pytest.mark.asyncio
-    async def test_search_jobs_page_validation(self):
-        """page < 1 returns VALIDATION_ERROR before any browser/API call."""
+    async def test_search_jobs_page_clamped_zero(self):
+        """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_search_jobs
-        result = await naukri_search_jobs(keywords="python", page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "noOfJobs": 1,
+                "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "X",
+                                "placeholders": [], "tagsAndSkills": "python", "createdDate": "1d ago"}],
+            }
+            result = await naukri_search_jobs(keywords="python", page=0)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_search_jobs_page_negative(self):
-        """Negative page also returns VALIDATION_ERROR."""
+    async def test_search_jobs_page_clamped_negative(self):
+        """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_search_jobs
-        result = await naukri_search_jobs(keywords="react", page=-5)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "noOfJobs": 1,
+                "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "X",
+                                "placeholders": [], "tagsAndSkills": "react", "createdDate": "1d ago"}],
+            }
+            result = await naukri_search_jobs(keywords="react", page=-5)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_search_jobs_limit_clamped(self):
@@ -76,22 +84,22 @@ class TestGetRecommendations:
     """Tests for naukri_server.tools.search.naukri_get_recommendations."""
 
     @pytest.mark.asyncio
-    async def test_recommendations_page_validation(self):
-        """page < 1 returns VALIDATION_ERROR before any API call."""
+    async def test_recommendations_page_clamped_zero(self):
+        """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_recommendations
-        result = await naukri_get_recommendations(page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.search.api_post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"jobDetails": []}
+            result = await naukri_get_recommendations(page=0)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_recommendations_page_negative(self):
-        """Negative page returns VALIDATION_ERROR."""
+    async def test_recommendations_page_clamped_negative(self):
+        """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_recommendations
-        result = await naukri_get_recommendations(page=-1)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.search.api_post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"jobDetails": []}
+            result = await naukri_get_recommendations(page=-1)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_recommendations_routes_with_valid_page(self):
@@ -123,21 +131,22 @@ class TestGetSimilarJobs:
     """Tests for naukri_server.tools.search.naukri_get_similar_jobs."""
 
     @pytest.mark.asyncio
-    async def test_similar_jobs_page_validation(self):
-        """page < 1 returns VALIDATION_ERROR before any API call."""
+    async def test_similar_jobs_page_clamped_zero(self):
+        """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_similar_jobs
-        result = await naukri_get_similar_jobs(job_id="12345", page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"jobDetails": []}
+            result = await naukri_get_similar_jobs(job_id="12345", page=0)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_similar_jobs_page_negative(self):
-        """Negative page returns VALIDATION_ERROR."""
+    async def test_similar_jobs_page_clamped_negative(self):
+        """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_similar_jobs
-        result = await naukri_get_similar_jobs(job_id="12345", page=-3)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
+        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"jobDetails": []}
+            result = await naukri_get_similar_jobs(job_id="12345", page=-3)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_similar_jobs_routes_with_valid_params(self):
@@ -255,3 +264,59 @@ class TestExtractJobId:
         from naukri_server.tools.jobs import _extract_job_id
         with pytest.raises(ValueError, match="Invalid job ID"):
             _extract_job_id("abc-def")
+
+
+# =====================================================================
+# 7. Helper-level: _parse_salary_data, _parse_company_data, _parse_match_score
+# =====================================================================
+
+class TestJobDetailParsers:
+    """Unit tests for extracted _parse_job_detail helpers."""
+
+    def test_parse_salary_with_label(self):
+        from naukri_server.tools.jobs import _parse_salary_data
+        job = {"salaryDetail": {"label": "10-15 Lacs PA", "minimumSalary": 1000000, "maximumSalary": 1500000}}
+        result = _parse_salary_data(job)
+        assert result["salary"] == "10-15 Lacs PA"
+
+    def test_parse_salary_without_label(self):
+        from naukri_server.tools.jobs import _parse_salary_data
+        job = {"salaryDetail": {"minimumSalary": 1000000, "maximumSalary": 1500000}}
+        result = _parse_salary_data(job)
+        assert "10.0" in result["salary"]
+        assert "15.0" in result["salary"]
+
+    def test_parse_salary_not_disclosed(self):
+        from naukri_server.tools.jobs import _parse_salary_data
+        job = {"salaryDetail": {}}
+        result = _parse_salary_data(job)
+        assert result["salary"] == "Not Disclosed"
+
+    def test_parse_company_with_ambitionbox(self):
+        from naukri_server.tools.jobs import _parse_company_data
+        job = {"companyDetail": {"name": "Infosys", "groupId": "123"}, "ambitionBoxData": {"AggregateRating": 3.8, "ReviewsCount": 5000}}
+        result = _parse_company_data(job, {})
+        assert result["company_name"] == "Infosys"
+        assert result["company_rating"] == 3.8
+        assert result["group_id"] == "123"
+
+    def test_parse_company_fallback_from_details(self):
+        from naukri_server.tools.jobs import _parse_company_data
+        job = {"companyDetail": {"name": "TCS"}}
+        details = {"ambitionBoxDetails": {"companyInfo": {"rating": 4.0, "reviewsCount": 1000}}}
+        result = _parse_company_data(job, details)
+        assert result["company_rating"] == 4.0
+
+    def test_parse_match_score_with_data(self):
+        from naukri_server.tools.jobs import _parse_match_score
+        score = {"Keyskills": 85, "skillMismatch": "Docker, K8s", "earlyApplicant": True, "education": {"userMatching": True}}
+        result = _parse_match_score(score)
+        assert result["match_score"] == 85
+        assert "Docker" in result["match_details"]["skill_mismatch"]
+        assert result["match_details"]["early_applicant"] is True
+
+    def test_parse_match_score_none(self):
+        from naukri_server.tools.jobs import _parse_match_score
+        result = _parse_match_score(None)
+        assert result["match_score"] is None
+        assert result["match_details"] is None

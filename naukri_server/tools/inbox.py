@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API
+from naukri_server.validation import validate_limit, validate_page
 
 
 # ---------------------------------------------------------------------------
@@ -25,9 +26,8 @@ async def _fetch_inbox(
     page: int = 1,
 ) -> dict:
     """Fetch inbox messages from the API and return structured result."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     body = {
         "pageSize": limit,
         "pageNo": page,

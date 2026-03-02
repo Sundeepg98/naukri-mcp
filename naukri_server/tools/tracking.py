@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
     SAVE_JOB_API, UNSAVE_JOB_API,
 )
+from naukri_server.validation import validate_limit, validate_page
 
 # Data files live alongside questions.json in the naukri/ directory
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
@@ -93,9 +94,8 @@ async def _list_applications(
     page: int = 1,
 ) -> dict:
     """List tracked job applications with filtering and summary stats."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
@@ -527,8 +527,22 @@ async def naukri_applications(
     min_stale_score: int = 40,
     limit: int = 50,
     page: int = 1,
+    # apply / batch_apply params
+    answers: Optional[dict] = None,
+    keywords: Optional[str] = None,
+    location: Optional[str] = None,
+    experience: Optional[int] = None,
+    salary_min: Optional[int] = None,
+    salary_max: Optional[int] = None,
+    sort_by: Optional[str] = None,
+    freshness: Optional[int] = None,
+    work_mode: Optional[str] = None,
+    job_type: Optional[str] = None,
+    company_type: Optional[str] = None,
+    delay_ms: int = 500,
+    max_concurrent: int = 3,
 ) -> dict:
-    """Unified application tracking — list, detail, purge, stale detection, and follow-up suggestions.
+    """Unified application tracking — list, detail, purge, stale detection, follow-up, apply, and batch apply.
 
     Actions:
       - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page)
@@ -537,10 +551,12 @@ async def naukri_applications(
       - "stale": Detect stale applications needing follow-up (use days_threshold/min_stale_score/limit/page)
       - "follow_up": Cross-reference stale apps with inbox & reminders for prioritized action items
         (use days_threshold/min_stale_score/limit)
+      - "apply": Apply to a single job (requires job_id; optional answers for screening questions)
+      - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters)
 
     Args:
-        action: "list" | "detail" | "purge" | "stale" | "follow_up"
-        job_id: Required for detail — the Naukri job ID (e.g. "270226007446")
+        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "apply" | "batch_apply"
+        job_id: Required for detail/apply — the Naukri job ID (e.g. "270226007446")
         status: (list) Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: (list) ISO date, include applications on/after this date (e.g. "2026-02-01")
         date_to: (list) ISO date, include applications on/before this date (e.g. "2026-02-28")
@@ -548,8 +564,22 @@ async def naukri_applications(
         dry_run: (purge) If True (default), only preview — don't actually delete.
         days_threshold: (stale/follow_up) Consider apps older than N days (default 14)
         min_stale_score: (stale/follow_up) Minimum staleness score 0-100 to include (default 40)
-        limit: Max results per page (default 50)
+        limit: Max results per page (default 50); batch_apply max jobs to apply to
         page: Page number for pagination (default 1)
+        answers: (apply/batch_apply) Dict of answers for screening questions. Keys can be question ID
+                 or question text substring: {"current ctc": "16", "notice period": "30"}
+        keywords: (batch_apply) Job title or skills (e.g. "python developer")
+        location: (batch_apply) City name (e.g. "Bangalore", "Remote")
+        experience: (batch_apply) Years of experience filter
+        salary_min: (batch_apply) Minimum salary in lakhs
+        salary_max: (batch_apply) Maximum salary in lakhs
+        sort_by: (batch_apply) "relevance" or "date"
+        freshness: (batch_apply) Job age in days — 1, 3, 7, 15, 30
+        work_mode: (batch_apply) "wfh", "hybrid", "wfo"
+        job_type: (batch_apply) "fulltime", "parttime", "contract", "internship", "temporary"
+        company_type: (batch_apply) "startup", "mnc", "indian_mnc", "corporate"
+        delay_ms: (batch_apply) Delay in ms between submissions (default 500)
+        max_concurrent: (batch_apply) Max parallel applications (default 3)
 
     Returns:
         - list: {status, total, count, page, has_more, summary: {total_all_statuses, by_status}, applications: [...]}
@@ -559,6 +589,9 @@ async def naukri_applications(
         - stale: {status, total_applications, total, count, page, has_more, stale_applications: [...]}
         - follow_up: {status, summary: {total_stale, with_recruiter_contact, with_pending_reminder},
                       stale_applications: [...], action_items: [{priority, action, job_id, company, title}]}
+        - apply: {status: "applied"/"needs_input"/"already_applied"/"error", job_id, ...}
+        - batch_apply: {status: "success"/"partial_success"/"error", searched, filtered, applied,
+                        already_applied, needs_input, errors, pending_questions, results}
         - {status: "error", message} on failure
     """
     # ── list ───────────────────────────────────────────────────────────
@@ -606,9 +639,46 @@ async def naukri_applications(
         except Exception as e:
             return {"status": "error", "message": f"Follow-up analysis failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── apply ─────────────────────────────────────────────────────────
+    elif action == "apply":
+        if not job_id:
+            return {"status": "error", "message": "apply requires job_id.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.apply import _apply_single
+        from naukri_server.tools.jobs import _extract_job_id
+        job_id = _extract_job_id(job_id)
+        # Check for duplicate application from local tracking
+        async with _applications_lock:
+            existing = _load_json(APPLICATIONS_FILE)
+            if any(str(a.get("job_id")) == str(job_id) for a in existing):
+                return {
+                    "status": "already_applied",
+                    "message": "You have already applied to this job (from local tracking).",
+                    "job_id": job_id,
+                }
+        try:
+            return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
+        except Exception as e:
+            return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    # ── batch_apply ───────────────────────────────────────────────────
+    elif action == "batch_apply":
+        if not keywords:
+            return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
+        from naukri_server.tools.apply import _batch_apply
+        try:
+            return await _batch_apply(
+                keywords=keywords, location=location, experience=experience,
+                salary_min=salary_min, salary_max=salary_max, sort_by=sort_by,
+                freshness=freshness, work_mode=work_mode, job_type=job_type,
+                company_type=company_type, limit=limit, answers=answers,
+                delay_ms=delay_ms, max_concurrent=max_concurrent,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Batch apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------
@@ -632,9 +702,8 @@ async def _push_save_to_naukri(job_id: str) -> bool:
 
 async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     """List saved/bookmarked jobs from local tracking."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     async with _saved_jobs_lock:
         saved = _load_json(SAVED_JOBS_FILE)
 
@@ -762,9 +831,7 @@ async def naukri_saved_jobs(
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave", "error_code": "VALIDATION_ERROR"}
 
 
-@mcp.tool()
-@api_tool("Get match analytics")
-async def naukri_get_match_analytics(days: int = 7) -> dict:
+async def _get_match_analytics(days: int = 7) -> dict:
     """Get match-score analytics for recent job applications — overall match distribution and per-field breakdowns.
 
     Args:
@@ -790,3 +857,6 @@ async def naukri_get_match_analytics(days: int = 7) -> dict:
         "field_breakdown": data.get("relevantFieldMatch"),
         "user_details": data.get("userDetails"),
     }
+
+
+naukri_get_match_analytics = _get_match_analytics

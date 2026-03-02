@@ -695,10 +695,15 @@ async def naukri_sync(
     entity: str = "applications",
     force_browser: bool = False,
     days_back: int = 365,
+    # Export params (used when entity="export")
+    data_type: Optional[str] = None,
+    export_format: Optional[str] = None,
+    keywords: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> dict:
-    """Unified sync — pull applied jobs or saved jobs from Naukri.com into local tracking.
+    """Unified sync & export — pull data from Naukri.com or export local data to files.
 
-    Note: Uses 3-tier fallback (REST → browser → HTML scrape).
+    Note: Uses 3-tier fallback (REST → browser → HTML scrape) for sync entities.
 
     Entities:
       - "applications": Sync applied jobs (3-tier fallback: REST API → browser intercept → HTML scrape).
@@ -707,16 +712,23 @@ async def naukri_sync(
       - "saved_jobs": Sync saved/bookmarked jobs (REST API → browser intercept).
                      Merges with local saved_jobs.json.
                      For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.
+      - "export": Export applications, saved jobs, or search results to JSON/CSV file.
+                 Requires data_type param. Use export_format for output format.
 
     Args:
-        entity: "applications" | "saved_jobs"
+        entity: "applications" | "saved_jobs" | "export"
         force_browser: If True, skip REST API and use browser strategies.
         days_back: (applications only) Fetch from last N days (default 365).
                   Use smaller values (e.g., 7 or 30) for faster incremental syncs.
+        data_type: (export only) What to export — "applications", "saved_jobs", or "search_results".
+        export_format: (export only) Output format — "json" or "csv" (default "json").
+        keywords: (export only) Required when data_type is "search_results" — search query.
+        output_path: (export only) Custom file path (default: exports/<type>_<date>.<ext>).
 
     Returns:
         - applications: {status, method, total_remote, new_added, updated, unchanged, local_only, days_back, last_sync, applications: [...first 20...]}
         - saved_jobs: {status, method, total_remote, new_added, already_local, local_only, last_sync, saved_jobs: [...first 20...]}
+        - export: {status, file_path, record_count, data_type, format}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -733,6 +745,19 @@ async def naukri_sync(
         except Exception as e:
             return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
+    # ── export ────────────────────────────────────────────────────────
+    elif entity == "export":
+        from naukri_server.tools.export import _export_data
+        try:
+            return await _export_data(
+                data_type=data_type or "applications",
+                format=export_format or "json",
+                keywords=keywords,
+                output_path=output_path,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Export failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown entity ────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs, export", "error_code": "VALIDATION_ERROR"}

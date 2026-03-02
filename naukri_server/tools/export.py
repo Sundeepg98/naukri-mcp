@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from naukri_server import mcp
 from naukri_server.config import logger
 
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
@@ -31,8 +30,7 @@ def _flatten_for_csv(records: list[dict]) -> list[dict]:
     return flat
 
 
-@mcp.tool()
-async def naukri_export_data(
+async def _export_data(
     data_type: str,
     format: str = "json",
     keywords: Optional[str] = None,
@@ -137,3 +135,7 @@ async def naukri_export_data(
         "data_type": data_type,
         "format": format,
     }
+
+
+# Public alias for backward compatibility (no longer an MCP tool — routed via naukri_sync)
+naukri_export_data = _export_data

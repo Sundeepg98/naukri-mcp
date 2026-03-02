@@ -156,22 +156,22 @@ class TestBatchApply:
             await naukri_batch_apply()
 
     @pytest.mark.asyncio
-    async def test_batch_apply_zero_limit(self):
-        """limit=0 should return VALIDATION_ERROR (after clamping, still <= 0)."""
+    async def test_batch_apply_zero_limit_clamped(self):
+        """limit=0 is silently clamped to 1 by validate_limit."""
         from naukri_server.tools.apply import naukri_batch_apply
-        result = await naukri_batch_apply(keywords="python developer", limit=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "limit" in result["message"]
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = {"status": "success", "jobs": []}
+            result = await naukri_batch_apply(keywords="python developer", limit=0)
+            mock_search.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_batch_apply_negative_limit(self):
-        """Negative limit should return VALIDATION_ERROR."""
+    async def test_batch_apply_negative_limit_clamped(self):
+        """Negative limit is silently clamped to 1 by validate_limit."""
         from naukri_server.tools.apply import naukri_batch_apply
-        result = await naukri_batch_apply(keywords="python developer", limit=-5)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "limit" in result["message"]
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = {"status": "success", "jobs": []}
+            result = await naukri_batch_apply(keywords="python developer", limit=-5)
+            mock_search.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_batch_apply_limit_clamped(self):

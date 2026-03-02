@@ -3,12 +3,12 @@ import json
 import re
 from typing import Optional
 
-from naukri_server import mcp
 from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, logger
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
+from naukri_server.validation import validate_limit
 
 
 # ============================================================================
@@ -171,7 +171,6 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
         return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
-@mcp.tool()
 async def naukri_apply(
     job_id: str,
     answers: Optional[dict] = None,
@@ -215,7 +214,9 @@ async def naukri_apply(
     return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 
 
-@mcp.tool()
+_apply_job = naukri_apply
+
+
 async def naukri_batch_apply(
     keywords: str,
     location: Optional[str] = None,
@@ -267,9 +268,7 @@ async def naukri_batch_apply(
 
     if answers is None:
         answers = {}
-    limit = min(limit, 20)
-    if limit <= 0:
-        return {"status": "error", "message": "limit must be a positive number", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit, max_allowed=20)
     if delay_ms < 0:
         return {"status": "error", "message": "delay_ms must be >= 0", "error_code": "VALIDATION_ERROR"}
     if max_concurrent < 1:
@@ -428,6 +427,9 @@ async def naukri_batch_apply(
         "pending_questions": list(pending_questions.values()),
         "results": per_job,
     }
+
+
+_batch_apply = naukri_batch_apply
 
 
 def _find_user_answer(qid: str, q_name: str, answers: dict) -> Optional[str]:

@@ -10,7 +10,7 @@ from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
-from naukri_server.validation import validate_company_list, validate_job_list
+from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
 
 _COMPANY_HEADERS = {"appid": "103"}
 
@@ -61,9 +61,8 @@ def _extract_slug_from_url(url: str) -> str | None:
 
 async def _search_companies(keyword: str, page: int = 1, limit: int = 20) -> dict:
     """Search for companies on Naukri.com by name or industry."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     seo_key = keyword.lower().replace(" ", "-")
     data = await api_get(
         COMPANY_SEARCH_API,
@@ -96,9 +95,8 @@ async def _search_companies(keyword: str, page: int = 1, limit: int = 20) -> dic
 
 async def _get_company_jobs(group_id: str, page: int = 1, limit: int = 20) -> dict:
     """Get job listings from a specific company on Naukri.com."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     page_no = page  # save before shadowing by page_pool
     async with browser.page_pool.acquire() as page:
         try:

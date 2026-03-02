@@ -7,6 +7,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger
 from naukri_server.utils import load_json_with_backup, save_json_atomic
+from naukri_server.validation import validate_limit, validate_page
 
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
 _TRACKING_FILE = _PACKAGE_ROOT / "early_access_tracking.json"
@@ -61,9 +62,8 @@ def _detect_new_roles(current_roles: list) -> tuple:
 
 async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
     """Fetch early access roles from the API and return structured result."""
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     data = await api_get(
         EARLY_ACCESS_API,
         params={"pageNo": str(page), "noOfResults": str(limit)},

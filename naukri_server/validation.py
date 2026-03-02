@@ -115,3 +115,22 @@ def validate_review_data(result: dict) -> list[str]:
     for w in warnings:
         logger.warning(w)
     return warnings
+
+
+def validate_limit(value: int, max_allowed: int = 50) -> int:
+    """Clamp limit to [1, max_allowed]. Returns validated value."""
+    return max(1, min(int(value), max_allowed))
+
+
+def validate_page(value: int) -> int:
+    """Ensure page >= 1. Returns validated value (floored to 1 if below)."""
+    return max(1, int(value))
+
+
+def validate_enum(value: str, allowed: list, field_name: str = "value") -> str | None:
+    """Validate value is in allowed list (case-insensitive). Returns matched value or None."""
+    value_lower = value.lower()
+    for a in allowed:
+        if value_lower == a.lower():
+            return a
+    return None

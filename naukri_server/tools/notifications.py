@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API
+from naukri_server.validation import validate_limit, validate_page
 
 
 # ---------------------------------------------------------------------------
@@ -23,9 +24,8 @@ async def _fetch_notifications(limit: int = 20, page: int = 1, notif_type: Optio
                     include ``"JA"`` (job alerts), ``"RA"`` (recruiter
                     activity), ``"SYSTEM"``, ``"APPLICATION_UPDATE"``.
     """
-    limit = min(limit, 50)
-    if page < 1:
-        return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
+    limit = validate_limit(limit)
+    page = validate_page(page)
     data = await api_get(NOTIFICATION_FEED_API, params={
         "page": str(page),
         "limit": str(limit),

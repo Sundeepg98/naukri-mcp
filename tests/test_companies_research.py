@@ -243,31 +243,41 @@ class TestHelperValidation:
     """Validation inside internal helpers that runs before any API/browser call."""
 
     @pytest.mark.asyncio
-    async def test_search_companies_page_below_one(self):
-        """_search_companies rejects page < 1."""
+    async def test_search_companies_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.companies import _search_companies
-        result = await _search_companies(keyword="test", page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.companies.api_get", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"companyList": []}
+            result = await _search_companies(keyword="test", page=0)
+            mock_api.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_fetch_reviews_page_below_one(self):
-        """_fetch_reviews rejects page < 1."""
+    async def test_fetch_reviews_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.ambitionbox import _fetch_reviews
-        result = await _fetch_reviews(company_slug="google", page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.ambitionbox.browser") as mock_browser:
+            mock_page = AsyncMock()
+            mock_page.title = AsyncMock(return_value="Reviews")
+            mock_page.evaluate = AsyncMock(return_value=None)
+            mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
+            mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+            with patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock):
+                result = await _fetch_reviews(company_slug="google", page=0)
+                # Should proceed (clamped to 1), not return error
 
     @pytest.mark.asyncio
-    async def test_fetch_interviews_page_below_one(self):
-        """_fetch_interviews rejects page < 1."""
+    async def test_fetch_interviews_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.ambitionbox import _fetch_interviews
-        result = await _fetch_interviews(company_slug="google", page=0)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "page" in result["message"]
+        with patch("naukri_server.tools.ambitionbox.browser") as mock_browser:
+            mock_page = AsyncMock()
+            mock_page.title = AsyncMock(return_value="Interviews")
+            mock_page.evaluate = AsyncMock(return_value=None)
+            mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
+            mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+            with patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock):
+                result = await _fetch_interviews(company_slug="google", page=0)
+                # Should proceed (clamped to 1), not return error
 
 
 # =====================================================================
