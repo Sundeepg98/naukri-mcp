@@ -3,6 +3,7 @@ Browser state — Playwright browser with multi-tab page pool and cached token m
 """
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -109,6 +110,11 @@ class PagePool:
         self._semaphore = asyncio.Semaphore(max_pages)
         self._available: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
+        # Observability counters
+        self._checkouts = 0
+        self._returns = 0
+        self._crashes = 0
+        self._max_wait_ms = 0
 
     async def initialize(self, first_page: Page):
         """Seed pool with the initial page from browser context."""
@@ -141,7 +147,12 @@ class PagePool:
                 await page.goto(url)
                 result = await page.evaluate(...)
         """
+        t0 = time.monotonic()
         await self._semaphore.acquire()
+        wait_ms = int((time.monotonic() - t0) * 1000)
+        if wait_ms > self._max_wait_ms:
+            self._max_wait_ms = wait_ms
+        self._checkouts += 1
         page = None
         try:
             # Try to get an available page
@@ -157,12 +168,14 @@ class PagePool:
             try:
                 _ = page.url  # Quick liveness check (property access, not network)
             except (TargetClosedError, Exception):
+                self._crashes += 1
                 page = await self._recover_page(page)
 
             yield page
         finally:
             # Return page to pool
             if page is not None:
+                self._returns += 1
                 try:
                     await self._available.put(page)
                 except Exception:
@@ -182,6 +195,16 @@ class PagePool:
                 self._available.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def get_stats(self) -> dict:
+        """Return observability counters for the page pool."""
+        return {
+            "max_tabs": self._max_pages,
+            "checkouts": self._checkouts,
+            "returns": self._returns,
+            "crashes": self._crashes,
+            "max_wait_ms": self._max_wait_ms,
+        }
 
 
 # ---------------------------------------------------------------------------

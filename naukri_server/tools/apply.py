@@ -229,14 +229,15 @@ async def naukri_batch_apply(
     company_type: Optional[str] = None,
     limit: int = 5,
     answers: Optional[dict] = None,
+    delay_ms: int = 500,
+    max_concurrent: int = 3,
 ) -> dict:
-    """Search and apply to multiple jobs in parallel.
+    """Search and apply to multiple jobs with rate limiting.
 
-    Searches for jobs, filters out already-applied ones, then applies to all
-    remaining jobs concurrently. Screening questions are auto-answered from
-    the cache or the provided answers dict.
-
-    Note: No built-in rate limiting between applications.
+    Searches for jobs, filters out already-applied ones, then applies to
+    remaining jobs with controlled concurrency and delay between submissions.
+    Screening questions are auto-answered from the cache or the provided
+    answers dict.
 
     For applying to a single specific job, use naukri_apply instead.
 
@@ -254,6 +255,10 @@ async def naukri_batch_apply(
         limit: Max jobs to apply to (default 5, max 20)
         answers: Pre-filled answers for common screening questions.
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
+        delay_ms: Delay in milliseconds between each application submission (default 500, min 0).
+                  Helps avoid triggering Naukri rate limits.
+        max_concurrent: Maximum number of parallel applications at a time (default 3, min 1).
+                        Higher values are faster but risk rate-limit blocks.
 
     Returns:
         - {status: "success"/"partial_success"/"error", searched, filtered, applied, already_applied, needs_input, errors, pending_questions: [...], results: [...]}
@@ -265,6 +270,10 @@ async def naukri_batch_apply(
     limit = min(limit, 20)
     if limit <= 0:
         return {"status": "error", "message": "limit must be a positive number", "error_code": "VALIDATION_ERROR"}
+    if delay_ms < 0:
+        return {"status": "error", "message": "delay_ms must be >= 0", "error_code": "VALIDATION_ERROR"}
+    if max_concurrent < 1:
+        return {"status": "error", "message": "max_concurrent must be >= 1", "error_code": "VALIDATION_ERROR"}
 
     # Step 1: Search
     search_result = await naukri_search_jobs(
@@ -301,19 +310,29 @@ async def naukri_batch_apply(
             "skipped_duplicates": skipped_duplicates,
         }
 
-    # Step 3: Parallel apply (Phase 1 + auto-answer from cache)
-    async def _apply_with_timeout(j):
-        try:
-            return await asyncio.wait_for(
-                _apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
-                              tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
-                                              "url": j.get("url"), "source": "batch"}),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            return {"status": "error", "job_id": j["job_id"], "message": "Timed out after 30s", "error_code": "API_ERROR"}
+    # Step 3: Rate-limited parallel apply (Phase 1 + auto-answer from cache)
+    semaphore = asyncio.Semaphore(max_concurrent)
+    delay_seconds = delay_ms / 1000
 
-    tasks = [asyncio.create_task(_apply_with_timeout(j)) for j in to_apply]
+    async def _apply_with_timeout(j):
+        async with semaphore:
+            try:
+                return await asyncio.wait_for(
+                    _apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
+                                  tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
+                                                  "url": j.get("url"), "source": "batch"}),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                return {"status": "error", "job_id": j["job_id"], "message": "Timed out after 30s", "error_code": "API_ERROR"}
+
+    # Stagger task launches with delay between each submission
+    tasks = []
+    for i, j in enumerate(to_apply):
+        if i > 0 and delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+        tasks.append(asyncio.create_task(_apply_with_timeout(j)))
+
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),

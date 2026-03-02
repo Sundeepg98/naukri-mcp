@@ -14,6 +14,7 @@ async def naukri_skill_gap_analysis(
     keywords: Optional[str] = None,
     use_recommendations: bool = True,
     sample_size: int = 20,
+    timeout_seconds: int = 120,
 ) -> dict:
     """Analyze skill gaps across multiple jobs to find your most common missing skills.
 
@@ -24,6 +25,7 @@ async def naukri_skill_gap_analysis(
         keywords: Search keywords (required if use_recommendations is False)
         use_recommendations: If True, use personalized recommendations; if False, use search (default True)
         sample_size: Number of jobs to analyze (default 20, max 50)
+        timeout_seconds: Max seconds before timeout (default 120)
 
     Returns:
         - {status: "success", jobs_analyzed, skill_gaps: [{skill, frequency, percentage,
@@ -35,97 +37,103 @@ async def naukri_skill_gap_analysis(
 
     sample_size = min(sample_size, 50)
 
-    from naukri_server.tools.search import naukri_search_jobs, naukri_get_recommendations
-    from naukri_server.tools.profile import get_cached_profile
+    async def _do_work() -> dict:
+        from naukri_server.tools.search import naukri_search_jobs, naukri_get_recommendations
+        from naukri_server.tools.profile import get_cached_profile
 
-    # Parallel: fetch jobs + profile
-    if use_recommendations:
-        jobs_coro = naukri_get_recommendations(limit=sample_size)
-    else:
-        jobs_coro = naukri_search_jobs(keywords=keywords, limit=sample_size)
+        # Parallel: fetch jobs + profile
+        if use_recommendations:
+            jobs_coro = naukri_get_recommendations(limit=sample_size)
+        else:
+            jobs_coro = naukri_search_jobs(keywords=keywords, limit=sample_size)
 
-    jobs_result, profile_result = await asyncio.gather(
-        jobs_coro,
-        get_cached_profile(),
-        return_exceptions=True,
-    )
+        jobs_result, profile_result = await asyncio.gather(
+            jobs_coro,
+            get_cached_profile(),
+            return_exceptions=True,
+        )
 
-    if isinstance(jobs_result, Exception) or jobs_result.get("status") == "error":
-        msg = str(jobs_result) if isinstance(jobs_result, Exception) else jobs_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch jobs: {msg}", "error_code": "API_ERROR"}
+        if isinstance(jobs_result, Exception) or jobs_result.get("status") == "error":
+            msg = str(jobs_result) if isinstance(jobs_result, Exception) else jobs_result.get("message")
+            return {"status": "error", "message": f"Failed to fetch jobs: {msg}", "error_code": "API_ERROR"}
 
-    if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
-        msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
+        if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
+            msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
+            return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
-    jobs = jobs_result.get("jobs", [])
-    if not jobs:
-        return {"status": "error", "message": "No jobs found to analyze.", "error_code": "NOT_FOUND"}
+        jobs = jobs_result.get("jobs", [])
+        if not jobs:
+            return {"status": "error", "message": "No jobs found to analyze.", "error_code": "NOT_FOUND"}
 
-    profile_skills = parse_skills(profile_result.get("key_skills", []))
+        profile_skills = parse_skills(profile_result.get("key_skills", []))
 
-    # Build experience depth map for weighting gaps
-    exp_map = {}
-    for s in profile_result.get("skills_with_experience", []):
-        if isinstance(s, dict):
-            name = normalize_skill(s.get("skill", ""))
-            years = s.get("experience_years", 0) or 0
-            months = s.get("experience_months", 0) or 0
-            exp_map[name] = years + months / 12
+        # Build experience depth map for weighting gaps
+        exp_map = {}
+        for s in profile_result.get("skills_with_experience", []):
+            if isinstance(s, dict):
+                name = normalize_skill(s.get("skill", ""))
+                years = s.get("experience_years", 0) or 0
+                months = s.get("experience_months", 0) or 0
+                exp_map[name] = years + months / 12
 
-    # Analyze each job
-    missing_counter = Counter()  # skill -> count of jobs missing it
-    matched_counter = Counter()  # skill -> count of jobs matching it
-    missing_jobs = {}  # skill -> list of job titles where it's missing
+        # Analyze each job
+        missing_counter = Counter()  # skill -> count of jobs missing it
+        matched_counter = Counter()  # skill -> count of jobs matching it
+        missing_jobs = {}  # skill -> list of job titles where it's missing
 
-    for job in jobs:
-        job_skills = parse_skills(job.get("tags") or job.get("skills") or [])
-        if not job_skills:
-            continue
+        for job in jobs:
+            job_skills = parse_skills(job.get("tags") or job.get("skills") or [])
+            if not job_skills:
+                continue
 
-        matched = job_skills & profile_skills
-        missing = job_skills - profile_skills
-        job_label = f"{job.get('title', '?')} @ {job.get('company', '?')}"
+            matched = job_skills & profile_skills
+            missing = job_skills - profile_skills
+            job_label = f"{job.get('title', '?')} @ {job.get('company', '?')}"
 
-        for skill in missing:
-            missing_counter[skill] += 1
-            if skill not in missing_jobs:
-                missing_jobs[skill] = []
-            if len(missing_jobs[skill]) < 5:  # Cap sample jobs at 5
-                missing_jobs[skill].append(job_label)
+            for skill in missing:
+                missing_counter[skill] += 1
+                if skill not in missing_jobs:
+                    missing_jobs[skill] = []
+                if len(missing_jobs[skill]) < 5:  # Cap sample jobs at 5
+                    missing_jobs[skill].append(job_label)
 
-        for skill in matched:
-            matched_counter[skill] += 1
+            for skill in matched:
+                matched_counter[skill] += 1
 
-    jobs_analyzed = len(jobs)
+        jobs_analyzed = len(jobs)
 
-    # Build skill gaps (sorted by frequency)
-    skill_gaps = []
-    for skill, freq in missing_counter.most_common(30):
-        skill_gaps.append({
-            "skill": skill,
-            "frequency": freq,
-            "percentage": round(freq / jobs_analyzed * 100),
-            "sample_jobs": missing_jobs.get(skill, []),
-        })
+        # Build skill gaps (sorted by frequency)
+        skill_gaps = []
+        for skill, freq in missing_counter.most_common(30):
+            skill_gaps.append({
+                "skill": skill,
+                "frequency": freq,
+                "percentage": round(freq / jobs_analyzed * 100),
+                "sample_jobs": missing_jobs.get(skill, []),
+            })
 
-    # Build strong skills (sorted by frequency)
-    strong_skills = []
-    for skill, freq in matched_counter.most_common(20):
-        strong_skills.append({
-            "skill": skill,
-            "frequency": freq,
-            "percentage": round(freq / jobs_analyzed * 100),
-        })
+        # Build strong skills (sorted by frequency)
+        strong_skills = []
+        for skill, freq in matched_counter.most_common(20):
+            strong_skills.append({
+                "skill": skill,
+                "frequency": freq,
+                "percentage": round(freq / jobs_analyzed * 100),
+            })
 
-    # For matched skills, add experience depth
-    for skill_entry in strong_skills:
-        skill_name = normalize_skill(skill_entry["skill"])
-        skill_entry["your_experience_years"] = round(exp_map.get(skill_name, 0), 1)
+        # For matched skills, add experience depth
+        for skill_entry in strong_skills:
+            skill_name = normalize_skill(skill_entry["skill"])
+            skill_entry["your_experience_years"] = round(exp_map.get(skill_name, 0), 1)
 
-    return {
-        "status": "success",
-        "jobs_analyzed": jobs_analyzed,
-        "skill_gaps": skill_gaps,
-        "strong_skills": strong_skills,
-    }
+        return {
+            "status": "success",
+            "jobs_analyzed": jobs_analyzed,
+            "skill_gaps": skill_gaps,
+            "strong_skills": strong_skills,
+        }
+
+    try:
+        return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return {"status": "partial_success", "message": f"Timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}

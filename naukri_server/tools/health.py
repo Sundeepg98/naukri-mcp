@@ -1,6 +1,7 @@
 """Health check tool — validates API endpoints, browser pool, and AmbitionBox scraping."""
 
 import asyncio
+import os
 import time
 
 from naukri_server import mcp
@@ -9,6 +10,7 @@ from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
     AMBITIONBOX_BASE,
+    CHROME_PROFILE,
     DASHBOARD_API,
     NAUKRI_BASE,
     PROFILE_API,
@@ -203,7 +205,15 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
     warn_count = sum(1 for c in checks if c["status"] == "warn")
     fail_count = sum(1 for c in checks if c["status"] == "fail")
 
-    return {
+    # Startup validation: Chrome profile directory
+    warnings = []
+    if not os.path.isdir(CHROME_PROFILE):
+        warnings.append(f"Chrome profile directory missing: {CHROME_PROFILE}")
+
+    # PagePool observability stats
+    pool_stats = browser.page_pool.get_stats() if browser.page_pool else None
+
+    result = {
         "status": "success",
         "summary": {
             "ok": ok_count,
@@ -212,4 +222,9 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
             "total_ms": total_ms,
         },
         "checks": checks,
+        "pool_stats": pool_stats,
     }
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
