@@ -7,6 +7,26 @@ from naukri_server import mcp
 from naukri_server.config import logger
 
 
+def _build_early_access_section(early_access: dict | None, errors: list) -> dict:
+    """Build the early_access_roles section with new-role delta tracking."""
+    from naukri_server.tools.early_access import _detect_new_roles
+
+    section = {
+        "count": early_access.get("count", 0) if early_access else 0,
+        "roles": early_access.get("roles", []) if early_access else [],
+        "newly_posted_count": 0,
+        "new_roles": [],
+    }
+    if early_access and early_access.get("roles"):
+        try:
+            new_roles, _total = _detect_new_roles(early_access["roles"])
+            section["newly_posted_count"] = len(new_roles)
+            section["new_roles"] = new_roles[:5]  # Cap at 5 for brief
+        except Exception as exc:
+            errors.append(f"Early access tracking: {type(exc).__name__}: {exc}")
+    return section
+
+
 @mcp.tool()
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
@@ -29,7 +49,7 @@ async def naukri_daily_brief() -> dict:
     from naukri_server.tools.performance import _get_recruiter_activity, _get_activity_level, _get_search_impressions
     from naukri_server.tools.tracking import _list_applications, _get_stale_applications, _list_saved_jobs
     from naukri_server.tools.profile import naukri_get_dashboard
-    from naukri_server.tools.early_access import _list_early_access_roles
+    from naukri_server.tools.early_access import _list_early_access_roles, _detect_new_roles
     from naukri_server.tools.subscription import naukri_get_subscription_status
     from naukri_server.tools.reminders import _list_reminders
     from naukri_server.tools.alerts import _get_alerts_list
@@ -123,10 +143,7 @@ async def naukri_daily_brief() -> dict:
             "total_matches": dashboard.get("total_matches", 0) if dashboard else 0,
             "unread_invites": dashboard.get("unread_invites", 0) if dashboard else 0,
         },
-        "early_access_roles": {
-            "count": early_access.get("count", 0) if early_access else 0,
-            "roles": early_access.get("roles", []) if early_access else [],
-        },
+        "early_access_roles": _build_early_access_section(early_access, errors),
         "subscription": subscription if subscription else None,
         "due_reminders": {
             "count": reminders_result.get("due_count", 0) if reminders_result else 0,

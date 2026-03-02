@@ -166,6 +166,94 @@ async def _start_interview(job_id: str) -> dict:
     }
 
 
+async def _interview_prep(job_id: str) -> dict:
+    """Prepare for an interview — job details, company interviews, reviews, mock topics."""
+    from naukri_server.tools.jobs import naukri_get_job
+    from naukri_server.tools.ambitionbox import _fetch_interviews, _fetch_reviews
+    from naukri_server.utils import derive_slug
+
+    if not job_id:
+        return {"status": "error", "message": "job_id required for interview prep", "error_code": "VALIDATION_ERROR"}
+
+    # Fetch job details first (need company name for slug)
+    job_result = await naukri_get_job(job_id_or_url=job_id)
+    if isinstance(job_result, dict) and job_result.get("status") == "error":
+        return {"status": "error", "message": f"Failed to fetch job: {job_result.get('message')}", "error_code": "API_ERROR"}
+
+    company = job_result.get("company", "")
+    slug = derive_slug(company) if company else None
+    errors = []
+
+    # Parallel: fetch interviews + reviews + mock topics
+    tasks = []
+    if slug:
+        tasks.append(_fetch_interviews(slug))   # 0
+        tasks.append(_fetch_reviews(slug))       # 1
+    else:
+        errors.append("No company name — skipping AmbitionBox data")
+        tasks.append(asyncio.sleep(0))           # 0 placeholder
+        tasks.append(asyncio.sleep(0))           # 1 placeholder
+
+    tasks.append(_get_topics())                  # 2
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Extract interviews
+    interviews_data = {}
+    if slug and not isinstance(results[0], Exception) and isinstance(results[0], dict) and results[0].get("status") == "success":
+        interviews_data = {
+            "total_interviews": results[0].get("total_interviews"),
+            "overall_difficulty": results[0].get("overall_difficulty"),
+            "sample_experiences": results[0].get("interview_experiences", [])[:3],
+            "sample_questions": [],
+        }
+        for exp in results[0].get("interview_experiences", [])[:5]:
+            interviews_data["sample_questions"].extend(exp.get("questions", [])[:3])
+        interviews_data["sample_questions"] = interviews_data["sample_questions"][:8]
+    elif slug:
+        errors.append("Interview experiences unavailable")
+
+    # Extract reviews
+    reviews_data = {}
+    if slug and not isinstance(results[1], Exception) and isinstance(results[1], dict) and results[1].get("status") == "success":
+        reviews_data = {
+            "overall_rating": results[1].get("overall_rating"),
+            "category_ratings": results[1].get("category_ratings"),
+        }
+    elif slug:
+        errors.append("Reviews unavailable")
+
+    # Extract mock topics
+    topics_data = []
+    if not isinstance(results[2], Exception) and isinstance(results[2], dict) and results[2].get("status") == "success":
+        topics_data = results[2].get("topics", [])[:5]
+
+    result = {
+        "status": "success",
+        "job_id": job_id,
+        "job_summary": {
+            "title": job_result.get("title"),
+            "company": company,
+            "salary": job_result.get("salary"),
+            "experience": job_result.get("experience"),
+            "location": job_result.get("location"),
+            "skills": job_result.get("skills", []),
+        },
+        "company_interviews": interviews_data or None,
+        "company_reviews": reviews_data or None,
+        "mock_interview_topics": topics_data,
+        "preparation_guide": {
+            "key_skills": job_result.get("skills", [])[:10],
+            "difficulty": interviews_data.get("overall_difficulty", "Unknown"),
+            "sample_questions": interviews_data.get("sample_questions", []),
+        },
+    }
+    if errors:
+        result["status"] = "partial_success"
+        result["errors"] = errors
+    return result
+
+
 async def _answer_question(test_id: str, topic_id: str, question_id: str, answer: str) -> dict:
     """Submit an answer and get the next question or completion status."""
     for attempt in range(5):
@@ -217,17 +305,18 @@ async def naukri_mock_interview(
     question_id: Optional[str] = None,
     answer: Optional[str] = None,
 ) -> dict:
-    """Unified AI mock interview — topics, history, start session, answer questions.
+    """Unified AI mock interview — topics, history, start session, answer questions, interview prep.
 
     Actions:
       - "topics": Get available mock interview topics and completion status
       - "history": Get previous mock interview history, scores, and feedback
       - "start": Start a JD-based mock interview (requires job_id)
       - "answer": Submit an answer to a mock interview question (requires test_id, topic_id, question_id, answer)
+      - "prep": Prepare for an interview — job details, company interviews/reviews, mock topics (requires job_id)
 
     Args:
-        action: "topics" | "history" | "start" | "answer"
-        job_id: Required for start — Naukri job ID to base the interview on
+        action: "topics" | "history" | "start" | "answer" | "prep"
+        job_id: Required for start/prep — Naukri job ID to base the interview on
         test_id: Required for answer — test session ID from start
         topic_id: Required for answer — topic ID from start
         question_id: Required for answer — question ID from the current question
@@ -238,6 +327,7 @@ async def naukri_mock_interview(
         - history: {status, total, count, page, has_more, interview_count, interviews: [{...}]}
         - start: {status, test_id, topic_id, topic_name, question, company_details}
         - answer: {status: "next_question"|"complete"|"generating", ...}
+        - prep: {status, job_id, job_summary, company_interviews, company_reviews, mock_interview_topics, preparation_guide}
         - {status: "error", message} on failure
     """
     # -- topics --------------------------------------------------------------
@@ -269,6 +359,15 @@ async def naukri_mock_interview(
         except Exception as e:
             return {"status": "error", "message": f"Failed to start mock interview: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # -- prep ----------------------------------------------------------------
+    elif action == "prep":
+        if not job_id:
+            return {"status": "error", "message": "prep requires job_id.", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _interview_prep(job_id)
+        except Exception as e:
+            return {"status": "error", "message": f"Interview prep failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # -- answer --------------------------------------------------------------
     elif action == "answer":
         if not test_id or not topic_id or not question_id or not answer:
@@ -282,4 +381,4 @@ async def naukri_mock_interview(
 
     # -- unknown action ------------------------------------------------------
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: topics, history, start, answer", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: topics, history, start, answer, prep", "error_code": "VALIDATION_ERROR"}

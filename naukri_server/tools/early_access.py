@@ -1,10 +1,58 @@
 """Early access tools — pre-posted roles from top companies."""
 
+from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API
+from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger
+from naukri_server.utils import load_json_with_backup, save_json_atomic
+
+_PACKAGE_ROOT = Path(__file__).parent.parent.parent
+_TRACKING_FILE = _PACKAGE_ROOT / "early_access_tracking.json"
+
+
+# ---------------------------------------------------------------------------
+# Tracking helpers — detect newly posted early access roles
+# ---------------------------------------------------------------------------
+
+def _load_seen_roles() -> set:
+    """Load previously seen early access role IDs."""
+    data = load_json_with_backup(_TRACKING_FILE, logger)
+    if isinstance(data, dict):
+        return set(str(rid) for rid in data.get("seen_role_ids", []))
+    return set()
+
+
+def _save_seen_roles(role_ids: set):
+    """Save seen role IDs to tracking file."""
+    save_json_atomic(_TRACKING_FILE, {"seen_role_ids": sorted(role_ids)}, logger)
+
+
+def _detect_new_roles(current_roles: list) -> tuple:
+    """Compare current roles against seen roles, return (new_roles, total_current).
+
+    Side-effect: updates the tracking file with all current + previously seen IDs.
+
+    Args:
+        current_roles: List of role dicts (each must have a "job_id" key).
+
+    Returns:
+        Tuple of (new_roles_list, total_current_count).
+    """
+    seen = _load_seen_roles()
+    new_roles = []
+    current_ids = set()
+    for role in current_roles:
+        role_id = str(role.get("job_id") or "")
+        if role_id:
+            current_ids.add(role_id)
+            if role_id not in seen:
+                new_roles.append(role)
+    # Merge current into seen and persist
+    all_seen = seen | current_ids
+    _save_seen_roles(all_seen)
+    return new_roles, len(current_ids)
 
 
 # ---------------------------------------------------------------------------

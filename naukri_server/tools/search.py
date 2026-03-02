@@ -3,7 +3,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
 from naukri_server.browser import browser, page_goto, page_intercept_json
-from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SIMILAR_JOBS_API, logger
+from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_list
 
@@ -58,6 +58,56 @@ async def naukri_search_jobs(
     if page < 1:
         return {"status": "error", "message": "page must be >= 1", "error_code": "VALIDATION_ERROR"}
     page_no = page  # save before shadowing by page_pool
+
+    # REST-first search — faster than browser intercept; falls back on failure
+    try:
+        rest_params = {"keyword": keywords, "noOfResults": str(limit), "pageNo": str(page_no)}
+        if location:
+            rest_params["location"] = location
+        if experience is not None:
+            rest_params["experience"] = str(experience)
+        if salary_min is not None:
+            rest_params["salary"] = f"{salary_min}-{salary_max or 999}"
+        if sort_by:
+            rest_params["sortBy"] = sort_by
+        if freshness is not None:
+            rest_params["jobAge"] = str(freshness)
+        if industry:
+            rest_params["industry"] = industry
+        if education:
+            rest_params["education"] = education
+        if role_category:
+            rest_params["roleCategory"] = role_category
+        if job_type:
+            _JOB_TYPE_MAP = {"fulltime": "1", "parttime": "2", "contract": "3", "internship": "4", "temporary": "5"}
+            jt = _JOB_TYPE_MAP.get(job_type.lower())
+            if jt:
+                rest_params["jobType"] = jt
+        if company_type:
+            rest_params["companyType"] = company_type
+        if work_mode:
+            rest_params["wfhType"] = work_mode
+        if posted_within is not None:
+            rest_params["jobAge"] = str(posted_within)
+
+        data = await api_get(SEARCH_API, params=rest_params)
+        if data and isinstance(data, dict) and data.get("jobDetails"):
+            jobs = _parse_job_list(data.get("jobDetails", []), limit)
+            total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
+            return {
+                "status": "success",
+                "keywords": keywords,
+                "location": location,
+                "page": page_no,
+                "total": total,
+                "count": len(jobs),
+                "has_more": (page_no * limit) < total if isinstance(total, int) else len(jobs) == limit,
+                "jobs": jobs,
+                "search_path": "rest",
+            }
+    except Exception as e:
+        logger.info("REST search failed (%s), falling back to browser", e)
+
     async with browser.page_pool.acquire() as page:
         try:
             # Build Naukri search URL (SEO-friendly format)

@@ -268,3 +268,103 @@ class TestHelperValidation:
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "page" in result["message"]
+
+
+# =====================================================================
+# 6. naukri_salary_benchmark — salary benchmarking
+# =====================================================================
+
+class TestSalaryBenchmark:
+    """Tests for naukri_salary_benchmark."""
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_requires_keywords(self):
+        """salary_benchmark requires keywords parameter."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        with pytest.raises(TypeError):
+            await naukri_salary_benchmark()
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_validation_zero_sample(self):
+        """sample_size < 1 returns validation error."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        result = await naukri_salary_benchmark(keywords="python", sample_size=0)
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_sample_size_clamped(self):
+        """sample_size is clamped to 50."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
+            mock_search.return_value = {"status": "success", "jobs": []}
+            mock_profile.return_value = {"status": "success"}
+            result = await naukri_salary_benchmark(keywords="python", sample_size=100)
+            _, kwargs = mock_search.call_args
+            assert kwargs["limit"] == 50
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_no_jobs_found(self):
+        """Returns NOT_FOUND when no jobs match."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
+            mock_search.return_value = {"status": "success", "jobs": [
+                {"title": "Dev", "company": "Acme", "salary": "Not Disclosed"}
+            ]}
+            mock_profile.return_value = {"status": "success"}
+            result = await naukri_salary_benchmark(keywords="python")
+            assert result["status"] == "partial_success"
+            assert result["jobs_with_salary"] == 0
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_aggregation(self):
+        """Correctly aggregates salary data from job listings."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        jobs = [
+            {"title": "Dev1", "company": "A", "salary": "10-15 Lacs PA"},
+            {"title": "Dev2", "company": "B", "salary": "15-20 Lacs PA"},
+            {"title": "Dev3", "company": "C", "salary": "20-30 Lacs PA"},
+            {"title": "Dev4", "company": "D", "salary": "12-18 Lacs PA"},
+        ]
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
+            mock_search.return_value = {"status": "success", "jobs": jobs}
+            mock_profile.return_value = {"status": "success", "current_ctc": 14, "expected_ctc": 20}
+            result = await naukri_salary_benchmark(keywords="python")
+            assert result["status"] == "success"
+            assert result["jobs_with_salary"] == 4
+            agg = result["salary_aggregate"]
+            assert agg["min"] <= agg["avg"] <= agg["max"]
+            assert agg["median"] is not None
+            assert result["your_positioning"] is not None
+            assert result["your_positioning"]["current_vs_market"] in ("below", "at_market", "above")
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_search_failure(self):
+        """Returns error when search fails."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
+            mock_search.return_value = {"status": "error", "message": "Search down"}
+            mock_profile.return_value = {"status": "success"}
+            result = await naukri_salary_benchmark(keywords="python")
+            assert result["status"] == "error"
+            assert result["error_code"] == "API_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_salary_benchmark_profile_failure_partial(self):
+        """Returns partial_success when profile fails but search works."""
+        from naukri_server.tools.research import naukri_salary_benchmark
+        jobs = [
+            {"title": "Dev", "company": "A", "salary": "10-20 Lacs PA"},
+        ]
+        with patch("naukri_server.tools.search.naukri_search_jobs", new_callable=AsyncMock) as mock_search, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
+            mock_search.return_value = {"status": "success", "jobs": jobs}
+            mock_profile.return_value = {"status": "error", "message": "Auth failed"}
+            result = await naukri_salary_benchmark(keywords="python")
+            assert result["status"] == "partial_success"
+            assert result["your_positioning"] is None
+            assert "errors" in result

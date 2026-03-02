@@ -14,22 +14,27 @@ async def naukri_skill_gap_analysis(
     keywords: Optional[str] = None,
     use_recommendations: bool = True,
     sample_size: int = 20,
+    include_assessments: bool = True,
     timeout_seconds: int = 120,
 ) -> dict:
     """Analyze skill gaps across multiple jobs to find your most common missing skills.
 
     Fetches N jobs (via recommendations or search) and your profile in parallel,
     then computes which skills you're missing most often. Helps prioritize upskilling.
+    When include_assessments is True, passed Naukri skill assessments boost the
+    frequency of matched skills by 2x (they appear more valuable to recruiters).
 
     Args:
         keywords: Search keywords (required if use_recommendations is False)
         use_recommendations: If True, use personalized recommendations; if False, use search (default True)
         sample_size: Number of jobs to analyze (default 20, max 50)
+        include_assessments: If True, fetch assessments and boost passed-skill frequency by 2x (default True)
         timeout_seconds: Max seconds before timeout (default 120)
 
     Returns:
         - {status: "success", jobs_analyzed, skill_gaps: [{skill, frequency, percentage,
-           sample_jobs}], strong_skills: [{skill, frequency, percentage}]}
+           sample_jobs}], strong_skills: [{skill, frequency, percentage, assessment_passed?}],
+           assessments_used: int}
         - {status: "error", message}
     """
     if not use_recommendations and not keywords:
@@ -40,18 +45,23 @@ async def naukri_skill_gap_analysis(
     async def _do_work() -> dict:
         from naukri_server.tools.search import naukri_search_jobs, naukri_get_recommendations
         from naukri_server.tools.profile import get_cached_profile
+        from naukri_server.tools.assessments import _list_assessments
 
-        # Parallel: fetch jobs + profile
+        # Parallel: fetch jobs + profile (+ assessments if enabled)
         if use_recommendations:
             jobs_coro = naukri_get_recommendations(limit=sample_size)
         else:
             jobs_coro = naukri_search_jobs(keywords=keywords, limit=sample_size)
 
-        jobs_result, profile_result = await asyncio.gather(
-            jobs_coro,
-            get_cached_profile(),
-            return_exceptions=True,
-        )
+        coros = [jobs_coro, get_cached_profile()]
+        if include_assessments:
+            coros.append(_list_assessments())
+
+        gather_results = await asyncio.gather(*coros, return_exceptions=True)
+
+        jobs_result = gather_results[0]
+        profile_result = gather_results[1]
+        assessment_result = gather_results[2] if include_assessments else None
 
         if isinstance(jobs_result, Exception) or jobs_result.get("status") == "error":
             msg = str(jobs_result) if isinstance(jobs_result, Exception) else jobs_result.get("message")
@@ -75,6 +85,22 @@ async def naukri_skill_gap_analysis(
                 years = s.get("experience_years", 0) or 0
                 months = s.get("experience_months", 0) or 0
                 exp_map[name] = years + months / 12
+
+        # Extract passed assessment skills (normalized)
+        passed_skills: set[str] = set()
+        if include_assessments and assessment_result is not None:
+            if not isinstance(assessment_result, Exception):
+                if isinstance(assessment_result, dict) and assessment_result.get("status") == "success":
+                    for assessment in assessment_result.get("assessments", []):
+                        status = (assessment.get("status") or "").lower()
+                        if status in ("passed", "completed"):
+                            skill_name = (assessment.get("skill") or "").strip()
+                            if skill_name:
+                                passed_skills.add(normalize_skill(skill_name))
+                else:
+                    logger.warning("Assessments fetch failed (non-fatal): %s", assessment_result)
+            else:
+                logger.warning("Assessments fetch raised (non-fatal): %s", assessment_result)
 
         # Analyze each job
         missing_counter = Counter()  # skill -> count of jobs missing it
@@ -102,6 +128,12 @@ async def naukri_skill_gap_analysis(
 
         jobs_analyzed = len(jobs)
 
+        # Boost matched skill frequency by 2x for passed assessments
+        if passed_skills:
+            for skill in list(matched_counter):
+                if normalize_skill(skill) in passed_skills:
+                    matched_counter[skill] *= 2
+
         # Build skill gaps (sorted by frequency)
         skill_gaps = []
         for skill, freq in missing_counter.most_common(30):
@@ -112,14 +144,17 @@ async def naukri_skill_gap_analysis(
                 "sample_jobs": missing_jobs.get(skill, []),
             })
 
-        # Build strong skills (sorted by frequency)
+        # Build strong skills (sorted by boosted frequency)
         strong_skills = []
         for skill, freq in matched_counter.most_common(20):
-            strong_skills.append({
+            entry = {
                 "skill": skill,
                 "frequency": freq,
                 "percentage": round(freq / jobs_analyzed * 100),
-            })
+            }
+            if normalize_skill(skill) in passed_skills:
+                entry["assessment_passed"] = True
+            strong_skills.append(entry)
 
         # For matched skills, add experience depth
         for skill_entry in strong_skills:
@@ -129,6 +164,7 @@ async def naukri_skill_gap_analysis(
         return {
             "status": "success",
             "jobs_analyzed": jobs_analyzed,
+            "assessments_used": len(passed_skills),
             "skill_gaps": skill_gaps,
             "strong_skills": strong_skills,
         }

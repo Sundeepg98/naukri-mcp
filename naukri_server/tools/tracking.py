@@ -401,6 +401,115 @@ async def _get_stale_applications(
     }
 
 
+async def _application_follow_up(
+    days_threshold: int = 14,
+    min_stale_score: int = 40,
+    limit: int = 10,
+) -> dict:
+    """Cross-reference stale applications with inbox and reminders for follow-up suggestions."""
+    from naukri_server.tools.inbox import _fetch_inbox
+    from naukri_server.tools.reminders import _list_reminders
+
+    errors = []
+
+    # Parallel: stale apps + inbox + reminders
+    stale_result, inbox_result, reminders_result = await asyncio.gather(
+        _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit),
+        _fetch_inbox(limit=50, unread_only=False),
+        _list_reminders(include_past=True),
+        return_exceptions=True,
+    )
+
+    if isinstance(stale_result, Exception) or (isinstance(stale_result, dict) and stale_result.get("status") == "error"):
+        return {"status": "error", "message": f"Stale detection failed: {stale_result}", "error_code": "API_ERROR"}
+
+    stale_apps = stale_result.get("stale_applications", [])
+
+    # Build inbox index by company (lowercase)
+    inbox_by_company: dict = {}
+    if not isinstance(inbox_result, Exception) and isinstance(inbox_result, dict):
+        for msg in inbox_result.get("messages", []):
+            company_details = msg.get("company_details") or {}
+            company_name = (company_details.get("company_name") or "").lower()
+            if company_name:
+                inbox_by_company.setdefault(company_name, []).append(msg)
+    else:
+        errors.append("Inbox fetch failed — recruiter messages unavailable")
+
+    # Build reminders index by job_id
+    reminders_by_job: dict = {}
+    if not isinstance(reminders_result, Exception) and isinstance(reminders_result, dict):
+        for rem in reminders_result.get("reminders", []):
+            reminders_by_job[rem.get("job_id")] = rem
+    else:
+        errors.append("Reminders fetch failed")
+
+    # Cross-reference
+    enriched = []
+    action_items = []
+    for app in stale_apps:
+        company_lower = (app.get("company") or "").lower()
+        job_id = app.get("job_id")
+
+        recruiter_msgs = inbox_by_company.get(company_lower, [])
+        pending_reminder = reminders_by_job.get(job_id)
+
+        if recruiter_msgs:
+            suggested_action = "Recruiter contacted you — respond to their message"
+            priority = "high"
+        elif pending_reminder and pending_reminder.get("is_due"):
+            suggested_action = "Reminder is due — follow up now"
+            priority = "high"
+        elif app.get("stale_score", 0) >= 70:
+            suggested_action = "Highly stale — consider archiving or sending follow-up"
+            priority = "medium"
+        else:
+            suggested_action = "Monitor — set a reminder if interested"
+            priority = "low"
+
+        entry = {
+            "job_id": job_id,
+            "title": app.get("title"),
+            "company": app.get("company"),
+            "applied_date": app.get("applied_date"),
+            "stale_score": app.get("stale_score"),
+            "reasons": app.get("reasons", []),
+            "recruiter_messages": [
+                {"subject": m.get("subject"), "date": m.get("date"), "sender": m.get("sender")}
+                for m in recruiter_msgs[:3]
+            ],
+            "pending_reminder": pending_reminder,
+            "suggested_action": suggested_action,
+        }
+        enriched.append(entry)
+
+        action_items.append({
+            "priority": priority,
+            "action": suggested_action,
+            "job_id": job_id,
+            "company": app.get("company"),
+            "title": app.get("title"),
+        })
+
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    action_items.sort(key=lambda x: priority_order.get(x["priority"], 3))
+
+    result = {
+        "status": "success",
+        "summary": {
+            "total_stale": len(stale_apps),
+            "with_recruiter_contact": sum(1 for e in enriched if e["recruiter_messages"]),
+            "with_pending_reminder": sum(1 for e in enriched if e["pending_reminder"]),
+        },
+        "stale_applications": enriched,
+        "action_items": action_items,
+    }
+    if errors:
+        result["status"] = "partial_success"
+        result["errors"] = errors
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool for application tracking
 # ---------------------------------------------------------------------------
@@ -419,24 +528,26 @@ async def naukri_applications(
     limit: int = 50,
     page: int = 1,
 ) -> dict:
-    """Unified application tracking — list, detail, purge, and stale detection.
+    """Unified application tracking — list, detail, purge, stale detection, and follow-up suggestions.
 
     Actions:
       - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page)
       - "detail": Get detailed status for ONE application from Naukri API (requires job_id)
       - "purge": Delete old applications from local tracking (requires before_date, use dry_run)
       - "stale": Detect stale applications needing follow-up (use days_threshold/min_stale_score/limit/page)
+      - "follow_up": Cross-reference stale apps with inbox & reminders for prioritized action items
+        (use days_threshold/min_stale_score/limit)
 
     Args:
-        action: "list" | "detail" | "purge" | "stale"
+        action: "list" | "detail" | "purge" | "stale" | "follow_up"
         job_id: Required for detail — the Naukri job ID (e.g. "270226007446")
         status: (list) Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: (list) ISO date, include applications on/after this date (e.g. "2026-02-01")
         date_to: (list) ISO date, include applications on/before this date (e.g. "2026-02-28")
         before_date: (purge) ISO date (YYYY-MM-DD). Delete applications applied before this date.
         dry_run: (purge) If True (default), only preview — don't actually delete.
-        days_threshold: (stale) Consider apps older than N days (default 14)
-        min_stale_score: (stale) Minimum staleness score 0-100 to include (default 40)
+        days_threshold: (stale/follow_up) Consider apps older than N days (default 14)
+        min_stale_score: (stale/follow_up) Minimum staleness score 0-100 to include (default 40)
         limit: Max results per page (default 50)
         page: Page number for pagination (default 1)
 
@@ -446,6 +557,8 @@ async def naukri_applications(
                    recruiter_activity, match_rating, status_timeline, screening_questions, recruiter, ...}
         - purge: {status, purged_count, remaining_count, dry_run, sample_purged}
         - stale: {status, total_applications, total, count, page, has_more, stale_applications: [...]}
+        - follow_up: {status, summary: {total_stale, with_recruiter_contact, with_pending_reminder},
+                      stale_applications: [...], action_items: [{priority, action, job_id, company, title}]}
         - {status: "error", message} on failure
     """
     # ── list ───────────────────────────────────────────────────────────
@@ -482,9 +595,20 @@ async def naukri_applications(
         except Exception as e:
             return {"status": "error", "message": f"Stale detection failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── follow_up ──────────────────────────────────────────────────────
+    elif action == "follow_up":
+        try:
+            return await _application_follow_up(
+                days_threshold=days_threshold,
+                min_stale_score=min_stale_score,
+                limit=limit,
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Follow-up analysis failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------

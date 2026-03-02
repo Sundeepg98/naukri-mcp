@@ -1,15 +1,13 @@
 """Follow-up reminders for job applications."""
 
 import asyncio
-import json
-import os
-import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.utils import load_json_with_backup, save_json_atomic
 
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent
 REMINDERS_FILE = _PACKAGE_ROOT / "reminders.json"
@@ -17,29 +15,11 @@ _reminders_lock = asyncio.Lock()
 
 
 def _load_reminders() -> list:
-    if REMINDERS_FILE.exists():
-        try:
-            return json.loads(REMINDERS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            backup = REMINDERS_FILE.with_suffix(".backup")
-            if backup.exists():
-                try:
-                    logger.warning("Reminders corrupted, recovering from backup")
-                    return json.loads(backup.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            return []
-    return []
+    return load_json_with_backup(REMINDERS_FILE, logger)
 
 
 def _save_reminders(data: list):
-    text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
-    if REMINDERS_FILE.exists():
-        backup = REMINDERS_FILE.with_suffix(".backup")
-        shutil.copy2(str(REMINDERS_FILE), str(backup))
-    tmp = REMINDERS_FILE.with_suffix(".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(REMINDERS_FILE))
+    save_json_atomic(REMINDERS_FILE, data, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +81,13 @@ async def _set_reminder(
     }
 
 
-async def _list_reminders(include_past: bool = True) -> dict:
-    """Get all follow-up reminders, highlighting due ones."""
+async def _list_reminders(include_past: bool = True, include_app_status: bool = False) -> dict:
+    """Get all follow-up reminders, highlighting due ones.
+
+    Args:
+        include_past: Include already-due reminders (default True).
+        include_app_status: Batch-fetch live application status for each reminder (default False).
+    """
     async with _reminders_lock:
         reminders = _load_reminders()
 
@@ -140,6 +125,35 @@ async def _list_reminders(include_past: bool = True) -> dict:
     # Sort: due first (by overdue days desc), then upcoming (by days asc)
     result_list.sort(key=lambda x: (not x["is_due"], x["days_until_due"]))
 
+    # Enrich with live application status if requested
+    if include_app_status and result_list:
+        from naukri_server.tools.tracking import _get_application_detail
+
+        job_ids = [r["job_id"] for r in result_list if r.get("job_id")]
+        if job_ids:
+            detail_tasks = [_get_application_detail(jid) for jid in job_ids]
+            detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+
+            # Build lookup by job_id
+            status_by_job = {}
+            for jid, detail in zip(job_ids, detail_results):
+                if (
+                    not isinstance(detail, Exception)
+                    and isinstance(detail, dict)
+                    and detail.get("status") != "error"
+                ):
+                    status_by_job[jid] = {
+                        "current_status": detail.get("current_status"),
+                        "view_count": detail.get("view_count"),
+                        "ars_score": detail.get("ars_score"),
+                    }
+
+            # Attach to reminders
+            for rem in result_list:
+                jid = rem.get("job_id")
+                if jid and jid in status_by_job:
+                    rem["application_status"] = status_by_job[jid]
+
     return {
         "status": "success",
         "total": len(result_list),
@@ -161,6 +175,7 @@ async def naukri_reminders(
     title: Optional[str] = None,
     company: Optional[str] = None,
     include_past: bool = True,
+    include_app_status: bool = True,
 ) -> dict:
     """Unified reminder management — list reminders or set a follow-up.
 
@@ -176,17 +191,20 @@ async def naukri_reminders(
         title: For set — job title (for display)
         company: For set — company name (for display)
         include_past: For list — include already-due reminders (default True)
+        include_app_status: For list — enrich each reminder with live application
+            status (current_status, view_count, ars_score). Default True.
 
     Returns:
         - list: {status, total, due_count, reminders: [{job_id, title, company,
-          remind_at, note, is_due, days_until_due, created_at}]}
+          remind_at, note, is_due, days_until_due, created_at,
+          application_status?: {current_status, view_count, ars_score}}]}
         - set: {status, job_id, remind_at, note, message}
         - {status: "error", message} on failure
     """
     # -- list ---------------------------------------------------------------
     if action == "list":
         try:
-            return await _list_reminders(include_past=include_past)
+            return await _list_reminders(include_past=include_past, include_app_status=include_app_status)
         except Exception as e:
             return {"status": "error", "message": f"List reminders failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 

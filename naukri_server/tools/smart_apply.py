@@ -8,12 +8,132 @@ from naukri_server.config import logger
 from naukri_server.scoring import compute_fit_score, parse_skills
 
 
+# ── Concurrency limit for bulk job detail fetches ──
+_BULK_FETCH_CONCURRENCY = 3
+
+
+def _score_job(job_result: dict, profile_result: dict) -> dict:
+    """Score a single job against a profile. Returns the fit assessment dict."""
+    job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
+    profile_skills = parse_skills(profile_result.get("key_skills", []))
+    return compute_fit_score(
+        job_skills, profile_skills,
+        job_result.get("experience", ""),
+        profile_result.get("total_experience"),
+        job_location=job_result.get("location"),
+        profile_location=profile_result.get("current_location"),
+        job_work_mode=job_result.get("work_mode"),
+        job_salary=job_result.get("salary"),
+        profile_expected_ctc=profile_result.get("expected_ctc"),
+    )
+
+
+async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120) -> dict:
+    """Score all saved jobs against profile, return ranked list.
+
+    Fetches saved jobs from local tracking, fetches full job details for each
+    (to get skills/experience data), then scores each against the profile.
+    Results are sorted by fit_score descending.
+    """
+    async def _do_work():
+        from naukri_server.tools.jobs import naukri_get_job
+        from naukri_server.tools.profile import get_cached_profile
+        from naukri_server.tools.tracking import _list_saved_jobs
+
+        # Parallel: saved jobs list + profile
+        saved_result, profile_result = await asyncio.gather(
+            _list_saved_jobs(limit=50, page=1),
+            get_cached_profile(),
+            return_exceptions=True,
+        )
+
+        if isinstance(saved_result, Exception):
+            return {"status": "error", "message": f"Failed to fetch saved jobs: {saved_result}", "error_code": "API_ERROR"}
+        if isinstance(saved_result, dict) and saved_result.get("status") == "error":
+            return {"status": "error", "message": f"Failed to fetch saved jobs: {saved_result.get('message')}", "error_code": "API_ERROR"}
+
+        if isinstance(profile_result, Exception):
+            return {"status": "error", "message": f"Failed to fetch profile: {profile_result}", "error_code": "API_ERROR"}
+        if isinstance(profile_result, dict) and profile_result.get("status") == "error":
+            return {"status": "error", "message": f"Failed to fetch profile: {profile_result.get('message')}", "error_code": "API_ERROR"}
+
+        saved_jobs = saved_result.get("saved_jobs", [])
+        if not saved_jobs:
+            return {"status": "success", "total_saved": 0, "scored_count": 0, "min_fit_score": min_fit_score, "scored_jobs": [], "message": "No saved jobs found"}
+
+        # Fetch full details for each saved job (need skills/experience for scoring)
+        sem = asyncio.Semaphore(_BULK_FETCH_CONCURRENCY)
+        errors = []
+
+        async def _fetch_detail(job):
+            job_id = job.get("job_id")
+            if not job_id:
+                return None
+            async with sem:
+                try:
+                    return await naukri_get_job(job_id_or_url=job_id)
+                except Exception as e:
+                    errors.append(f"job {job_id}: {e}")
+                    return None
+
+        detail_results = await asyncio.gather(
+            *[_fetch_detail(j) for j in saved_jobs],
+            return_exceptions=True,
+        )
+
+        # Score each job that has valid details
+        scored = []
+        for saved_job, detail in zip(saved_jobs, detail_results):
+            if isinstance(detail, Exception):
+                errors.append(f"job {saved_job.get('job_id')}: {detail}")
+                continue
+            if detail is None or (isinstance(detail, dict) and detail.get("status") == "error"):
+                continue
+
+            fit = _score_job(detail, profile_result)
+            fit_score = fit.get("overall_score", 0)
+
+            if fit_score >= min_fit_score:
+                scored.append({
+                    "job_id": saved_job.get("job_id"),
+                    "title": detail.get("title") or saved_job.get("title"),
+                    "company": detail.get("company") or saved_job.get("company"),
+                    "salary": detail.get("salary") or saved_job.get("salary"),
+                    "location": detail.get("location") or saved_job.get("location"),
+                    "experience": detail.get("experience"),
+                    "work_mode": detail.get("work_mode"),
+                    "fit_score": fit_score,
+                    "fit_details": fit,
+                })
+
+        scored.sort(key=lambda x: x["fit_score"], reverse=True)
+
+        result = {
+            "status": "success",
+            "total_saved": len(saved_jobs),
+            "scored_count": len(scored),
+            "min_fit_score": min_fit_score,
+            "scored_jobs": scored,
+        }
+        if errors:
+            result["errors"] = errors
+
+        return result
+
+    try:
+        return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Bulk scoring timed out after {timeout_seconds}s", "error_code": "API_ERROR"}
+
+
 @mcp.tool()
 async def naukri_smart_apply(
-    job_id: str,
+    job_id: Optional[str] = None,
+    action: Optional[str] = None,
     apply_if_fit: bool = False,
     min_fit_score: int = 60,
     answers: Optional[dict] = None,
+    timeout_seconds: int = 120,
 ) -> dict:
     """Assess job fit before applying — compares your profile against the job.
 
@@ -23,19 +143,46 @@ async def naukri_smart_apply(
     - Location, work mode, and salary bonuses
     - Overall recommendation
 
+    Actions:
+      - None (default): Single-job assessment. Requires job_id.
+      - "bulk_saved": Score all saved/bookmarked jobs against your profile.
+                      Returns a ranked list sorted by fit_score descending.
+                      Uses min_fit_score to filter results (default 60).
+                      Does NOT require job_id.
+
     Args:
-        job_id: Naukri job ID
-        apply_if_fit: If True, automatically apply when fit score >= min_fit_score
-        min_fit_score: Minimum fit score for auto-apply (default 60, range 0-100)
-        answers: Optional screening question answers (for auto-apply)
+        job_id: Naukri job ID (required for single-job assessment, ignored for bulk_saved)
+        action: "bulk_saved" to score all saved jobs, or None for single-job assessment
+        apply_if_fit: If True, automatically apply when fit score >= min_fit_score (single-job only)
+        min_fit_score: Minimum fit score threshold (default 60, range 0-100)
+        answers: Optional screening question answers (for auto-apply, single-job only)
+        timeout_seconds: Timeout for bulk operations (default 120)
 
     Returns:
+        Single-job:
         - {status: "success", fit_assessment: {overall_score, skill_match,
            experience_match, bonuses, recommendation}, job_summary, applied}
+        - {status: "error", message}
+
+        bulk_saved:
+        - {status: "success", total_saved, scored_count, min_fit_score,
+           scored_jobs: [{job_id, title, company, salary, location, fit_score, fit_details}, ...]}
         - {status: "error", message}
     """
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
+
+    # ── Bulk saved scoring ───────────────────────────────────────────
+    if action == "bulk_saved":
+        return await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+
+    # ── Unknown action ───────────────────────────────────────────────
+    if action is not None:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: bulk_saved (or omit for single-job assessment)", "error_code": "VALIDATION_ERROR"}
+
+    # ── Single-job assessment (default) ──────────────────────────────
+    if not job_id:
+        return {"status": "error", "message": "job_id is required for single-job assessment", "error_code": "VALIDATION_ERROR"}
 
     from naukri_server.tools.jobs import naukri_get_job
     from naukri_server.tools.profile import get_cached_profile
@@ -57,18 +204,7 @@ async def naukri_smart_apply(
         return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
     # Compute fit — use tags-or-skills fallback, pass enrichment data
-    job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
-    profile_skills = parse_skills(profile_result.get("key_skills", []))
-    fit = compute_fit_score(
-        job_skills, profile_skills,
-        job_result.get("experience", ""),
-        profile_result.get("total_experience"),
-        job_location=job_result.get("location"),
-        profile_location=profile_result.get("current_location"),
-        job_work_mode=job_result.get("work_mode"),
-        job_salary=job_result.get("salary"),
-        profile_expected_ctc=profile_result.get("expected_ctc"),
-    )
+    fit = _score_job(job_result, profile_result)
 
     result = {
         "status": "success",
