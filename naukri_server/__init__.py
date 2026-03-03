@@ -1,4 +1,4 @@
-"""Naukri.com Job Automation MCP Server — Tier 21 (26 tools, 981 tests)
+"""Naukri.com Job Automation MCP Server — Tier 22 (26 tools, 1010+ tests)
 
 Quick Start for AI consumers:
   1. naukri_auth(action="login|verify_otp|status") → authenticate first
@@ -32,15 +32,19 @@ Consolidated tools (action-parameter pattern — 21 dispatchers):
   - naukri_saved_jobs(action="list|save|unsave")
   - naukri_early_access(action="list|share")
   - naukri_profile_media(media_type="resume|photo", action="info|upload|download|delete")
-  - naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark")
+  - naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark|taxonomy")
   - naukri_reminders(action="list|set")
   - naukri_sync(entity="applications|saved_jobs|export")
   - naukri_resume_builder(action="templates|status|tailor")
-  - naukri_notifications(action="list|count|mark_read|mark_all_read")
+  - naukri_notifications(action="list|count|mark_read|mark_all_read|summary")
   - naukri_settings(action="get|update|blocked_companies|check_email|visibility|notification_prefs|subscription")
   - naukri_job_alerts(action="list|detail|create|update|delete")
   - naukri_jobs(action="get|report_fraud|similar|compare")
   - naukri_debug(action="browser_*|api_*|discover_*")
+
+Tier 22 changes (performance widget headers fix):
+  - naukri_performance(metric="impressions|activity_level") now use appid:109 widget headers
+  - Search keyword frequency API now uses widget headers for faster response times
 
 Tier 17 changes (from 38→30 tools):
   - Consolidated: naukri_get_dashboard→naukri_profile(action="dashboard"),

@@ -226,12 +226,17 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     filters needed (the algorithm decides). For keyword/filter-based search,
     use naukri_search_jobs instead.
 
+    Returns 5 recommendation clusters (apply, profile, top_candidate, similar_jobs, preference)
+    with agentEligible flag.
+
     Args:
         limit: Max jobs to return (default 20, max 50)
         page: Page number for pagination (default 1). Note: Naukri's recommendations API returns a single batch; pagination is applied client-side.
 
     Returns:
-        - {status: "success", source: "recommendations", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
+        - {status: "success", source: "recommendations", total, count, page, has_more,
+           agent_eligible_exists, cluster_split_date, clusters: {type: {count, title}},
+           jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
     limit = validate_limit(limit)
@@ -242,6 +247,17 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     total = data.get("noOfJobs") or len(all_jobs)
     offset = (page - 1) * limit
     jobs = all_jobs[offset:offset + limit]
+    raw_clusters = data.get("clusters") or data.get("recommendedClusters", {})
+    cluster_info = {}
+    if isinstance(raw_clusters, dict):
+        for cluster_type, cluster_data in raw_clusters.items():
+            if isinstance(cluster_data, dict):
+                cluster_info[cluster_type] = {
+                    "count": cluster_data.get("count", 0),
+                    "title": cluster_data.get("title") or cluster_type,
+                }
+            elif isinstance(cluster_data, (int, float)):
+                cluster_info[cluster_type] = {"count": int(cluster_data), "title": cluster_type}
     result = {
         "status": "success",
         "source": "recommendations",
@@ -251,6 +267,9 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
         "has_more": (offset + limit) < total,
         "jobs": jobs,
     }
+    result["agent_eligible_exists"] = data.get("agentEligibleJobExists", False)
+    result["cluster_split_date"] = data.get("clusterSplitDate")
+    result["clusters"] = cluster_info
     warnings = validate_job_list(jobs, total, "recommendations")
     if warnings:
         result["warnings"] = warnings

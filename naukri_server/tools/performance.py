@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API
+from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API, WIDGET_HEADERS
 from naukri_server.validation import validate_page
 
 # Valid filter values for recruiter activity (from activityBucketCount keys)
@@ -24,6 +24,7 @@ async def _get_search_impressions(days: int = 7) -> dict:
     data = await api_get(
         SEARCH_IMPRESSIONS_API,
         params={"days": str(days), "totalAppearances": "1"},
+        extra_headers=WIDGET_HEADERS,
     )
     return {
         "status": "success",
@@ -39,7 +40,7 @@ async def _get_search_impressions(days: int = 7) -> dict:
 
 async def _get_recruiter_activity(
     page: int = 1,
-    size: int = 20,
+    size: int = 100,
     filter_by: Optional[str] = None,
 ) -> dict:
     """Fetch recruiter activity from the API and return structured result."""
@@ -124,7 +125,7 @@ async def _get_recruiter_activity(
 
 async def _get_activity_level() -> dict:
     """Fetch profile activity level from the API and return structured result."""
-    data = await api_get(ACTIVITY_LEVEL_API)
+    data = await api_get(ACTIVITY_LEVEL_API, extra_headers=WIDGET_HEADERS)
     return {
         "status": "success",
         "level": data.get("level", "UNKNOWN"),
@@ -151,16 +152,20 @@ async def naukri_performance(
     Metrics:
       - "impressions": Search appearance stats — how many times recruiters found you,
         which keywords they searched, and day-by-day timeline. Uses days param.
+        Uses widget headers (appid:109) — required to avoid 401.
       - "recruiter_activity": Who viewed, downloaded, contacted you, or added you to
         their folder. Supports pagination (page/size) and filtering (filter_by).
+        Default size=100 returns all activities in a single call (probing-confirmed).
       - "activity_level": Current profile activity level (HIGH/MEDIUM/LOW).
+        Uses widget headers (appid:109) — required to avoid 401.
         No extra params needed.
 
     Args:
         metric: "impressions" | "recruiter_activity" | "activity_level"
         days: Time period — must be 7, 30, or 90 (default 7). Used by impressions.
         page: Page number for recruiter_activity (default 1).
-        limit: Items per page for recruiter_activity (default 20).
+        limit: Items per page for recruiter_activity (default 100). Size=100 returns
+               all activities. Use smaller values only if you want a subset.
         filter_by: Filter recruiter_activity by type. One of:
                    "VIEWED" | "MOBILE_VIEWED" | "DOWNLOADED" | "CONTACTED" | "ADD_TO_FOLDER"
                    None = all actions (default).

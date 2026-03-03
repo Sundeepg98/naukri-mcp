@@ -181,8 +181,18 @@ BULK_JOBS_API = "/jobapi/v2/jobs"                          # POST {jobIds: [...]
 JOB_DETAIL_V1_API = "/jobapi/v1/job/"                      # GET + job_id (97 keys, walk-in/contact/metrics)
 INBOX_REST_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/inbox/users/self/mails"  # GET with pageSize/pageNo/mailType
 
+# Widget API headers (appid:109) — required for performance, settings, NC template endpoints
+WIDGET_HEADERS = {
+    "appid": "109",
+    "systemid": "109",
+}
+
 # Company API (different appid from main API — discovered via webpack analysis)
 COMPANY_API_HEADERS = {
     "appid": "103",
     "systemid": "Naukri",
 }
+
+# Tier 22: Team probing discoveries (2026-03-02)
+RECOMMEND_NOTIFY_API = "/recommendapi/v1/notify"
+ENTITY_TAXONOMY_API = "/cloudgateway-central-services/central-entity-services/v0/entity/entity_depart/role_categ/role"

@@ -8,13 +8,61 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get
 from naukri_server.cache import _load_cache, _cache_lock
-from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API
+from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
+from naukri_server.utils import TtlCache
+
+
+_taxonomy_cache = TtlCache(86400)  # 24 hours — taxonomy data is static
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers (not MCP tools — used by the unified tool)
 # ---------------------------------------------------------------------------
+
+async def _get_taxonomy() -> dict:
+    """Fetch Naukri's job taxonomy: 37 departments -> 167 role categories -> 1461 roles."""
+    cached = _taxonomy_cache.get("taxonomy")
+    if cached:
+        return cached
+
+    data = await api_get(ENTITY_TAXONOMY_API)
+    entities = data if isinstance(data, list) else data.get("data", data.get("entities", []))
+
+    departments = []
+    total_roles = 0
+    for dept in (entities if isinstance(entities, list) else []):
+        dept_entry = {
+            "id": dept.get("id"),
+            "label": dept.get("label"),
+            "synonyms": dept.get("synonyms", []),
+            "role_categories": [],
+        }
+        for cat in dept.get("child", []):
+            cat_entry = {
+                "id": cat.get("id"),
+                "label": cat.get("label"),
+                "roles": [],
+            }
+            for role in cat.get("child", []):
+                cat_entry["roles"].append({
+                    "id": role.get("id"),
+                    "label": role.get("label"),
+                    "synonyms": role.get("synonyms", []),
+                })
+                total_roles += 1
+            dept_entry["role_categories"].append(cat_entry)
+        departments.append(dept_entry)
+
+    result = {
+        "status": "success",
+        "total_departments": len(departments),
+        "total_roles": total_roles,
+        "departments": departments,
+    }
+    _taxonomy_cache.set("taxonomy", result)
+    return result
+
 
 async def _application_insights(days: int = 30) -> dict:
     """Analyze application history for patterns and insights."""
@@ -314,9 +362,10 @@ async def naukri_insights(
       - "match_quality": Aggregate apply-match quality — how well recent applications matched your profile (uses days param, default 7)
       - "skill_gap": Analyze skill gaps between your profile and market demand
       - "salary_benchmark": Benchmark your salary against market for a given role
+      - "taxonomy": Get Naukri's job taxonomy hierarchy (37 departments → 167 role categories → 1461 roles) with synonyms. Cached for 24h.
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
@@ -340,6 +389,7 @@ async def naukri_insights(
         - match_quality: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown}
         - skill_gap: {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
         - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
+        - taxonomy: {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories: [{id, label, roles: [{id, label, synonyms}]}]}]}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -404,6 +454,13 @@ async def naukri_insights(
         except Exception as e:
             return {"status": "error", "message": f"Salary benchmark failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── taxonomy ──────────────────────────────────────────────────────
+    elif insight_type == "taxonomy":
+        try:
+            return await _get_taxonomy()
+        except Exception as e:
+            return {"status": "error", "message": f"Taxonomy fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy", "error_code": "VALIDATION_ERROR"}

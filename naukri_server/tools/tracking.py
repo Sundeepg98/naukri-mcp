@@ -73,10 +73,14 @@ async def _list_applications(
     date_to: Optional[str] = None,
     limit: int = 50,
     page: int = 1,
+    filter_info: Optional[int] = None,
 ) -> dict:
     """List tracked job applications with filtering and summary stats."""
     limit = validate_limit(limit)
     page = validate_page(page)
+    params: dict = {"pageSize": str(limit), "pageNumber": str(page)}
+    if filter_info is not None:
+        params["filterInfo"] = str(filter_info)  # 1=recruiter actions, 2=naukri, 3=external
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
@@ -216,6 +220,18 @@ async def _get_application_detail(job_id: str) -> dict:
     result["shortlisted"] = data.get("shortlisted") or data.get("isShortlisted")
     result["rejected"] = data.get("rejected") or data.get("isRejected")
     result["ars_score"] = data.get("arsScore") or data.get("ars")
+    result["star_rating"] = data.get("starRating")
+    result["apply_flow_type"] = data.get("applyFlowType")  # "agentApply" or None
+    result["job_activity"] = data.get("jobActivity")  # recruiter action count
+    result["job_activity_date"] = data.get("jobActivityDate")
+    result["is_crawled"] = data.get("isCrawled")
+    # Embedded company rating from AmbitionBox
+    company_rating = data.get("companyRating") or data.get("ambitionBoxData")
+    if isinstance(company_rating, dict):
+        result["company_rating"] = {
+            "rating": company_rating.get("Rating") or company_rating.get("rating"),
+            "reviews": company_rating.get("ReviewsCount") or company_rating.get("reviewsCount"),
+        }
 
     # --- Additional metadata ---
     result["apply_source"] = data.get("applySource") or data.get("source")
@@ -523,11 +539,12 @@ async def naukri_applications(
     delay_ms: int = BATCH_APPLY_DEFAULT_DELAY_MS,
     max_concurrent: int = BATCH_APPLY_DEFAULT_CONCURRENCY,
     set_reminder_days: Optional[int] = None,
+    filter_info: Optional[int] = None,
 ) -> dict:
     """Unified application tracking — list, detail, purge, stale detection, follow-up, apply, and batch apply.
 
     Actions:
-      - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page)
+      - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page/filter_info)
       - "detail": Get detailed status for ONE application from Naukri API (requires job_id)
       - "purge": Delete old applications from local tracking (requires before_date, use dry_run)
       - "stale": Detect stale applications needing follow-up (use days_threshold/min_stale_score/limit/page)
@@ -566,6 +583,7 @@ async def naukri_applications(
         max_concurrent: (batch_apply) Max parallel applications (default 3)
         set_reminder_days: (apply/batch_apply) If set, auto-create a follow-up reminder N days after
                            successful application. Ignored if apply fails.
+        filter_info: Filter by source (1=recruiter actions, 2=naukri applies, 3=external). Only for action='list'.
 
     Returns:
         - list: {status, total, count, page, has_more, summary: {total_all_statuses, by_status}, applications: [...]}
@@ -583,7 +601,7 @@ async def naukri_applications(
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
         try:
-            return await _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page)
+            return await _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info)
         except Exception as e:
             return {"status": "error", "message": f"List applications failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 

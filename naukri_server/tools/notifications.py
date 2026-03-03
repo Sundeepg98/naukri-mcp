@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS
+from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -75,6 +75,29 @@ async def _mark_single_read(notification_id: str, date: str) -> dict:
     }
 
 
+async def _get_unified_notify() -> dict:
+    """Fetch unified notification dashboard — all categories in one call."""
+    data = await api_get(RECOMMEND_NOTIFY_API)
+    categories = {}
+    for key in ("recoJobs", "appStatus", "criticalActions", "rmj", "FF", "NL", "RR", "recruiterSearch"):
+        cat_data = data.get(key, {})
+        if cat_data:
+            categories[key] = {
+                "count": cat_data.get("noti_count") or cat_data.get("total_count") or cat_data.get("count", 0),
+                "has_new": bool(cat_data.get("has_new") or cat_data.get("noti_count", 0) > 0),
+            }
+            if "status" in cat_data:
+                categories[key]["status"] = cat_data["status"]
+            if "latest" in cat_data:
+                categories[key]["latest"] = cat_data["latest"]
+    return {
+        "status": "success",
+        "source": "unified_notify",
+        "categories": categories,
+        "total_types": len(categories),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
@@ -95,9 +118,10 @@ async def naukri_notifications(
       - "count": Get unread notification count
       - "mark_read": Mark a single notification as read (requires notification_id, date)
       - "mark_all_read": Mark ALL unread notifications as read
+      - "summary": Get unified notification dashboard — all categories in one call (recoJobs, appStatus, criticalActions, rmj, recruiterSearch, etc.)
 
     Args:
-        action: "list" | "count" | "mark_read" | "mark_all_read"
+        action: "list" | "count" | "mark_read" | "mark_all_read" | "summary"
         notification_id: Required for mark_read — the notification ID
         date: Required for mark_read — the notification date string
         limit: Max notifications for list action (default 20)
@@ -111,6 +135,7 @@ async def naukri_notifications(
         - count: {status, count}
         - mark_read: {status, notification_id}
         - mark_all_read: {status, marked_count, already_read, total_processed}
+        - summary: {status, source, categories, total_types}
         - {status: "error", message} on failure
     """
     # ── list ───────────────────────────────────────────────────────────
@@ -206,6 +231,15 @@ async def naukri_notifications(
         except Exception as e:
             return {"status": "error", "message": f"Mark all notifications read failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── summary ────────────────────────────────────────────────────────
+    elif action == "summary":
+        try:
+            return await _get_unified_notify()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"Get unified notify failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read, summary", "error_code": "VALIDATION_ERROR"}
