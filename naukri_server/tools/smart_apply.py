@@ -9,7 +9,7 @@ from naukri_server.scoring import compute_fit_score, parse_skills
 
 
 
-def _score_job(job_result: dict, profile_result: dict) -> dict:
+def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool = False) -> dict:
     """Score a single job against a profile. Returns the fit assessment dict."""
     job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
     profile_skills = parse_skills(profile_result.get("key_skills", []))
@@ -22,6 +22,7 @@ def _score_job(job_result: dict, profile_result: dict) -> dict:
         job_work_mode=job_result.get("work_mode"),
         job_salary=job_result.get("salary"),
         profile_expected_ctc=profile_result.get("expected_ctc"),
+        is_agent_eligible=is_agent_eligible,
     )
 
 
@@ -150,6 +151,12 @@ async def _apply_top_fits(
             "skipped": scored_result.get("total_saved", 0),
             "results": [],
         }
+
+    # Prioritize agent-eligible jobs at equal scores
+    scored_jobs.sort(key=lambda x: (
+        not x.get("fit_details", {}).get("bonuses", {}).get("agent_eligible", 0),
+        -x["fit_score"]
+    ))
 
     # Step 2: Apply to top N
     to_apply = scored_jobs[:limit]

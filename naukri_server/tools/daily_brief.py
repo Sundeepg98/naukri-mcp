@@ -30,6 +30,71 @@ def _build_early_access_section(early_access: dict | None, errors: list) -> dict
     return section
 
 
+def _build_competition_section(apps_result) -> dict:
+    """Bucket tracked applications by applicant count into competition levels.
+
+    Reads `total_applicants` from each application entry (populated by prior
+    detail/sync calls).  Returns a summary dict with counts per bucket and the
+    top-3 most competitive jobs.
+
+    Args:
+        apps_result: The raw result from _list_applications (or None/error).
+
+    Returns:
+        {total_with_data, low, medium, high, very_high, average_applicants,
+         top_competitive}
+    """
+    section = {
+        "total_with_data": 0,
+        "low": 0,       # 0-50 applicants
+        "medium": 0,    # 51-200 applicants
+        "high": 0,      # 201-500 applicants
+        "very_high": 0, # 501+ applicants
+        "average_applicants": None,
+        "top_competitive": [],
+    }
+
+    if not apps_result:
+        return section
+
+    applications = apps_result.get("applications", [])
+    if not applications:
+        return section
+
+    applicant_counts = []
+    competitive_entries = []
+
+    for app in applications:
+        raw = app.get("total_applicants")
+        if raw is None:
+            continue
+        try:
+            count = int(raw)
+        except (ValueError, TypeError):
+            continue
+
+        applicant_counts.append(count)
+        competitive_entries.append({"job_id": app.get("job_id"), "title": app.get("title"), "company": app.get("company"), "total_applicants": count})
+
+        if count <= 50:
+            section["low"] += 1
+        elif count <= 200:
+            section["medium"] += 1
+        elif count <= 500:
+            section["high"] += 1
+        else:
+            section["very_high"] += 1
+
+    section["total_with_data"] = len(applicant_counts)
+
+    if applicant_counts:
+        section["average_applicants"] = round(sum(applicant_counts) / len(applicant_counts), 1)
+        competitive_entries.sort(key=lambda x: x["total_applicants"], reverse=True)
+        section["top_competitive"] = competitive_entries[:3]
+
+    return section
+
+
 def _build_recommended_actions(brief: dict) -> list:
     """Synthesize prioritized action recommendations from brief data."""
     actions = []
@@ -103,6 +168,17 @@ def _build_recommended_actions(brief: dict) -> list:
             "tool": "naukri_profile(action='audit')",
         })
 
+    # Medium priority: high average competition across recent applications
+    competition = brief.get("competition_overview", {})
+    avg_applicants = competition.get("average_applicants")
+    if avg_applicants is not None and avg_applicants > 200:
+        avg = int(avg_applicants)
+        actions.append({
+            "priority": "medium",
+            "action": f"Recent applications have high competition (avg {avg} applicants) -- try niche keywords",
+            "tool": "naukri_search_jobs(keywords='specific_niche')",
+        })
+
     # Low priority: no recent applications (only when data is present)
     apps = brief.get("todays_applications")
     if apps is not None and apps.get("count", 0) == 0:
@@ -134,7 +210,9 @@ async def naukri_daily_brief() -> dict:
            recommendations (with clusters, agent_eligible), recruiter_activity,
            activity_level, todays_applications, dashboard, due_reminders,
            stale_applications, job_alerts, profile_completeness, saved_jobs,
-           search_impressions, assessments, match_quality, recommended_actions, errors}
+           search_impressions, assessments, match_quality,
+           competition_overview (total_with_data, low, medium, high, very_high,
+           average_applicants, top_competitive), recommended_actions, errors}
     """
     from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications, _get_unified_notify
@@ -271,6 +349,7 @@ async def naukri_daily_brief() -> dict:
             "pending": pending_count,
         },
         "match_quality": match_quality if match_quality else None,
+        "competition_overview": _build_competition_section(apps),
     }
 
     # Enrich top recommendations with fit scores

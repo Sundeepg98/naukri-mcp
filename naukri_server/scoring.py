@@ -218,6 +218,8 @@ def compute_fit_score(
     # Numeric experience fields (avoid regex round-trip when available)
     experience_min: Optional[int] = None,
     experience_max: Optional[int] = None,
+    # Agent eligibility bonus (backward compatible — defaults to None)
+    is_agent_eligible=None,
 ) -> dict:
     """Compute fit score between a job and a candidate profile.
 
@@ -278,7 +280,8 @@ def compute_fit_score(
     loc_bonus = _score_location(job_location, profile_location)
     wm_bonus = _score_work_mode(job_work_mode)
     sal_bonus = _score_salary(job_salary, profile_expected_ctc)
-    total_bonus = loc_bonus + wm_bonus + sal_bonus
+    agent_bonus = 5 if is_agent_eligible else 0
+    total_bonus = loc_bonus + wm_bonus + sal_bonus + agent_bonus
 
     overall_score = min(100, round(base_score + total_bonus))
 
@@ -308,11 +311,12 @@ def compute_fit_score(
     }
 
     # Include bonus breakdown when any enrichment data was provided
-    if job_location is not None or job_work_mode is not None or job_salary is not None:
+    if job_location is not None or job_work_mode is not None or job_salary is not None or is_agent_eligible is not None:
         result["bonuses"] = {
             "location": loc_bonus,
             "work_mode": wm_bonus,
             "salary": sal_bonus,
+            "agent_eligible": agent_bonus,
             "total": total_bonus,
         }
 
