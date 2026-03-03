@@ -110,7 +110,7 @@ def _all_good_results(
     assessment_items=None,
     match_quality=None,
 ):
-    """Return a 17-element list matching asyncio.gather order in naukri_daily_brief."""
+    """Return an 18-element list matching asyncio.gather order in naukri_daily_brief."""
     return [
         _make_inbox(count=inbox_count),                            # 0
         _make_notifs(count=0),                                     # 1
@@ -131,6 +131,8 @@ def _all_good_results(
         _make_assessments(items=assessment_items or []),           # 15
         match_quality if match_quality is not None
             else _make_match_quality(),                            # 16
+        {"status": "success", "source": "unified_notify",
+         "categories": {}, "total_types": 0},                     # 17
     ]
 
 
@@ -154,6 +156,7 @@ GATHER_PATCHES = [
     ("naukri_server.tools.performance._get_search_impressions",),
     ("naukri_server.tools.assessments._list_assessments",),
     ("naukri_server.tools.insights._match_quality",),
+    ("naukri_server.tools.notifications._get_unified_notify",),
 ]
 
 
@@ -431,10 +434,10 @@ class TestBuildEarlyAccessSection:
 # ===========================================================================
 
 def _patch_all_17(results_list):
-    """Return list of (target_path, AsyncMock) tuples for all 17 gather helpers."""
+    """Return list of (target_path, AsyncMock) tuples for all 18 gather helpers."""
     return [
         (GATHER_PATCHES[i][0], AsyncMock(return_value=results_list[i]))
-        for i in range(17)
+        for i in range(18)
     ]
 
 

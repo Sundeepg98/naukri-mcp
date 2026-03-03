@@ -6,7 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API, PROFILE_API
+from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API, PROFILE_API, WIDGET_HEADERS
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
 
@@ -70,7 +70,7 @@ async def naukri_settings(
     """
     if action == "get":
         try:
-            data = await api_get(FORMATTED_SETTINGS_API)
+            data = await api_get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
 
             sections = data if isinstance(data, list) else data.get("sections", data.get("settings", []))
             settings = []
@@ -241,7 +241,7 @@ async def naukri_settings(
             # GET current formatted settings, extract {settingId: numericValue} pairs,
             # merge user changes, POST complete settings.
             try:
-                formatted = await api_get(FORMATTED_SETTINGS_API)
+                formatted = await api_get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
                 raw_settings = formatted.get("settings", formatted)
                 current_settings = {}
                 if isinstance(raw_settings, dict):

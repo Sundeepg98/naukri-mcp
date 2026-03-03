@@ -63,6 +63,16 @@ def _build_recommended_actions(brief: dict) -> list:
             "tool": "naukri_applications(action='follow_up')",
         })
 
+    # High priority: recruiter search activity (from notification_summary)
+    notify = brief.get("notification_summary", {})
+    recruiter_search = notify.get("categories", {}).get("recruiterSearch", {})
+    if recruiter_search.get("count", 0) > 0:
+        actions.append({
+            "priority": "high",
+            "action": f"Recruiters searched for you {recruiter_search['count']} times — keep profile updated",
+            "tool": "naukri_performance(metric='impressions')",
+        })
+
     # Medium priority: new early access roles
     ea = brief.get("early_access_roles", {})
     new_count = ea.get("newly_posted_count", 0)
@@ -113,20 +123,21 @@ def _build_recommended_actions(brief: dict) -> list:
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 16 checks in parallel: unread messages, notifications, new recommendations,
+    Runs 18 checks in parallel: unread messages, notifications, new recommendations,
     recruiter activity, profile activity level, today's applications, dashboard stats,
     early access roles, subscription status, due reminders, stale applications,
     job alerts, profile completeness, saved jobs count, search impressions,
-    and assessment status.
+    assessment status, match quality, and unified notify summary.
 
     Returns:
-        - {status: "success", unread_messages, notifications, recommendations,
-           recruiter_activity, activity_level, todays_applications, dashboard,
-           due_reminders, stale_applications, job_alerts, profile_completeness,
-           saved_jobs, search_impressions, assessments, recommended_actions, errors}
+        - {status: "success", unread_messages, notifications, notification_summary,
+           recommendations (with clusters, agent_eligible), recruiter_activity,
+           activity_level, todays_applications, dashboard, due_reminders,
+           stale_applications, job_alerts, profile_completeness, saved_jobs,
+           search_impressions, assessments, match_quality, recommended_actions, errors}
     """
     from naukri_server.tools.inbox import _fetch_inbox
-    from naukri_server.tools.notifications import _fetch_notifications
+    from naukri_server.tools.notifications import _fetch_notifications, _get_unified_notify
     from naukri_server.tools.search import naukri_get_recommendations
     from naukri_server.tools.performance import _get_recruiter_activity, _get_activity_level, _get_search_impressions
     from naukri_server.tools.tracking import _list_applications, _get_stale_applications, _list_saved_jobs
@@ -159,6 +170,7 @@ async def naukri_daily_brief() -> dict:
         _get_search_impressions(days=7),                   # 14
         _list_assessments(),                               # 15
         _match_quality(days=7),                              # 16
+        _get_unified_notify(),                             # 17
         return_exceptions=True,
     )
 
@@ -189,6 +201,7 @@ async def naukri_daily_brief() -> dict:
     impressions = _extract(14, "Search impressions")
     assessments_result = _extract(15, "Assessments")
     match_quality = _extract(16, "Match quality")
+    notify_summary = _extract(17, "Unified notify")
 
     # Count pending assessments (those without a completed status)
     pending_count = 0
@@ -209,9 +222,15 @@ async def naukri_daily_brief() -> dict:
             "count": notifs.get("count", 0) if notifs else 0,
             "items": notifs.get("notifications", []) if notifs else [],
         },
+        "notification_summary": {
+            "categories": notify_summary.get("categories", {}) if notify_summary else {},
+            "total_types": notify_summary.get("total_types", 0) if notify_summary else 0,
+        },
         "recommendations": {
             "count": recs.get("count", 0) if recs else 0,
             "jobs": recs.get("jobs", []) if recs else [],
+            "clusters": recs.get("clusters", {}) if recs else {},
+            "agent_eligible": recs.get("agent_eligible_exists", False) if recs else False,
         },
         "recruiter_activity": {
             "total": recruiter.get("total_actions", 0) if recruiter else 0,

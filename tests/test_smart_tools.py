@@ -406,6 +406,7 @@ class TestDailyBrief:
         "naukri_server.tools.performance._get_search_impressions",
         "naukri_server.tools.assessments._list_assessments",
         "naukri_server.tools.insights._match_quality",
+        "naukri_server.tools.notifications._get_unified_notify",
     ]
 
     # Corresponding mock return values (order matches _DAILY_BRIEF_PATCHES)
@@ -427,6 +428,7 @@ class TestDailyBrief:
         {"status": "success", "total_appearances": 200, "days": 7},
         {"status": "success", "assessments": [{"skill": "Python", "status": "passed"}]},
         {"status": "success", "match_quality": {"score": 75, "breakdown": {}}},
+        {"status": "success", "source": "unified_notify", "categories": {"recoJobs": {"count": 10, "has_new": True}}, "total_types": 1},
     ]
 
     # Short labels matching the patch order (for override dict keys)
@@ -435,7 +437,7 @@ class TestDailyBrief:
         "activity_level", "applications", "dashboard", "early_access",
         "subscription", "reminders", "stale_applications",
         "job_alerts", "profile_completeness", "saved_jobs",
-        "search_impressions", "assessments", "match_quality",
+        "search_impressions", "assessments", "match_quality", "unified_notify",
     ]
 
     # Patch for _detect_new_roles (called synchronously from _build_early_access_section).
@@ -637,7 +639,7 @@ class TestDailyBrief:
                 cm.__exit__(None, None, None)
 
         assert result["status"] == "partial_success"
-        assert len(result["errors"]) == 17
+        assert len(result["errors"]) == 18
         # All sections should be zeroed/default
         assert result["unread_messages"]["count"] == 0
         assert result["activity_level"] == "UNKNOWN"

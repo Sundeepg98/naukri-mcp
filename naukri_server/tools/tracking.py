@@ -78,9 +78,6 @@ async def _list_applications(
     """List tracked job applications with filtering and summary stats."""
     limit = validate_limit(limit)
     page = validate_page(page)
-    params: dict = {"pageSize": str(limit), "pageNumber": str(page)}
-    if filter_info is not None:
-        params["filterInfo"] = str(filter_info)  # 1=recruiter actions, 2=naukri, 3=external
     async with _applications_lock:
         apps = _load_json(APPLICATIONS_FILE)
 
@@ -99,6 +96,17 @@ async def _list_applications(
         filtered = [a for a in apps if a.get("status") == status]
     else:
         filtered = apps
+
+    # Apply filter_info as local source/activity filter
+    if filter_info == 1:
+        # Recruiter actions — apps where recruiter was active
+        filtered = [a for a in filtered if a.get("recruiter_active") or a.get("job_activity")]
+    elif filter_info == 2:
+        # Naukri-synced applications
+        filtered = [a for a in filtered if a.get("source") == "naukri_sync"]
+    elif filter_info == 3:
+        # External/manual applications
+        filtered = [a for a in filtered if a.get("source") != "naukri_sync"]
 
     filtered.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
 
@@ -583,7 +591,7 @@ async def naukri_applications(
         max_concurrent: (batch_apply) Max parallel applications (default 3)
         set_reminder_days: (apply/batch_apply) If set, auto-create a follow-up reminder N days after
                            successful application. Ignored if apply fails.
-        filter_info: Filter by source (1=recruiter actions, 2=naukri applies, 3=external). Only for action='list'.
+        filter_info: Filter by source — 1=recruiter-active jobs, 2=naukri-synced, 3=external/manual. Applied to local tracking data.
 
     Returns:
         - list: {status, total, count, page, has_more, summary: {total_all_statuses, by_status}, applications: [...]}

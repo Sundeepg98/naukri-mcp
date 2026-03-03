@@ -467,7 +467,8 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
         if rid in local_by_id:
             existing = local_by_id[rid]
             changed = False
-            for field in ("title", "company", "status", "recruiter_active", "apply_type"):
+            for field in ("title", "company", "status", "recruiter_active", "apply_type",
+              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
                 if rj.get(field) and rj[field] != existing.get(field):
                     existing[field] = rj[field]
                     changed = True
