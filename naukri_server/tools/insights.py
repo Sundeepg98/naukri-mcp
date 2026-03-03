@@ -22,46 +22,51 @@ _taxonomy_cache = TtlCache(86400)  # 24 hours — taxonomy data is static
 
 async def _get_taxonomy() -> dict:
     """Fetch Naukri's job taxonomy: 37 departments -> 167 role categories -> 1461 roles."""
-    cached = _taxonomy_cache.get("taxonomy")
-    if cached:
-        return cached
 
-    data = await api_get(ENTITY_TAXONOMY_API)
-    entities = data if isinstance(data, list) else data.get("data", data.get("entities", []))
+    async def _fetch():
+        data = await api_get(ENTITY_TAXONOMY_API, params={
+            "appid": "1", "languageId": "1", "formatType": "nested", "srcAppId": "121",
+        })
+        # Response key varies: raw list, "ENTITY_DEPART-ROLE_CATEG-ROLE", "data", or "entities"
+        entities = (
+            data if isinstance(data, list)
+            else data.get("ENTITY_DEPART-ROLE_CATEG-ROLE",
+                          data.get("data", data.get("entities", [])))
+        )
 
-    departments = []
-    total_roles = 0
-    for dept in (entities if isinstance(entities, list) else []):
-        dept_entry = {
-            "id": dept.get("id"),
-            "label": dept.get("label"),
-            "synonyms": dept.get("synonyms", []),
-            "role_categories": [],
-        }
-        for cat in dept.get("child", []):
-            cat_entry = {
-                "id": cat.get("id"),
-                "label": cat.get("label"),
-                "roles": [],
+        departments = []
+        total_roles = 0
+        for dept in (entities if isinstance(entities, list) else []):
+            dept_entry = {
+                "id": dept.get("id"),
+                "label": dept.get("label"),
+                "synonyms": dept.get("synonyms", []),
+                "role_categories": [],
             }
-            for role in cat.get("child", []):
-                cat_entry["roles"].append({
-                    "id": role.get("id"),
-                    "label": role.get("label"),
-                    "synonyms": role.get("synonyms", []),
-                })
-                total_roles += 1
-            dept_entry["role_categories"].append(cat_entry)
-        departments.append(dept_entry)
+            for cat in dept.get("child", []):
+                cat_entry = {
+                    "id": cat.get("id"),
+                    "label": cat.get("label"),
+                    "roles": [],
+                }
+                for role in cat.get("child", []):
+                    cat_entry["roles"].append({
+                        "id": role.get("id"),
+                        "label": role.get("label"),
+                        "synonyms": role.get("synonyms", []),
+                    })
+                    total_roles += 1
+                dept_entry["role_categories"].append(cat_entry)
+            departments.append(dept_entry)
 
-    result = {
-        "status": "success",
-        "total_departments": len(departments),
-        "total_roles": total_roles,
-        "departments": departments,
-    }
-    _taxonomy_cache.set("taxonomy", result)
-    return result
+        return {
+            "status": "success",
+            "total_departments": len(departments),
+            "total_roles": total_roles,
+            "departments": departments,
+        }
+
+    return await _taxonomy_cache.get(_fetch)
 
 
 async def _application_insights(days: int = 30) -> dict:

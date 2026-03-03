@@ -428,10 +428,11 @@ class TestRecommendationClusters:
 # =====================================================================
 
 def _make_cache_miss():
-    """Return a MagicMock that simulates a TtlCache with no cached data."""
+    """Return a mock TtlCache that always calls the fetch function (cache miss)."""
+    async def _call(fn):
+        return await fn()
     mock_cache = MagicMock()
-    mock_cache.get.return_value = None   # cache miss — falsy
-    mock_cache.set = MagicMock()         # allow .set() calls without error
+    mock_cache.get = AsyncMock(side_effect=_call)
     return mock_cache
 
 

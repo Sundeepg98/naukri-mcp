@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, patch, MagicMock
 # ---------------------------------------------------------------------------
 
 def _make_cache_miss():
-    """Return a TtlCache mock that always misses and accepts .set() calls."""
+    """Return a mock TtlCache that always calls the fetch function (cache miss)."""
+    async def _call(fn):
+        return await fn()
     mock_cache = MagicMock()
-    mock_cache.get.return_value = None
-    mock_cache.set = MagicMock()
+    mock_cache.get = AsyncMock(side_effect=_call)
     return mock_cache
 
 
@@ -101,7 +102,7 @@ class TestTaxonomyEdgeCases:
             "departments": [],
         }
         mock_cache = MagicMock()
-        mock_cache.get.return_value = cached_result
+        mock_cache.get = AsyncMock(return_value=cached_result)
         with patch("naukri_server.tools.insights._taxonomy_cache", mock_cache):
             from naukri_server.tools.insights import _get_taxonomy
             result = await _get_taxonomy()
