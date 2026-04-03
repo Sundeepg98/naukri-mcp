@@ -496,3 +496,104 @@ class TestABRestBridge:
         assert result["status"] == "success"
         assert result["total_benefits"] == 0
         assert result["benefits"] == []
+
+
+# ---------------------------------------------------------------------------
+# 5. DFP Profile Targeting (profile.py action="targeting")
+# ---------------------------------------------------------------------------
+
+class TestDFPTargeting:
+    """Verify DFP targeting action parses ad-system profile fields and identifies gaps."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    async def test_targeting_returns_profile_fields(self, mock_get):
+        """Targeting action returns parsed profile fields."""
+        mock_get.return_value = {
+            "params": {
+                "Profile-CTC": 17.0,
+                "Profile-Experience": 5.0,
+                "Profile-Age": 27,
+                "Profile-Gender": "M",
+                "Profile-Location": "Bengaluru",
+                "Profile-Company": "Acme Technology",
+                "Profile-Designation": "Software Engineer (Backend)",
+                "Profile-KeySkills": "Node.js, TypeScript",
+                "Profile-Institute": "Example Institute of Technology",
+                "Profile-UG-Course": "B.Tech",
+                "Profile-UG-spl": "CSE",
+                "Profile-UG-yearpass": 2021,
+                "Profile-UG-percent": 6.47,
+                "Profile-Pref-Loc": "",
+                "Profile-PG-Course": "",
+                "Profile-Registerdays": 1510,
+                "Profile-Activeness": 0,
+            },
+            "slots": [{"adUnitPath": "/test"}],
+        }
+        from naukri_server.tools.profile import naukri_profile
+        result = await naukri_profile(action="targeting")
+        assert result["status"] == "success"
+        assert result["profile"]["ctc_lpa"] == 17.0
+        assert result["profile"]["experience_years"] == 5.0
+        assert result["profile"]["location"] == "Bengaluru"
+        assert result["ad_slots"] == 1
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    async def test_targeting_identifies_gaps(self, mock_get):
+        """Empty Profile-* fields are listed as completeness gaps."""
+        mock_get.return_value = {
+            "params": {
+                "Profile-CTC": 17.0,
+                "Profile-Pref-Loc": "",
+                "Profile-PG-Course": "",
+                "Profile-PG-Spl": "",
+            },
+            "slots": [],
+        }
+        from naukri_server.tools.profile import naukri_profile
+        result = await naukri_profile(action="targeting")
+        assert result["gap_count"] == 3
+        assert "pref loc" in result["completeness_gaps"]
+        assert "pg course" in result["completeness_gaps"]
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    async def test_targeting_empty_response(self, mock_get):
+        """Empty DFP response returns zero fields."""
+        mock_get.return_value = {}
+        from naukri_server.tools.profile import naukri_profile
+        result = await naukri_profile(action="targeting")
+        assert result["status"] == "success"
+        assert result["targeting_fields"] == 0
+        assert result["gap_count"] == 0
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    async def test_targeting_api_error(self, mock_get):
+        """API error returns error status."""
+        from naukri_server.api import NaukriAPIError
+        mock_get.side_effect = NaukriAPIError(401, "Unauthorized")
+        from naukri_server.tools.profile import naukri_profile
+        result = await naukri_profile(action="targeting")
+        assert result["status"] == "error"
+        assert result["error_code"] == "API_ERROR"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    async def test_targeting_zero_values_not_gaps(self, mock_get):
+        """Fields with value 0 are NOT treated as gaps."""
+        mock_get.return_value = {
+            "params": {
+                "Profile-Activeness": 0,
+                "Profile-CTC": 0,
+                "Profile-Pref-Loc": "",
+            },
+            "slots": [],
+        }
+        from naukri_server.tools.profile import naukri_profile
+        result = await naukri_profile(action="targeting")
+        # Only Pref-Loc is a gap (empty string), not Activeness/CTC (value 0)
+        assert result["gap_count"] == 1
+        assert "pref loc" in result["completeness_gaps"]

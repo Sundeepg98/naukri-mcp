@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, logger
+from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, DFP_PROFILE_API, logger
 from naukri_server.utils import TtlCache
 from naukri_server.validation import validate_profile
 
@@ -1094,7 +1094,7 @@ async def naukri_profile(
     current_ctc: Optional[float] = None,
     randomize: bool = False,
 ) -> dict:
-    """Unified profile management — get, update, audit, boost, or dashboard.
+    """Unified profile management — get, update, audit, boost, dashboard, or targeting.
 
     Actions:
       - "get": Fetch full profile (skills, employment, education, CTC, etc.)
@@ -1103,9 +1103,10 @@ async def naukri_profile(
       - "audit": Audit profile completeness and get improvement suggestions
       - "boost": Re-save headline to appear as 'recently active' in recruiter searches
       - "dashboard": Get dashboard data (notifications, profile completeness, activity)
+      - "targeting": How Naukri's ad system sees your profile — 35 targeting fields, completeness gaps
 
     Args:
-        action: "get" | "update" | "audit" | "boost" | "dashboard"
+        action: "get" | "update" | "audit" | "boost" | "dashboard" | "targeting"
         fields: Required for update — dict of fields to change. Supported keys:
             resumeHeadline, keySkills, noticePeriod, expectedCtc, currentCtc
         notice_period: Shorthand for update — "Serving Notice Period", "15 Days or less",
@@ -1120,6 +1121,7 @@ async def naukri_profile(
         - audit: {status, completeness_pct, grade, strengths, gaps, tips}
         - boost: {status: "refreshed", method, message}
         - dashboard: {status, profile_views, recruiter_activity_date, ctc_lpa, experience_years, ...}
+        - targeting: {status, profile, completeness_gaps, gap_count}
         - {status: "error", message} on failure
     """
     # ── get ─────────────────────────────────────────────────────────────
@@ -1147,9 +1149,58 @@ async def naukri_profile(
     elif action == "dashboard":
         return await _get_dashboard()
 
+    # ── targeting ───────────────────────────────────────────────────────
+    elif action == "targeting":
+        try:
+            data = await api_get(DFP_PROFILE_API)
+            params = data.get("params", {})
+
+            # Identify completeness gaps (empty Profile-* fields)
+            gaps = []
+            for field, value in params.items():
+                if field.startswith("Profile-") and not value and value != 0:
+                    clean_name = field.replace("Profile-", "").replace("-", " ").lower()
+                    gaps.append(clean_name)
+
+            return {
+                "status": "success",
+                "targeting_fields": len(params),
+                "profile": {
+                    "ctc_lpa": params.get("Profile-CTC"),
+                    "experience_years": params.get("Profile-Experience"),
+                    "age": params.get("Profile-Age"),
+                    "gender": params.get("Profile-Gender"),
+                    "location": params.get("Profile-Location"),
+                    "preferred_locations": params.get("Profile-Pref-Loc") or None,
+                    "company": params.get("Profile-Company"),
+                    "designation": params.get("Profile-Designation"),
+                    "functional_area": params.get("Profile-FAREA"),
+                    "role": params.get("Profile-Role"),
+                    "industry": params.get("Profile-Industry"),
+                    "key_skills": params.get("Profile-KeySkills"),
+                    "institute": params.get("Profile-Institute"),
+                    "ug_course": params.get("Profile-UG-Course"),
+                    "ug_specialization": params.get("Profile-UG-spl"),
+                    "ug_year": params.get("Profile-UG-yearpass"),
+                    "ug_cgpa": params.get("Profile-UG-percent"),
+                    "pg_course": params.get("Profile-PG-Course") or None,
+                    "pg_specialization": params.get("Profile-PG-Spl") or None,
+                    "account_age_days": params.get("Profile-Registerdays"),
+                    "activeness_score": params.get("Profile-Activeness"),
+                },
+                "completeness_gaps": gaps,
+                "gap_count": len(gaps),
+                "ad_slots": len(data.get("slots", [])),
+                "raw_params": params,
+            }
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            return {"status": "error", "message": f"DFP targeting failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── unknown action ──────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost, dashboard", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost, dashboard, targeting", "error_code": "VALIDATION_ERROR"}
 
 
 async def _fetch_raw_dashboard() -> dict:

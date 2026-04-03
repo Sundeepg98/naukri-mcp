@@ -206,3 +206,6 @@ COMPANY_API_HEADERS = {
 # Tier 22: Team probing discoveries (2026-03-02)
 RECOMMEND_NOTIFY_API = "/recommendapi/v1/notify"
 ENTITY_TAXONOMY_API = "/cloudgateway-central-services/central-entity-services/v0/entity/entity_depart/role_categ/role"
+
+# DFP (DoubleClick for Publishers) profile targeting
+DFP_PROFILE_API = "/jobapi/v1/ads/new/dfp"
