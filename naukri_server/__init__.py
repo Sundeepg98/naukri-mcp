@@ -102,4 +102,4 @@ async def lifespan(server):
 mcp = FastMCP("naukri", lifespan=lifespan)
 
 # Import tool modules to register @mcp.tool() decorators
-from naukri_server.tools import auth, search, jobs, apply, profile, debug, tracking, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders  # noqa: E402, F401
+from naukri_server.tools import auth, search, jobs, apply, profile, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders  # noqa: E402, F401

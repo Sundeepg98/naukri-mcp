@@ -1,4 +1,4 @@
-"""Application tracking and saved jobs tools."""
+"""Application tracking tools."""
 
 import asyncio
 import json
@@ -12,15 +12,13 @@ from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
-    logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
-    SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
+    logger, APPLICATION_STATUS_API,
     BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
     APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
 from naukri_server.validation import validate_limit, validate_page
 
 _applications_lock = asyncio.Lock()
-_saved_jobs_lock = asyncio.Lock()
 _tracking_composite_lock = asyncio.Lock()
 
 
@@ -837,40 +835,40 @@ async def naukri_applications(
                         already_applied, needs_input, errors, pending_questions, results}
         - {status: "error", message} on failure
     """
-    # ── list ───────────────────────────────────────────────────────────
+    # -- list ---------------------------------------------------------------
     if action == "list":
         return await handle_tool_action(
             lambda: _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info),
             "applications.list",
         )
 
-    # ── detail ─────────────────────────────────────────────────────────
+    # -- detail -------------------------------------------------------------
     elif action == "detail":
         if not job_id:
             return {"status": "error", "message": "detail requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await handle_tool_action(lambda: _get_application_detail(job_id), "applications.detail")
 
-    # ── purge ──────────────────────────────────────────────────────────
+    # -- purge --------------------------------------------------------------
     elif action == "purge":
         if not before_date:
             return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
         return await handle_tool_action(lambda: _purge_applications(before_date=before_date, dry_run=dry_run), "applications.purge")
 
-    # ── stale ──────────────────────────────────────────────────────────
+    # -- stale --------------------------------------------------------------
     elif action == "stale":
         return await handle_tool_action(
             lambda: _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit, page=page),
             "applications.stale",
         )
 
-    # ── follow_up ──────────────────────────────────────────────────────
+    # -- follow_up ----------------------------------------------------------
     elif action == "follow_up":
         return await handle_tool_action(
             lambda: _application_follow_up(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit),
             "applications.follow_up",
         )
 
-    # ── apply ─────────────────────────────────────────────────────────
+    # -- apply --------------------------------------------------------------
     elif action == "apply":
         if not job_id:
             return {"status": "error", "message": "apply requires job_id.", "error_code": "VALIDATION_ERROR"}
@@ -908,7 +906,7 @@ async def naukri_applications(
 
         return await handle_tool_action(_do_apply, "applications.apply")
 
-    # ── batch_apply ───────────────────────────────────────────────────
+    # -- batch_apply --------------------------------------------------------
     elif action == "batch_apply":
         if not keywords:
             return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
@@ -945,248 +943,38 @@ async def naukri_applications(
 
         return await handle_tool_action(_do_batch_apply, "applications.batch_apply")
 
-    # ── draft_follow_up ─────────────────────────────────────────────────
+    # -- draft_follow_up ----------------------------------------------------
     elif action == "draft_follow_up":
         if not job_id:
             return {"status": "error", "message": "draft_follow_up requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await handle_tool_action(lambda: _draft_follow_up(job_id), "applications.draft_follow_up")
 
-    # ── recruiter_history ─────────────────────────────────────────────
+    # -- recruiter_history --------------------------------------------------
     elif action == "recruiter_history":
         return await handle_tool_action(_recruiter_history, "applications.recruiter_history")
 
-    # ── interview_prep ────────────────────────────────────────────────
+    # -- interview_prep -----------------------------------------------------
     elif action == "interview_prep":
         if not job_id:
             return {"status": "error", "message": "interview_prep requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await handle_tool_action(lambda: _interview_prep(job_id), "applications.interview_prep")
 
-    # ── unknown action ─────────────────────────────────────────────────
+    # -- unknown action -----------------------------------------------------
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply, draft_follow_up, recruiter_history, interview_prep", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers for saved jobs (not MCP tools — used by the unified tool)
+# Backward-compat re-exports: symbols that moved to saved_jobs.py / analytics.py
+# but are imported by other modules via "from tracking import ..."
 # ---------------------------------------------------------------------------
-
-async def _push_save_to_naukri(job_id: str) -> bool:
-    """Attempt to save a job on Naukri's backend via discovered POST endpoint."""
-    from naukri_server.config import SAVE_JOB_API
-    from naukri_server.api import api_post
-    if not SAVE_JOB_API:
-        logger.info("SAVE_JOB_API not configured, skipping remote sync")
-        return False
-    try:
-        await api_post(f"{SAVE_JOB_API}{job_id}", {})
-        return True
-    except Exception as e:
-        logger.warning("Failed to sync save to Naukri: %s", e)
-        return False
-
-
-async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
-    """List saved/bookmarked jobs from local tracking."""
-    limit = validate_limit(limit)
-    page = validate_page(page)
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
-
-    saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
-
-    total = len(saved)
-    offset = (page - 1) * limit
-    page_items = saved[offset:offset + limit]
-
-    return {
-        "status": "success",
-        "total": total,
-        "count": len(page_items),
-        "page": page,
-        "has_more": (offset + limit) < total,
-        "saved_jobs": page_items,
-    }
-
-
-async def _save_job(job_id: str, title: str = None, company: str = None,
-                    notes: Optional[str] = None,
-                    sync_to_naukri: bool = False) -> dict:
-    """Save/bookmark a job locally (and optionally on Naukri)."""
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
-
-        # Check for duplicate
-        if any(j.get("job_id") == job_id for j in saved):
-            return {"status": "success", "action": "already_saved", "job_id": job_id}
-
-        # Cross-file warning: check if already applied
-        apps = _load_json(APPLICATIONS_FILE)
-        applied_match = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
-
-        saved.append({
-            "job_id": job_id,
-            "title": title,
-            "company": company,
-            "notes": notes,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-        })
-        _save_json(SAVED_JOBS_FILE, saved)
-
-    synced_remote = False
-    if sync_to_naukri:
-        synced_remote = await _push_save_to_naukri(job_id)
-
-    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote, "already_applied": bool(applied_match)}
-
-
-async def _sync_saved_jobs_from_naukri() -> dict:
-    """Pull saved jobs from Naukri server and merge with local tracking."""
-    try:
-        data = await api_get(SAVED_JOBS_API, params={"start": "0", "limit": "100"})
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to fetch saved jobs: {e}", "error_code": "API_ERROR"}
-
-    remote_jobs = data.get("list", data.get("savedJobs", []))
-    if not isinstance(remote_jobs, list):
-        remote_jobs = []
-
-    async with _saved_jobs_lock:
-        local = _load_json(SAVED_JOBS_FILE)
-        local_ids = {str(j.get("job_id")) for j in local}
-        new_added = 0
-        for rj in remote_jobs:
-            jid = str(rj.get("jobId", rj.get("job_id", "")))
-            if jid and jid not in local_ids:
-                local.append({
-                    "job_id": jid,
-                    "title": rj.get("title"),
-                    "company": rj.get("companyName", rj.get("company")),
-                    "saved_at": rj.get("savedDate") or datetime.now(timezone.utc).isoformat(),
-                    "source": "naukri_sync",
-                })
-                local_ids.add(jid)
-                new_added += 1
-        if new_added:
-            _save_json(SAVED_JOBS_FILE, local)
-
-    return {
-        "status": "success",
-        "total_remote": len(remote_jobs),
-        "new_added": new_added,
-        "already_local": len(remote_jobs) - new_added,
-        "total_local": len(local),
-    }
-
-
-async def _unsave_job(job_id: str) -> dict:
-    """Unsave/unbookmark a job locally and on Naukri."""
-    # Always attempt the remote unsave regardless of local state
-    try:
-        await api_post(UNSAVE_JOB_API + job_id, body={})
-    except Exception as e:
-        logger.warning("Failed to unsave job on Naukri: %s", e)
-
-    # Remove from local saved_jobs.json
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
-        original_len = len(saved)
-        saved = [j for j in saved if j.get("job_id") != job_id]
-        if len(saved) < original_len:
-            _save_json(SAVED_JOBS_FILE, saved)
-            return {"status": "success", "action": "unsaved", "job_id": job_id}
-        else:
-            return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool for saved jobs
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_saved_jobs(
-    action: str = "list",
-    job_id: Optional[str] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-    notes: Optional[str] = None,
-    sync_to_naukri: bool = False,
-    limit: int = 50,
-    page: int = 1,
-) -> dict:
-    """Unified saved/bookmarked jobs management — list, save, unsave, and sync.
-
-    Actions:
-      - "list": Get saved/bookmarked jobs (use limit/page for pagination)
-      - "save": Save/bookmark a job for later (requires job_id)
-      - "unsave": Unsave/unbookmark a job (requires job_id)
-      - "sync": Pull saved jobs from Naukri server and merge with local tracking
-
-    Args:
-        action: "list" | "save" | "unsave" | "sync"
-        job_id: Required for save/unsave — the Naukri job ID
-        title: Job title for display (optional, save only)
-        company: Company name for display (optional, save only)
-        notes: Personal notes about this job (optional, save only)
-        sync_to_naukri: If True, also save the job on Naukri's backend (save only)
-        limit: Max results per page for list action (default 50)
-        page: Page number for list action (default 1)
-
-    Returns:
-        - list: {status, total, count, page, has_more, saved_jobs: [...]}
-        - save: {status: "saved", job_id, total_saved, synced_remote}
-                or {status: "already_saved", job_id}
-        - unsave: {status: "unsaved", job_id}
-                  or {status: "not_found", job_id}
-        - {status: "error", message} on failure
-    """
-    # ── list ───────────────────────────────────────────────────────────
-    if action == "list":
-        return await _list_saved_jobs(limit=limit, page=page)
-
-    # ── save ───────────────────────────────────────────────────────────
-    elif action == "save":
-        if not job_id:
-            return {"status": "error", "message": "save requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
-
-    # ── unsave ─────────────────────────────────────────────────────────
-    elif action == "unsave":
-        if not job_id:
-            return {"status": "error", "message": "unsave requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _unsave_job(job_id)
-
-    # ── sync ───────────────────────────────────────────────────────────
-    elif action == "sync":
-        return await _sync_saved_jobs_from_naukri()
-
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave, sync", "error_code": "VALIDATION_ERROR"}
-
-
-async def _get_match_analytics(days: int = 7) -> dict:
-    """Get match-score analytics for recent job applications — overall match distribution and per-field breakdowns.
-
-    Args:
-        days: Number of days of application history to analyze (default 7)
-
-    Returns:
-        - {status: "success", days, total_applies, complete_match, high_match, medium_match,
-           low_match, field_breakdown, user_details}
-        - {status: "error", message}
-    """
-    if days < 1:
-        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
-
-    return {
-        "status": "success",
-        "days": days,
-        "total_applies": data.get("totalApplies"),
-        "complete_match": data.get("completeMatch"),
-        "high_match": data.get("highMatch"),
-        "medium_match": data.get("mediumMatch"),
-        "low_match": data.get("lowMatch"),
-        "field_breakdown": data.get("relevantFieldMatch"),
-        "user_details": data.get("userDetails"),
-    }
+from naukri_server.tools.saved_jobs import (  # noqa: E402, F401
+    _saved_jobs_lock,
+    _list_saved_jobs,
+    _save_job,
+    _unsave_job,
+    _push_save_to_naukri,
+    _sync_saved_jobs_from_naukri,
+    naukri_saved_jobs,
+)
+from naukri_server.tools.analytics import _get_match_analytics  # noqa: E402, F401

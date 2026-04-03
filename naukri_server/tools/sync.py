@@ -17,8 +17,9 @@ from naukri_server.config import (
     AUTO_PURGE_DAYS,
 )
 from naukri_server.tools.tracking import (
-    _load_json, _save_json, _applications_lock, _saved_jobs_lock,
+    _load_json, _save_json, _applications_lock,
 )
+from naukri_server.tools.saved_jobs import _saved_jobs_lock
 
 
 # URL patterns for browser interception (discovered)

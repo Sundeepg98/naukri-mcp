@@ -6,10 +6,10 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import api_get
 from naukri_server.cache import _load_cache, _cache_lock
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE, logger
+from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.utils import TtlCache
 
@@ -570,6 +570,45 @@ async def _detect_status_changes(days_back: int = 30) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Insight registry — maps insight_type to async handler(kwargs) -> dict
+# ---------------------------------------------------------------------------
+
+def _make_match_analytics_handler(**kw):
+    from naukri_server.tools.tracking import _get_match_analytics
+    return _get_match_analytics(days=kw.get("days", 30))
+
+def _make_skill_gap_handler(**kw):
+    from naukri_server.tools.skill_gap import _skill_gap_analysis
+    return _skill_gap_analysis(
+        keywords=kw.get("keywords"), use_recommendations=kw.get("use_recommendations", True),
+        sample_size=kw.get("sample_size", 20), include_assessments=kw.get("include_assessments", True),
+        timeout_seconds=kw.get("timeout_seconds", 120),
+    )
+
+def _make_salary_benchmark_handler(**kw):
+    from naukri_server.tools.research import _salary_benchmark
+    return _salary_benchmark(
+        keywords=kw.get("keywords"), location=kw.get("location"),
+        sample_size=kw.get("sample_size", 20), freshness=kw.get("freshness"),
+        timeout_seconds=kw.get("timeout_seconds", 120),
+    )
+
+_INSIGHT_REGISTRY: dict[str, callable] = {
+    "applications":     lambda **kw: _application_insights(days=kw.get("days", 30)),
+    "salary":           lambda **kw: _salary_position(designation=kw.get("designation")),
+    "cached_answers":   lambda **kw: _cached_answers(action=kw.get("action") or "list", key=kw.get("key"), new_answer=kw.get("new_answer")),
+    "match_analytics":  _make_match_analytics_handler,
+    "match_quality":    lambda **kw: _match_quality(days=kw.get("days", 30)),
+    "skill_gap":        _make_skill_gap_handler,
+    "salary_benchmark": _make_salary_benchmark_handler,
+    "taxonomy":         lambda **kw: _get_taxonomy(),
+    "profile_prompts":  lambda **kw: _get_profile_prompts(),
+    "conversion_funnel": lambda **kw: _conversion_funnel(days=kw.get("days", 30)),
+    "status_changes":   lambda **kw: _detect_status_changes(days_back=kw.get("days", 30)),
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
@@ -640,117 +679,26 @@ async def naukri_insights(
         - status_changes: {status, total_changes, positive_changes, positive: [{job_id, title, old_status, new_status, transition_type}], neutral: [...], sync_method, last_sync}
         - {status: "error", message} on failure
     """
-    # ── applications ──────────────────────────────────────────────────
-    if insight_type == "applications":
-        try:
-            return await _application_insights(days=days)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+    # ── Pre-validation ──────────────────────────────────────────────
+    if insight_type == "salary_benchmark" and not keywords:
+        return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
 
-    # ── salary ────────────────────────────────────────────────────────
-    elif insight_type == "salary":
-        try:
-            return await _salary_position(designation=designation)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+    # ── Registry lookup ──────────────────────────────────────────────
+    handler = _INSIGHT_REGISTRY.get(insight_type)
+    if handler is None:
+        return {
+            "status": "error",
+            "message": f"Unknown insight_type '{insight_type}'. Use: {', '.join(_INSIGHT_REGISTRY)}",
+            "error_code": "VALIDATION_ERROR",
+        }
 
-    # ── cached_answers ────────────────────────────────────────────────
-    elif insight_type == "cached_answers":
-        try:
-            return await _cached_answers(action=action or "list", key=key, new_answer=new_answer)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── match_analytics ───────────────────────────────────────────────
-    elif insight_type == "match_analytics":
-        from naukri_server.tools.tracking import _get_match_analytics
-        try:
-            return await _get_match_analytics(days=days)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── match_quality ────────────────────────────────────────────────
-    elif insight_type == "match_quality":
-        try:
-            return await _match_quality(days=days)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── skill_gap ───────────────────────────────────────────────────
-    elif insight_type == "skill_gap":
-        from naukri_server.tools.skill_gap import _skill_gap_analysis
-        try:
-            return await _skill_gap_analysis(
-                keywords=keywords, use_recommendations=use_recommendations,
-                sample_size=sample_size, include_assessments=include_assessments,
-                timeout_seconds=timeout_seconds,
-            )
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── salary_benchmark ─────────────────────────────────────────────
-    elif insight_type == "salary_benchmark":
-        if not keywords:
-            return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
-        from naukri_server.tools.research import _salary_benchmark
-        try:
-            return await _salary_benchmark(
-                keywords=keywords, location=location,
-                sample_size=sample_size, freshness=freshness,
-                timeout_seconds=timeout_seconds,
-            )
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── taxonomy ──────────────────────────────────────────────────────
-    elif insight_type == "taxonomy":
-        try:
-            return await _get_taxonomy()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── profile_prompts ──────────────────────────────────────────────
-    elif insight_type == "profile_prompts":
-        try:
-            return await _get_profile_prompts()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
-
-    # ── conversion_funnel ─────────────────────────────────────────────
-    elif insight_type == "conversion_funnel":
-        return await handle_tool_action(lambda: _conversion_funnel(days=days), "insights.conversion_funnel")
-
-    # ── status_changes ───────────────────────────────────────────────
-    elif insight_type == "status_changes":
-        return await handle_tool_action(lambda: _detect_status_changes(days_back=days), "insights.status_changes")
-
-    # ── unknown insight_type ──────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts, conversion_funnel, status_changes", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: handler(
+            action=action, key=key, new_answer=new_answer,
+            days=days, designation=designation, keywords=keywords,
+            use_recommendations=use_recommendations, sample_size=sample_size,
+            include_assessments=include_assessments, timeout_seconds=timeout_seconds,
+            location=location, freshness=freshness,
+        ),
+        f"insights.{insight_type}",
+    )
