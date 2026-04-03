@@ -3,8 +3,9 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger, EARLY_ACCESS_TRACKING_FILE
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.validation import validate_limit, validate_page
 
@@ -168,7 +169,7 @@ async def naukri_early_access(
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        try:
+        async def _list():
             result = await _list_early_access_roles(page=page, limit=limit)
             # Client-side filtering (API doesn't support server-side)
             if any((filter_company, filter_location, filter_experience is not None)):
@@ -197,21 +198,13 @@ async def naukri_early_access(
                     }.items() if v is not None
                 }
             return result
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get early access roles failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_list, "early_access.list")
 
     # ── share ──────────────────────────────────────────────────────────
     elif action == "share":
         if not job_id:
             return {"status": "error", "message": "share requires job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _share_interest(job_id)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Share interest failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _share_interest(job_id), "early_access.share")
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

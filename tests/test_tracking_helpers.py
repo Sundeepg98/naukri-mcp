@@ -439,3 +439,154 @@ class TestSaveUnsaveJob:
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
         mock_save.assert_not_called()
+
+
+# =====================================================================
+# 6. _compute_follow_up_priority — scoring logic
+# =====================================================================
+
+class TestComputeFollowUpPriority:
+    """Tests for naukri_server.tools.tracking._compute_follow_up_priority."""
+
+    def test_high_activity_app_gets_high_priority(self):
+        """App with recruiter activity, high ARS, and good company rating gets high priority."""
+        from naukri_server.tools.tracking import _compute_follow_up_priority
+        from datetime import datetime, timezone
+
+        app = {
+            "job_activity": 5,          # recruiter viewed → +20
+            "ars_score": 75,            # high match → +15
+            "company_rating": {"AggregateRating": 4.2},  # good company → +10
+            "applied_at": datetime.now(timezone.utc).isoformat(),  # recent → no decay
+        }
+        priority = _compute_follow_up_priority(app)
+        # baseline 50 + 20 + 15 + 10 = 95
+        assert priority == 95
+
+    def test_old_app_no_activity_gets_low_priority(self):
+        """App with no recruiter activity, no ARS, applied 90 days ago gets low priority."""
+        from naukri_server.tools.tracking import _compute_follow_up_priority
+        from datetime import datetime, timezone, timedelta
+
+        applied_at = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        app = {
+            "job_activity": 0,          # no activity → +0 (only >0 matters)
+            "applied_at": applied_at,   # 90 days → -20
+        }
+        priority = _compute_follow_up_priority(app)
+        # baseline 50 + 0 - 20 = 30
+        assert priority == 30
+
+
+# =====================================================================
+# interview_prep — full package and partial failure
+# =====================================================================
+
+class TestInterviewPrep:
+    """Tests for naukri_server.tools.tracking._interview_prep."""
+
+    @pytest.mark.asyncio
+    async def test_full_prep_package(self):
+        """All three external calls succeed — prep should contain every field."""
+        from naukri_server.tools.tracking import _interview_prep
+
+        apps = [
+            {"job_id": "IP1", "title": "Backend Dev", "company": "TestCorp",
+             "applied_at": "2026-03-01T10:00:00+00:00", "ars_score": 72},
+        ]
+
+        company_intel = {
+            "status": "success",
+            "overall_rating": 4.2,
+            "difficulty_breakdown": {"easy": 30, "medium": 50, "hard": 20},
+            "interview_experiences": [
+                {"question": "Tell me about yourself"},
+                {"question": "System design question"},
+                {"question": "Behavioral question"},
+                {"question": "Extra question should be trimmed"},
+            ],
+        }
+        mock_topics = {
+            "status": "success",
+            "topics": ["REST APIs", "Node.js", "SQL", "Docker", "System Design", "Extra"],
+        }
+        fit_data = {
+            "status": "success",
+            "fit_assessment": {
+                "skill_match": {
+                    "matched": ["Node.js", "Express", "MongoDB"],
+                    "missing": ["Kubernetes", "AWS"],
+                },
+            },
+        }
+
+        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
+             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+                   new_callable=AsyncMock, return_value=company_intel), \
+             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+                   new_callable=AsyncMock, return_value=mock_topics), \
+             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+                   new_callable=AsyncMock, return_value=fit_data):
+            result = await _interview_prep("IP1")
+
+        assert result["status"] == "success"
+        assert result["job_id"] == "IP1"
+        assert result["company"] == "TestCorp"
+        assert result["title"] == "Backend Dev"
+        assert result["applied_at"] == "2026-03-01T10:00:00+00:00"
+        assert result["ars_score"] == 72
+        # Company intel
+        assert result["company_rating"] == 4.2
+        assert result["interview_difficulty"] == {"easy": 30, "medium": 50, "hard": 20}
+        assert len(result["sample_questions"]) == 3  # capped at 3
+        # Mock topics
+        assert len(result["mock_topics"]) == 5  # capped at 5
+        assert "REST APIs" in result["mock_topics"]
+        # Fit data
+        assert result["matched_skills"] == ["Node.js", "Express", "MongoDB"]
+        assert result["missing_skills"] == ["Kubernetes", "AWS"]
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_company_intel_fails(self):
+        """Company intel fails, mock topics and fit succeed — prep should still work."""
+        from naukri_server.tools.tracking import _interview_prep
+
+        apps = [
+            {"job_id": "IP2", "title": "Frontend Dev", "company": "FailCo",
+             "applied_at": "2026-03-10T12:00:00+00:00", "ars_score": None},
+        ]
+
+        mock_topics = {
+            "status": "success",
+            "topics": ["React", "CSS", "JavaScript"],
+        }
+        fit_data = {
+            "status": "success",
+            "fit_assessment": {
+                "skill_match": {
+                    "matched": ["React", "TypeScript"],
+                    "missing": ["Vue"],
+                },
+            },
+        }
+
+        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
+             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+                   new_callable=AsyncMock, return_value=None), \
+             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+                   new_callable=AsyncMock, return_value=mock_topics), \
+             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+                   new_callable=AsyncMock, return_value=fit_data):
+            result = await _interview_prep("IP2")
+
+        assert result["status"] == "success"
+        assert result["job_id"] == "IP2"
+        assert result["company"] == "FailCo"
+        # Company intel fields should be absent
+        assert "company_rating" not in result
+        assert "interview_difficulty" not in result
+        assert "sample_questions" not in result
+        # Mock topics and fit data should be present
+        assert result["mock_topics"] == ["React", "CSS", "JavaScript"]
+        assert result["matched_skills"] == ["React", "TypeScript"]
+        assert result["missing_skills"] == ["Vue"]

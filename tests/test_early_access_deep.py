@@ -79,7 +79,7 @@ async def test_list_generic_exception_returns_api_error(mock_api_get):
     from naukri_server.tools.early_access import naukri_early_access
     result = await naukri_early_access(action="list")
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
 
 

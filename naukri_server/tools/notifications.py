@@ -4,8 +4,9 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API, BROWSER_DOM_SETTLE
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -161,40 +162,27 @@ async def naukri_notifications(
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        try:
-            return await _fetch_notifications(limit=limit, page=page, notif_type=notif_type)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get notifications failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _fetch_notifications(limit=limit, page=page, notif_type=notif_type), "notifications.list")
 
     # ── count ──────────────────────────────────────────────────────────
     elif action == "count":
-        try:
+        async def _count():
             data = await api_get(NOTIFICATION_COUNT_API)
             return {
                 "status": "success",
                 "count": data.get("count", 0),
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get notification count failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_count, "notifications.count")
 
     # ── mark_read ──────────────────────────────────────────────────────
     elif action == "mark_read":
         if not notification_id or not date:
             return {"status": "error", "message": "mark_read requires notification_id and date.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _mark_single_read(notification_id, date)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Mark notification read failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _mark_single_read(notification_id, date), "notifications.mark_read")
 
     # ── mark_all_read ──────────────────────────────────────────────────
     elif action == "mark_all_read":
-        try:
+        async def _mark_all():
             total_marked = 0
             total_read = 0
             total_processed = 0
@@ -247,19 +235,11 @@ async def naukri_notifications(
                 "total_processed": total_processed,
                 "errors": all_errors if all_errors else None,
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Mark all notifications read failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_mark_all, "notifications.mark_all_read")
 
     # ── summary ────────────────────────────────────────────────────────
     elif action == "summary":
-        try:
-            return await _get_unified_notify()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get unified notify failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_unified_notify, "notifications.summary")
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

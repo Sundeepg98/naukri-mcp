@@ -175,7 +175,7 @@ class TestActionTopics:
         result = await naukri_mock_interview(action="topics")
 
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
+        assert result["error_code"] == "INTERNAL_ERROR"
         assert "RuntimeError" in result["message"]
 
     @pytest.mark.asyncio

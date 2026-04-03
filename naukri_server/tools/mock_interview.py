@@ -4,11 +4,12 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post
 from naukri_server.config import (
     MOCK_INTERVIEW_TOPICS_API, MOCK_INTERVIEW_HISTORY_API, MOCK_INTERVIEW_ROLE_API,
     MOCK_INTERVIEW_OTHER_TOPICS_API, MOCK_INTERVIEW_QUESTION_API,
 )
+from naukri_server.error_handler import handle_tool_action
 
 _POLL_DELAY = 3            # Seconds between polling attempts
 _MAX_POLL_ATTEMPTS = 5     # Max polling iterations
@@ -335,52 +336,29 @@ async def naukri_mock_interview(
     """
     # -- topics --------------------------------------------------------------
     if action == "topics":
-        try:
-            return await _get_topics()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get mock interview topics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_topics, "mock_interview.topics")
 
     # -- history -------------------------------------------------------------
     elif action == "history":
-        try:
-            return await _get_history()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get mock interview history failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_history, "mock_interview.history")
 
     # -- start ---------------------------------------------------------------
     elif action == "start":
         if not job_id:
             return {"status": "error", "message": "start requires job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _start_interview(job_id)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to start mock interview: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _start_interview(job_id), "mock_interview.start")
 
     # -- prep ----------------------------------------------------------------
     elif action == "prep":
         if not job_id:
             return {"status": "error", "message": "prep requires job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _interview_prep(job_id)
-        except Exception as e:
-            return {"status": "error", "message": f"Interview prep failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _interview_prep(job_id), "mock_interview.prep")
 
     # -- answer --------------------------------------------------------------
     elif action == "answer":
         if not test_id or not topic_id or not question_id or not answer:
             return {"status": "error", "message": "answer requires test_id, topic_id, question_id, and answer.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _answer_question(test_id, topic_id, question_id, answer)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": f"Mock interview API error: {e}", "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to answer question: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _answer_question(test_id, topic_id, question_id, answer), "mock_interview.answer")
 
     # -- unknown action ------------------------------------------------------
     else:

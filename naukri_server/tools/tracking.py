@@ -280,6 +280,55 @@ async def _purge_applications(before_date: str, dry_run: bool = True) -> dict:
         }
 
 
+def _compute_follow_up_priority(app: dict) -> int:
+    """Score how worthwhile it is to follow up on this application (0-100)."""
+    priority = 50  # baseline
+
+    # Recruiter engaged = strong signal
+    job_activity = app.get("job_activity", 0)
+    if isinstance(job_activity, (int, float)) and job_activity > 0:
+        priority += 20
+
+    # High match score = worth pursuing
+    ars = app.get("ars_score")
+    if isinstance(ars, (int, float)):
+        if ars >= 70:
+            priority += 15
+        elif ars >= 50:
+            priority += 10
+        elif ars >= 30:
+            priority += 5
+
+    # Company rating boost
+    rating = app.get("company_rating")
+    if isinstance(rating, dict):
+        rating = rating.get("AggregateRating")
+    if rating:
+        try:
+            r = float(rating)
+            if r >= 4.0:
+                priority += 10
+            elif r >= 3.5:
+                priority += 5
+        except (ValueError, TypeError):
+            pass
+
+    # Recency decay
+    try:
+        applied = datetime.fromisoformat(
+            app.get("applied_at", "").replace("+00:00", "+00:00")
+        )
+        days = (datetime.now(timezone.utc) - applied).days
+        if days > 60:
+            priority -= 20
+        elif days > 45:
+            priority -= 10
+    except Exception:
+        pass
+
+    return max(0, min(100, priority))
+
+
 async def _get_stale_applications(
     days_threshold: int = 14,
     min_stale_score: int = 40,
@@ -371,11 +420,14 @@ async def _get_stale_applications(
         else:
             recommendation = "Still active — wait"
 
+        follow_up_priority = _compute_follow_up_priority(app)
+
         stale_apps.append({
             "job_id": app.get("job_id"),
             "title": app.get("title"),
             "company": app.get("company"),
             "stale_score": min(stale_score, 100),
+            "follow_up_priority": follow_up_priority,
             "reasons": reasons,
             "recommendation": recommendation,
             "applied_date": applied_at[:10],
@@ -385,8 +437,8 @@ async def _get_stale_applications(
             "ars_score": ars_score,
         })
 
-    # Sort by stale score descending
-    stale_apps.sort(key=lambda x: x["stale_score"], reverse=True)
+    # Sort by follow_up_priority descending (most worth following up first)
+    stale_apps.sort(key=lambda x: x["follow_up_priority"], reverse=True)
 
     total = len(stale_apps)
     offset = (page - 1) * limit
@@ -475,6 +527,7 @@ async def _application_follow_up(
             "company": app.get("company"),
             "applied_date": app.get("applied_date"),
             "stale_score": app.get("stale_score"),
+            "follow_up_priority": app.get("follow_up_priority", 50),
             "reasons": app.get("reasons", []),
             "recruiter_messages": [
                 {"subject": m.get("subject"), "date": m.get("date"), "sender": m.get("sender")}
@@ -487,6 +540,7 @@ async def _application_follow_up(
 
         action_items.append({
             "priority": priority,
+            "follow_up_priority": app.get("follow_up_priority", 50),
             "action": suggested_action,
             "job_id": job_id,
             "company": app.get("company"),
@@ -510,6 +564,80 @@ async def _application_follow_up(
         result["status"] = "partial_success"
         result["errors"] = errors
     return result
+
+
+async def _safe_fetch_company_intel(company):
+    try:
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        return await naukri_company_intel(company=company, intel_type="interviews")
+    except Exception:
+        return None
+
+
+async def _safe_fetch_mock_topics():
+    try:
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        return await naukri_mock_interview(action="topics")
+    except Exception:
+        return None
+
+
+async def _safe_fetch_fit_score(job_id):
+    try:
+        from naukri_server.tools.smart_apply import naukri_smart_apply
+        return await naukri_smart_apply(job_id=job_id)
+    except Exception:
+        return None
+
+
+async def _interview_prep(job_id: str) -> dict:
+    """Generate interview prep package for a specific job application."""
+    import asyncio
+
+    # Get application details
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    if not app:
+        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
+
+    company = app.get("company", "")
+    title = app.get("title", "")
+
+    # Parallel fetch: company intel + mock interview topics + fit assessment
+    results = await asyncio.gather(
+        _safe_fetch_company_intel(company),
+        _safe_fetch_mock_topics(),
+        _safe_fetch_fit_score(job_id),
+        return_exceptions=True,
+    )
+
+    company_intel = results[0] if not isinstance(results[0], Exception) else None
+    mock_topics = results[1] if not isinstance(results[1], Exception) else None
+    fit_data = results[2] if not isinstance(results[2], Exception) else None
+
+    prep = {
+        "status": "success",
+        "job_id": job_id,
+        "company": company,
+        "title": title,
+        "applied_at": app.get("applied_at"),
+        "ars_score": app.get("ars_score"),
+    }
+
+    if company_intel and isinstance(company_intel, dict) and company_intel.get("status") == "success":
+        prep["company_rating"] = company_intel.get("overall_rating")
+        prep["interview_difficulty"] = company_intel.get("difficulty_breakdown")
+        prep["sample_questions"] = company_intel.get("interview_experiences", [])[:3]
+
+    if mock_topics and isinstance(mock_topics, dict) and mock_topics.get("status") == "success":
+        prep["mock_topics"] = mock_topics.get("topics", [])[:5]
+
+    if fit_data and isinstance(fit_data, dict) and fit_data.get("status") == "success":
+        prep["matched_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("matched", [])
+        prep["missing_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("missing", [])
+
+    return prep
 
 
 async def _draft_follow_up(job_id: str) -> dict:
@@ -637,7 +765,7 @@ async def naukri_applications(
     set_reminder_days: Optional[int] = None,
     filter_info: Optional[int] = None,
 ) -> dict:
-    """Unified application tracking — list, detail, purge, stale detection, follow-up, draft, recruiter CRM, apply, and batch apply.
+    """Unified application tracking — list, detail, purge, stale detection, follow-up, draft, recruiter CRM, interview prep, apply, and batch apply.
 
     Actions:
       - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page/filter_info)
@@ -650,14 +778,18 @@ async def naukri_applications(
         Returns a ready-to-send message with suggested subject line and days-since-applied context.
       - "recruiter_history": Aggregate per-company communication history from tracked applications.
         Groups by company, counts applications, tracks response status, and sorts by volume.
+      - "interview_prep": Generate interview prep package for a job application (requires job_id).
+        Parallel-fetches company intel (reviews, interview difficulty), mock interview topics,
+        and fit/skill-match assessment. Returns a single prep bundle with matched/missing skills,
+        sample questions, and company rating.
       - "apply": Apply to a single job (requires job_id; optional answers for screening questions).
         If set_reminder_days is provided and apply succeeds, a follow-up reminder is auto-created.
       - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters).
         If set_reminder_days is provided, reminders are auto-created for each successful application.
 
     Args:
-        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "draft_follow_up" | "recruiter_history" | "apply" | "batch_apply"
-        job_id: Required for detail/apply — the Naukri job ID (e.g. "270226007446")
+        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "draft_follow_up" | "recruiter_history" | "interview_prep" | "apply" | "batch_apply"
+        job_id: Required for detail/apply/interview_prep — the Naukri job ID (e.g. "270226007446")
         status: (list) Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: (list) ISO date, include applications on/after this date (e.g. "2026-02-01")
         date_to: (list) ISO date, include applications on/before this date (e.g. "2026-02-28")
@@ -696,6 +828,9 @@ async def naukri_applications(
         - draft_follow_up: {status, job_id, company, title, days_since_applied, draft_message, suggested_subject}
         - recruiter_history: {status, total_companies, responsive_count, unresponsive_count,
                               companies: [{company, applications, statuses, first_applied, last_applied, has_response}]}
+        - interview_prep: {status, job_id, company, title, applied_at, ars_score,
+                           company_rating, interview_difficulty, sample_questions,
+                           mock_topics, matched_skills, missing_skills}
         - apply: {status: "applied"/"needs_input"/"already_applied"/"error", job_id, ...}
         - batch_apply: {status: "success"/"partial_success"/"error", searched, filtered, applied,
                         already_applied, needs_input, errors, pending_questions, results}
@@ -848,9 +983,15 @@ async def naukri_applications(
     elif action == "recruiter_history":
         return await _recruiter_history()
 
+    # ── interview_prep ────────────────────────────────────────────────
+    elif action == "interview_prep":
+        if not job_id:
+            return {"status": "error", "message": "interview_prep requires job_id.", "error_code": "VALIDATION_ERROR"}
+        return await _interview_prep(job_id)
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply, draft_follow_up, recruiter_history", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply, draft_follow_up, recruiter_history, interview_prep", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------

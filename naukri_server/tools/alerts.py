@@ -5,13 +5,14 @@ import json
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import api_get, api_post
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API,
     LAKHS_MULTIPLIER, BROWSER_FORM_LOAD, BROWSER_FORM_SAVE, BROWSER_MODAL_APPEAR,
     BROWSER_PAGE_LOAD, BROWSER_OPERATION_TIMEOUT,
 )
+from naukri_server.error_handler import handle_tool_action
 
 
 async def _get_alerts_list() -> dict:
@@ -294,17 +295,13 @@ async def naukri_job_alerts(
         - delete: {status, alert_id, alert_name, message}
     """
     if action == "list":
-        try:
-            return await _get_alerts_list()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"List Job Alerts failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_alerts_list, "alerts.list")
 
     elif action == "detail":
         if not alert_id:
             return {"status": "error", "message": "detail requires alert_id.", "error_code": "VALIDATION_ERROR"}
-        try:
+
+        async def _detail():
             data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
             alerts = data.get("list", [data] if isinstance(data, dict) else data)
             if not alerts:
@@ -331,15 +328,13 @@ async def naukri_job_alerts(
                     "industry_type_id": a.get("industryTypeId"),
                 },
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get Alert Detail failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_detail, "alerts.detail")
 
     elif action == "create":
         if not name or not keywords:
             return {"status": "error", "message": "create requires name and keywords.", "error_code": "VALIDATION_ERROR"}
-        try:
+
+        async def _create():
             body = {"name": name, "keyword": keywords}
             if location is not None:
                 body["location"] = location
@@ -370,10 +365,7 @@ async def naukri_job_alerts(
             if matched_jobs:
                 result["matched_jobs"] = matched_jobs[:5]
             return result
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Create Job Alert failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_create, "alerts.create")
 
     elif action == "update":
         if not alert_id:
