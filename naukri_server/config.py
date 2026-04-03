@@ -75,6 +75,7 @@ NOTIFICATION_READ_API = "/cloudgateway-mynaukri/notification-center-services/v0/
 
 # Dashboard & analytics
 DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
+DASHBOARD_PROPERTIES = "userDetails,profilePerformance,incompleteSection,isPaidUser,profileSegment,lookupData,res360NotifType,photoInfo,campusData,aiInterviewEligibility"
 MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"
 APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"  # GET ?days=7
 
@@ -209,3 +210,7 @@ ENTITY_TAXONOMY_API = "/cloudgateway-central-services/central-entity-services/v0
 
 # DFP (DoubleClick for Publishers) profile targeting
 DFP_PROFILE_API = "/jobapi/v1/ads/new/dfp"
+
+# CCS (Content/Campaign Serving) — profile completion widgets (requires browser cookies, not JWT)
+CCS_PAGE_API = "/cloudgateway-ccs/inventory-management-services/v2/page/pagename"
+CCS_DASHBOARD_PAGE = "ni-desktop-dashboard-v2"

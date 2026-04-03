@@ -8,7 +8,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get
 from naukri_server.cache import _load_cache, _cache_lock
-from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API
+from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.utils import TtlCache
 
@@ -336,6 +336,105 @@ async def _match_quality(days: int = 7) -> dict:
     }
 
 
+def _get_browser():
+    """Lazy import to avoid circular imports and enable test patching."""
+    from naukri_server.browser import browser
+    return browser
+
+
+async def _get_profile_prompts() -> dict:
+    """Fetch CCS widget state keys to identify pending profile completion actions.
+
+    The CCS endpoint requires browser cookies (not just JWT), so we POST
+    from inside a Playwright page context using page.evaluate(fetch(...)).
+    """
+    async with _get_browser().page_pool.acquire() as page:
+        url = f"{NAUKRI_BASE}{CCS_PAGE_API}/{CCS_DASHBOARD_PAGE}"
+        data = await page.evaluate("""
+            async (url) => {
+                try {
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({"states": {}, "existingSets": []})
+                    });
+                    return await resp.json();
+                } catch (e) {
+                    return {"error": e.message};
+                }
+            }
+        """, url)
+
+    if not data or data.get("error"):
+        return {
+            "status": "error",
+            "message": f"CCS fetch failed: {data.get('error', 'empty response') if data else 'empty response'}",
+            "error_code": "BROWSER_ERROR",
+        }
+
+    states = data.get("states", {})
+
+    # Map state keys to actionable prompts
+    PROMPT_MAP = {
+        "t2536_click_add_salary_breakup": {
+            "field": "salary_breakup",
+            "action": "Add detailed salary breakup",
+            "impact": "high",
+            "reason": "Recruiters filter heavily by CTC range",
+        },
+        "t2906_click_add_locality": {
+            "field": "preferred_locations",
+            "action": "Add preferred work locations",
+            "impact": "high",
+            "reason": "Location-filtered searches will miss you",
+        },
+        "t2772_click_complete": {
+            "field": "profile_completion",
+            "action": "Complete remaining profile sections",
+            "impact": "medium",
+            "reason": "Higher completeness = better ranking",
+        },
+        "t4170_click_submit": {
+            "field": "profile_data",
+            "action": "Submit pending profile updates",
+            "impact": "medium",
+            "reason": "Unsaved changes aren't visible to recruiters",
+        },
+        "t2683_view": {
+            "field": "iti_trades",
+            "action": "Add ITI/trades data if applicable",
+            "impact": "low",
+            "reason": "Relevant for apprenticeship/trades roles only",
+        },
+    }
+
+    pending = []
+    completed = []
+    for key, value in states.items():
+        prompt_info = PROMPT_MAP.get(key)
+        if prompt_info:
+            if value == 0:
+                pending.append(prompt_info)
+            else:
+                completed.append({"field": prompt_info["field"], "status": "done"})
+
+    # Sort pending by impact priority
+    impact_order = {"high": 0, "medium": 1, "low": 2}
+    pending.sort(key=lambda p: impact_order.get(p.get("impact", "low"), 3))
+
+    return {
+        "status": "success",
+        "source": "ccs_widget",
+        "pending_count": len(pending),
+        "completed_count": len(completed),
+        "pending_prompts": pending,
+        "completed_prompts": completed,
+        "all_state_keys": states,
+        "cache_ttl_seconds": data.get("ttl"),
+        "widget_sections_count": len(data.get("sections", [])),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
@@ -372,9 +471,10 @@ async def naukri_insights(
       - "skill_gap": Analyze skill gaps between your profile and market demand
       - "salary_benchmark": Benchmark your salary against market for a given role
       - "taxonomy": Get Naukri's job taxonomy hierarchy (37 departments → 167 role categories → 1461 roles) with synonyms. Cached for 24h.
+      - "profile_prompts": Fetch CCS widget state keys to identify pending profile completion actions (salary breakup, locations, etc.). Uses browser cookies.
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
@@ -399,6 +499,7 @@ async def naukri_insights(
         - skill_gap: {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
         - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
         - taxonomy: {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories: [{id, label, roles: [{id, label, synonyms}]}]}]}
+        - profile_prompts: {status, source, pending_count, completed_count, pending_prompts: [{field, action, impact, reason}], completed_prompts, all_state_keys, cache_ttl_seconds, widget_sections_count}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -470,6 +571,13 @@ async def naukri_insights(
         except Exception as e:
             return {"status": "error", "message": f"Taxonomy fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── profile_prompts ──────────────────────────────────────────────
+    elif insight_type == "profile_prompts":
+        try:
+            return await _get_profile_prompts()
+        except Exception as e:
+            return {"status": "error", "message": f"Profile prompts failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
+
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts", "error_code": "VALIDATION_ERROR"}

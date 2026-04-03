@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, DFP_PROFILE_API, logger
+from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, DFP_PROFILE_API, logger
 from naukri_server.utils import TtlCache
 from naukri_server.validation import validate_profile
 
@@ -1238,7 +1238,7 @@ async def _get_dashboard() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_get(DASHBOARD_API)
+        data = await api_get(DASHBOARD_API, params={"properties": DASHBOARD_PROPERTIES})
         db = data.get("dashBoard", {})
 
         # --- Core fields (existing) ---
