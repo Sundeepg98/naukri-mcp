@@ -5,6 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.scoring import compute_fit_score, parse_skills
 
 
@@ -123,10 +124,10 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
 
         return result
 
-    try:
-        return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        return {"status": "error", "message": f"Bulk scoring timed out after {timeout_seconds}s", "error_code": "API_ERROR"}
+    return await handle_tool_action(
+        lambda: asyncio.wait_for(_do_work(), timeout=timeout_seconds),
+        "smart_apply.bulk_saved",
+    )
 
 
 async def _apply_top_fits(
@@ -304,16 +305,22 @@ async def naukri_smart_apply(
 
     # ── Bulk saved scoring ───────────────────────────────────────────
     if action == "bulk_saved":
-        return await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+        return await handle_tool_action(
+            lambda: _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds),
+            "smart_apply.bulk_saved",
+        )
 
     # ── Apply top fits ────────────────────────────────────────────────
     if action == "apply_top_fits":
-        return await _apply_top_fits(
-            min_fit_score=min_fit_score,
-            limit=limit,
-            set_reminder_days=set_reminder_days,
-            answers=answers,
-            timeout_seconds=timeout_seconds,
+        return await handle_tool_action(
+            lambda: _apply_top_fits(
+                min_fit_score=min_fit_score,
+                limit=limit,
+                set_reminder_days=set_reminder_days,
+                answers=answers,
+                timeout_seconds=timeout_seconds,
+            ),
+            "smart_apply.apply_top_fits",
         )
 
     # ── Unknown action ───────────────────────────────────────────────
@@ -324,63 +331,66 @@ async def naukri_smart_apply(
     if not job_id:
         return {"status": "error", "message": "job_id is required for single-job assessment", "error_code": "VALIDATION_ERROR"}
 
-    from naukri_server.tools.jobs import naukri_get_job
-    from naukri_server.tools.jobs import _fetch_match_score
-    from naukri_server.tools.profile import get_cached_profile
-    from naukri_server.tools.apply import _apply_single
+    async def _single_assess():
+        from naukri_server.tools.jobs import naukri_get_job
+        from naukri_server.tools.jobs import _fetch_match_score
+        from naukri_server.tools.profile import get_cached_profile
+        from naukri_server.tools.apply import _apply_single
 
-    # Parallel fetch job + profile
-    job_result, profile_result = await asyncio.gather(
-        naukri_get_job(job_id_or_url=job_id),
-        get_cached_profile(),
-        return_exceptions=True,
-    )
-
-    if isinstance(job_result, Exception) or job_result.get("status") == "error":
-        msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
-
-    if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
-        msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-        return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
-
-    # Fetch Naukri's own match score (non-blocking — don't fail if unavailable)
-    naukri_match = None
-    try:
-        naukri_match = await _fetch_match_score(job_id)
-    except Exception:
-        pass
-
-    # Compute fit — use tags-or-skills fallback, pass enrichment data
-    fit = _score_job(job_result, profile_result, is_agent_eligible=job_result.get("is_agent_eligible", False))
-
-    result = {
-        "status": "success",
-        "job_summary": {
-            "title": job_result.get("title"),
-            "company": job_result.get("company"),
-            "salary": job_result.get("salary", ""),
-            "experience": job_result.get("experience", ""),
-            "location": job_result.get("location"),
-            "work_mode": job_result.get("work_mode"),
-        },
-        "fit_assessment": fit,
-        "applied": False,
-        "naukri_match": naukri_match,
-    }
-
-    # Auto-apply if requested and fit
-    if apply_if_fit and fit["overall_score"] >= min_fit_score:
-        apply_result = await _apply_single(
-            job_id=job_id, answers=answers,
-            title=job_result.get("title"), company=job_result.get("company"),
-            tracking_extra={"source": "smart_apply", "fit_score": fit["overall_score"]},
+        # Parallel fetch job + profile
+        job_result, profile_result = await asyncio.gather(
+            naukri_get_job(job_id_or_url=job_id),
+            get_cached_profile(),
+            return_exceptions=True,
         )
-        result["applied"] = apply_result.get("status") == "applied"
-        result["apply_result"] = apply_result
-        # Quota warning
-        daily = apply_result.get("daily_applied")
-        if daily is not None and daily >= DAILY_APPLY_QUOTA - 5:
-            result["quota_warning"] = f"Daily quota: {daily}/{DAILY_APPLY_QUOTA} used. {DAILY_APPLY_QUOTA - daily} remaining."
 
-    return result
+        if isinstance(job_result, Exception) or job_result.get("status") == "error":
+            msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
+            return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
+
+        if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
+            msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
+            return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
+
+        # Fetch Naukri's own match score (non-blocking — don't fail if unavailable)
+        naukri_match = None
+        try:
+            naukri_match = await _fetch_match_score(job_id)
+        except Exception:
+            pass
+
+        # Compute fit — use tags-or-skills fallback, pass enrichment data
+        fit = _score_job(job_result, profile_result, is_agent_eligible=job_result.get("is_agent_eligible", False))
+
+        result = {
+            "status": "success",
+            "job_summary": {
+                "title": job_result.get("title"),
+                "company": job_result.get("company"),
+                "salary": job_result.get("salary", ""),
+                "experience": job_result.get("experience", ""),
+                "location": job_result.get("location"),
+                "work_mode": job_result.get("work_mode"),
+            },
+            "fit_assessment": fit,
+            "applied": False,
+            "naukri_match": naukri_match,
+        }
+
+        # Auto-apply if requested and fit
+        if apply_if_fit and fit["overall_score"] >= min_fit_score:
+            apply_result = await _apply_single(
+                job_id=job_id, answers=answers,
+                title=job_result.get("title"), company=job_result.get("company"),
+                tracking_extra={"source": "smart_apply", "fit_score": fit["overall_score"]},
+            )
+            result["applied"] = apply_result.get("status") == "applied"
+            result["apply_result"] = apply_result
+            # Quota warning
+            daily = apply_result.get("daily_applied")
+            if daily is not None and daily >= DAILY_APPLY_QUOTA - 5:
+                result["quota_warning"] = f"Daily quota: {daily}/{DAILY_APPLY_QUOTA} used. {DAILY_APPLY_QUOTA - daily} remaining."
+
+        return result
+
+    return await handle_tool_action(_single_assess, "smart_apply.assess")

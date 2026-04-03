@@ -6,6 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, BATCH_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, BROWSER_MODAL_APPEAR, logger
 from naukri_server.tools.job_parsing import _parse_job_list
@@ -425,34 +426,19 @@ async def naukri_company(
     if action == "search":
         if not keyword:
             return {"status": "error", "message": "keyword is required for action='search'.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _search_companies(keyword=keyword, page=page, limit=limit)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Company search failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _search_companies(keyword=keyword, page=page, limit=limit), "company.search")
 
     # ── jobs ───────────────────────────────────────────────────────────
     elif action == "jobs":
         if not group_id:
             return {"status": "error", "message": "group_id is required for action='jobs'.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _get_company_jobs(group_id=group_id, page=page, limit=limit)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get company jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _get_company_jobs(group_id=group_id, page=page, limit=limit), "company.jobs")
 
     # ── slug ───────────────────────────────────────────────────────────
     elif action == "slug":
         if not group_id:
             return {"status": "error", "message": "group_id is required for action='slug'.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _get_company_slug(group_id=group_id)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get company slug failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _get_company_slug(group_id=group_id), "company.slug")
 
     # ── batch_slugs ────────────────────────────────────────────────────
     elif action == "batch_slugs":
@@ -461,24 +447,21 @@ async def naukri_company(
         ids = [g.strip() for g in group_id.split(",") if g.strip()]
         if not ids:
             return {"status": "error", "message": "No valid group IDs provided.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _batch_get_slugs(ids)
-        except Exception as e:
-            return {"status": "error", "message": f"Batch slug conversion failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _batch_get_slugs(ids), "company.batch_slugs")
 
     # ── research ────────────────────────────────────────────────────────
     elif action == "research":
         if not keyword:
             return {"status": "error", "message": "research requires keyword.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.research import _research_company
-        try:
-            return await _research_company(
+        return await handle_tool_action(
+            lambda: _research_company(
                 keyword=keyword, include_jobs=include_jobs,
                 include_reviews=include_reviews, include_interviews=include_interviews,
                 jobs_limit=jobs_limit, timeout_seconds=timeout_seconds,
-            )
-        except Exception as e:
-            return {"status": "error", "message": f"Research failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            ),
+            "company.research",
+        )
 
     # ── follow_status / follow / unfollow ──────────────────────────────
     elif action in ("follow_status", "follow", "unfollow"):
@@ -487,22 +470,12 @@ async def naukri_company(
             return {"status": "error", "message": "group_id or group_ids is required for follow actions.", "error_code": "VALIDATION_ERROR"}
 
         if action == "follow_status":
-            try:
-                if len(ids) > 1:
-                    return await _batch_follow_status(ids)
-                else:
-                    return await _get_follow_status(ids)
-            except NaukriAPIError as e:
-                return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-            except Exception as e:
-                return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            return await handle_tool_action(
+                lambda: _batch_follow_status(ids) if len(ids) > 1 else _get_follow_status(ids),
+                "company.follow_status",
+            )
         else:
-            try:
-                return await _follow_or_unfollow(ids, action)
-            except NaukriAPIError as e:
-                return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-            except Exception as e:
-                return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            return await handle_tool_action(lambda: _follow_or_unfollow(ids, action), f"company.{action}")
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
@@ -541,21 +514,11 @@ async def _company_follow(
 
     # ── status ────────────────────────────────────────────────────────
     if action == "status":
-        try:
-            return await _get_follow_status(group_ids)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Check follow status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _get_follow_status(group_ids), "company_follow.status")
 
     # ── follow / unfollow ─────────────────────────────────────────────
     elif action in ("follow", "unfollow"):
-        try:
-            return await _follow_or_unfollow(group_ids, action)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Company {action} failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(lambda: _follow_or_unfollow(group_ids, action), f"company_follow.{action}")
 
     # ── unknown action ────────────────────────────────────────────────
     else:

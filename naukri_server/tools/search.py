@@ -1,9 +1,10 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError, api_tool
+from naukri_server.api import api_get, api_post, api_tool
 from naukri_server.browser import browser, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_list, validate_limit, validate_page
 
@@ -126,8 +127,8 @@ async def naukri_search_jobs(
     except Exception as e:
         logger.info("REST search failed (%s), falling back to browser", e)
 
-    async with browser.page_pool.acquire() as page:
-        try:
+    async def _browser_search():
+        async with browser.page_pool.acquire() as page:
             # Build Naukri search URL (SEO-friendly format)
             slug = keywords.lower().replace(" ", "-").replace(".", "-")
             if location:
@@ -213,8 +214,8 @@ async def naukri_search_jobs(
             if warnings:
                 result["warnings"] = warnings
             return result
-        except Exception as e:
-            return {"status": "error", "message": f"Search failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+
+    return await handle_tool_action(_browser_search, "search.browser_fallback")
 
 
 @mcp.tool()
@@ -290,9 +291,10 @@ async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict
         - {status: "success", job_id, source: "similar", total, count, page, has_more, jobs: [{job_id, title, company, ...}]}
         - {status: "error", message}
     """
-    try:
-        limit = validate_limit(limit)
-        page = validate_page(page)
+    limit = validate_limit(limit)
+    page = validate_page(page)
+
+    async def _do():
         data = await api_get(SIMILAR_JOBS_API + job_id, params={
             "noOfResults": str(limit * page),
             "searchType": "sim",
@@ -318,10 +320,8 @@ async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict
         if warnings:
             result["warnings"] = warnings
         return result
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "AUTH_ERROR" if e.status == 401 else "API_ERROR"}
-    except Exception as e:
-        return {"status": "error", "message": f"Get similar jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    return await handle_tool_action(_do, "search.similar")
 
 
 naukri_get_similar_jobs = _get_similar_jobs

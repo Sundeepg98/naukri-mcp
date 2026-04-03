@@ -7,6 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, browser_retry, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import (
     NAUKRI_BASE, DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API, FULLPROFILES_API,
     PROFILE_CACHE_TTL, DFP_PROFILE_API, BROWSER_OPERATION_TIMEOUT, logger,
@@ -1202,18 +1203,12 @@ async def naukri_profile(
     """
     # ── get ─────────────────────────────────────────────────────────────
     if action == "get":
-        try:
-            return await _get_profile()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_get_profile, "profile.get")
 
     # ── update ──────────────────────────────────────────────────────────
     elif action == "update":
-        try:
-            return await asyncio.wait_for(
+        return await handle_tool_action(
+            lambda: asyncio.wait_for(
                 browser_retry(
                     lambda: _update_profile(
                         fields=fields or {},
@@ -1224,56 +1219,34 @@ async def naukri_profile(
                     description="profile update",
                 ),
                 timeout=BROWSER_OPERATION_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            return {"status": "error", "message": f"Profile update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+            ),
+            "profile.update",
+        )
 
     # ── audit ───────────────────────────────────────────────────────────
     elif action == "audit":
-        try:
-            return await _audit_profile()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_audit_profile, "profile.audit")
 
     # ── boost ───────────────────────────────────────────────────────────
     elif action == "boost":
-        try:
-            return await asyncio.wait_for(
+        return await handle_tool_action(
+            lambda: asyncio.wait_for(
                 browser_retry(
                     lambda: _boost_visibility(randomize=randomize),
                     description="profile boost",
                 ),
                 timeout=BROWSER_OPERATION_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            return {"status": "error", "message": f"Profile boost timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+            ),
+            "profile.boost",
+        )
 
     # ── dashboard ─────────────────────────────────────────────────────
     elif action == "dashboard":
-        try:
-            return await _get_dashboard()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_get_dashboard, "profile.dashboard")
 
     # ── targeting ───────────────────────────────────────────────────────
     elif action == "targeting":
-        try:
+        async def _do_targeting():
             data = await api_get(DFP_PROFILE_API)
             params = data.get("params", {})
 
@@ -1315,11 +1288,8 @@ async def naukri_profile(
                 "ad_slots": len(data.get("slots", [])),
                 "raw_params": params,
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+
+        return await handle_tool_action(_do_targeting, "profile.targeting")
 
     # ── unknown action ──────────────────────────────────────────────────
     else:

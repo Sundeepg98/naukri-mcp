@@ -3,8 +3,9 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import api_get
 from naukri_server.config import RESUME_BUILDER_CONFIG_API, RESUME_BUILDER_STATUS_API
+from naukri_server.error_handler import handle_tool_action
 
 
 # ---------------------------------------------------------------------------
@@ -98,31 +99,21 @@ async def naukri_resume_builder(
     """
     # -- templates ──────────────────────────────────────────────────────
     if action == "templates":
-        try:
-            return await _get_templates()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get resume templates failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_templates, "resume_builder.templates")
 
     # -- status ─────────────────────────────────────────────────────────
     elif action == "status":
-        try:
-            return await _get_status()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get resume builder status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(_get_status, "resume_builder.status")
 
     # -- tailor ──────────────────────────────────────────────────────────
     elif action == "tailor":
         if not job_id:
             return {"status": "error", "message": "tailor requires job_id.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.resume_tailor import _tailor_resume
-        try:
-            return await _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds)
-        except Exception as e:
-            return {"status": "error", "message": f"Resume tailor failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds),
+            "resume_builder.tailor",
+        )
 
     # -- unknown action ─────────────────────────────────────────────────
     else:

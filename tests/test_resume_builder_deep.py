@@ -186,7 +186,7 @@ async def test_templates_generic_exception_caught(mock_api_get):
     from naukri_server.tools.resume_builder import naukri_resume_builder
     result = await naukri_resume_builder(action="templates")
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
 
 
@@ -273,12 +273,12 @@ async def test_tailor_delegates_to_helper(mock_tailor):
 
 @pytest.mark.asyncio
 @patch("naukri_server.tools.resume_tailor._tailor_resume", new_callable=AsyncMock)
-async def test_tailor_propagates_helper_error_as_api_error(mock_tailor):
+async def test_tailor_propagates_helper_error_as_internal_error(mock_tailor):
     """Exceptions raised by _tailor_resume must be caught and returned as status=error."""
     mock_tailor.side_effect = RuntimeError("browser crashed")
     from naukri_server.tools.resume_builder import naukri_resume_builder
     result = await naukri_resume_builder(action="tailor", job_id="JOB456")
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
     assert "browser crashed" in result["message"]

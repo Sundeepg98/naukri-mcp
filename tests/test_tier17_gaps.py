@@ -586,5 +586,5 @@ class TestBulkSavedScoringErrorPaths:
             result = await _bulk_saved_scoring(timeout_seconds=0.01)
 
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
+        assert result["error_code"] == "INTERNAL_ERROR"
         assert "timed out" in result["message"].lower() or "timeout" in result["message"].lower()

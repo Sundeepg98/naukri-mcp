@@ -226,7 +226,7 @@ class TestResumeBuilderTailor:
             result = await naukri_resume_builder(action="tailor", job_id="12345")
             assert result["status"] == "error"
             assert "RuntimeError" in result["message"]
-            assert result["error_code"] == "API_ERROR"
+            assert result["error_code"] == "INTERNAL_ERROR"
 
     @pytest.mark.asyncio
     async def test_tailor_routes_to_helper(self):

@@ -503,7 +503,7 @@ class TestErrorPaths:
 
     @pytest.mark.asyncio
     async def test_list_error_returns_api_error(self):
-        """If _list_reminders raises any exception, naukri_reminders returns API_ERROR."""
+        """If _list_reminders raises NaukriAPIError, naukri_reminders returns API_ERROR."""
         from naukri_server.tools.reminders import naukri_reminders
         from naukri_server.api import NaukriAPIError
 
@@ -516,11 +516,11 @@ class TestErrorPaths:
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
-        assert "NaukriAPIError" in result["message"]
+        assert "Internal Server Error" in result["message"]
 
     @pytest.mark.asyncio
     async def test_set_error_returns_api_error(self):
-        """If _set_reminder raises any exception, naukri_reminders returns API_ERROR."""
+        """If _set_reminder raises NaukriAPIError, naukri_reminders returns API_ERROR."""
         from naukri_server.tools.reminders import naukri_reminders
         from naukri_server.api import NaukriAPIError
 
@@ -533,11 +533,11 @@ class TestErrorPaths:
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
-        assert "NaukriAPIError" in result["message"]
+        assert "Service Unavailable" in result["message"]
 
     @pytest.mark.asyncio
     async def test_list_generic_exception_caught(self):
-        """A plain RuntimeError from _list_reminders is also caught as API_ERROR."""
+        """A plain RuntimeError from _list_reminders is caught as INTERNAL_ERROR."""
         from naukri_server.tools.reminders import naukri_reminders
 
         with patch(
@@ -548,5 +548,5 @@ class TestErrorPaths:
             result = await naukri_reminders(action="list")
 
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
+        assert result["error_code"] == "INTERNAL_ERROR"
         assert "RuntimeError" in result["message"]

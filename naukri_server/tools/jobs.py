@@ -6,6 +6,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -535,47 +536,40 @@ async def naukri_jobs(
     elif action == "similar":
         if not job_id:
             return {"status": "error", "message": "similar requires job_id.", "error_code": "VALIDATION_ERROR"}
-        # REST-first: lightweight v2 API, no browser needed
-        try:
-            return await _get_similar_jobs_rest(job_id, limit)
-        except Exception:
-            pass
-        # Fallback: full parser via search module helper
-        from naukri_server.tools.search import _get_similar_jobs
-        try:
+
+        async def _similar():
+            # REST-first: lightweight v2 API, no browser needed
+            try:
+                return await _get_similar_jobs_rest(job_id, limit)
+            except Exception:
+                pass
+            # Fallback: full parser via search module helper
+            from naukri_server.tools.search import _get_similar_jobs
             return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)
-        except Exception as e:
-            return {"status": "error", "message": f"Similar jobs failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+        return await handle_tool_action(_similar, "jobs.similar")
     elif action == "compare":
         if not job_ids:
             return {"status": "error", "message": "compare requires job_ids (list of 2-5 IDs).", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.compare import _compare_jobs
-        try:
-            return await _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds)
-        except Exception as e:
-            return {"status": "error", "message": f"Compare failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare")
     elif action == "bulk":
         if not job_ids:
             return {"status": "error", "message": "bulk requires job_ids (list of 1-20 IDs).", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _bulk_fetch_jobs(job_ids=job_ids)
-        except Exception as e:
-            return {"status": "error", "message": f"Bulk fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk")
     elif action == "detail_v1":
         if not job_id:
             return {"status": "error", "message": "job_id required for detail_v1", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _get_job_v1(job_id=job_id)
-        except Exception as e:
-            return {"status": "error", "message": f"V1 detail failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1")
     elif action == "report_fraud":
         if not job_id:
             return {"status": "error", "message": "job_id required for report_fraud", "error_code": "VALIDATION_ERROR"}
         if not reason:
             return {"status": "error", "message": "reason required for report_fraud", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _report_fraud(job_id=job_id, reason=reason)
-        except Exception as e:
-            return {"status": "error", "message": f"Report fraud failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud")
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, bulk, detail_v1, report_fraud", "error_code": "VALIDATION_ERROR"}

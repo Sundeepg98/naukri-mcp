@@ -9,6 +9,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
@@ -838,61 +839,36 @@ async def naukri_applications(
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        try:
-            return await _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(
+            lambda: _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info),
+            "applications.list",
+        )
 
     # ── detail ─────────────────────────────────────────────────────────
     elif action == "detail":
         if not job_id:
             return {"status": "error", "message": "detail requires job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _get_application_detail(job_id)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _get_application_detail(job_id), "applications.detail")
 
     # ── purge ──────────────────────────────────────────────────────────
     elif action == "purge":
         if not before_date:
             return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _purge_applications(before_date=before_date, dry_run=dry_run)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _purge_applications(before_date=before_date, dry_run=dry_run), "applications.purge")
 
     # ── stale ──────────────────────────────────────────────────────────
     elif action == "stale":
-        try:
-            return await _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit, page=page)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(
+            lambda: _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit, page=page),
+            "applications.stale",
+        )
 
     # ── follow_up ──────────────────────────────────────────────────────
     elif action == "follow_up":
-        try:
-            return await _application_follow_up(
-                days_threshold=days_threshold,
-                min_stale_score=min_stale_score,
-                limit=limit,
-            )
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(
+            lambda: _application_follow_up(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit),
+            "applications.follow_up",
+        )
 
     # ── apply ─────────────────────────────────────────────────────────
     elif action == "apply":
@@ -910,7 +886,8 @@ async def naukri_applications(
                     "message": "You have already applied to this job (from local tracking).",
                     "job_id": job_id,
                 }
-        try:
+
+        async def _do_apply():
             async with _tracking_composite_lock:
                 result = await _apply_single(job_id, answers, tracking_extra={"source": "single"})
                 # Auto-set reminder if requested and apply succeeded
@@ -928,18 +905,16 @@ async def naukri_applications(
                         result["reminder_set"] = False
                         result["reminder_error"] = str(e)
             return result
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+
+        return await handle_tool_action(_do_apply, "applications.apply")
 
     # ── batch_apply ───────────────────────────────────────────────────
     elif action == "batch_apply":
         if not keywords:
             return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.apply import _batch_apply
-        try:
+
+        async def _do_batch_apply():
             async with _tracking_composite_lock:
                 result = await _batch_apply(
                     keywords=keywords, location=location, experience=experience,
@@ -967,27 +942,24 @@ async def naukri_applications(
                         result["reminders_set"] = reminder_count
                         result["reminder_days"] = set_reminder_days
             return result
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+
+        return await handle_tool_action(_do_batch_apply, "applications.batch_apply")
 
     # ── draft_follow_up ─────────────────────────────────────────────────
     elif action == "draft_follow_up":
         if not job_id:
             return {"status": "error", "message": "draft_follow_up requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _draft_follow_up(job_id)
+        return await handle_tool_action(lambda: _draft_follow_up(job_id), "applications.draft_follow_up")
 
     # ── recruiter_history ─────────────────────────────────────────────
     elif action == "recruiter_history":
-        return await _recruiter_history()
+        return await handle_tool_action(_recruiter_history, "applications.recruiter_history")
 
     # ── interview_prep ────────────────────────────────────────────────
     elif action == "interview_prep":
         if not job_id:
             return {"status": "error", "message": "interview_prep requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _interview_prep(job_id)
+        return await handle_tool_action(lambda: _interview_prep(job_id), "applications.interview_prep")
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

@@ -6,6 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger, REMINDERS_FILE
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 _reminders_lock = asyncio.Lock()
 
@@ -199,19 +200,19 @@ async def naukri_reminders(
     """
     # -- list ---------------------------------------------------------------
     if action == "list":
-        try:
-            return await _list_reminders(include_past=include_past, include_app_status=include_app_status)
-        except Exception as e:
-            return {"status": "error", "message": f"List reminders failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _list_reminders(include_past=include_past, include_app_status=include_app_status),
+            "reminders.list",
+        )
 
     # -- set ----------------------------------------------------------------
     elif action == "set":
         if not job_id:
             return {"status": "error", "message": "set requires job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company)
-        except Exception as e:
-            return {"status": "error", "message": f"Set reminder failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+        return await handle_tool_action(
+            lambda: _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company),
+            "reminders.set",
+        )
 
     # -- unknown action -----------------------------------------------------
     else:
