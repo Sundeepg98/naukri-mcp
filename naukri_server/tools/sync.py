@@ -452,7 +452,12 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
     - New job_id: add with source="naukri_sync".
     - Local-only jobs are left untouched.
     """
-    local_by_id = {a["job_id"]: a for a in local_apps if a.get("job_id")}
+    # Deduplicate local_apps by job_id (keep last entry per id)
+    local_by_id = {}
+    for a in local_apps:
+        jid = a.get("job_id")
+        if jid:
+            local_by_id[jid] = a
     now = datetime.now(timezone.utc).isoformat()
 
     new_added = 0
@@ -469,11 +474,11 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
             changed = False
             for field in ("title", "company", "status", "recruiter_active", "apply_type",
               "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
-                if rj.get(field) and rj[field] != existing.get(field):
+                if rj.get(field) is not None and rj[field] != existing.get(field):
                     existing[field] = rj[field]
                     changed = True
             for field in ("applied_date", "salary", "location", "url"):
-                if rj.get(field) and field not in existing:
+                if rj.get(field) is not None and field not in existing:
                     existing[field] = rj[field]
             if changed:
                 existing["last_synced"] = now
@@ -493,8 +498,12 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
             for k, v in rj.items():
                 if k not in entry and v is not None:
                     entry[k] = v
-            local_apps.append(entry)
+            local_by_id[rid] = entry
             new_added += 1
+
+    # Rebuild local_apps from deduplicated dict (preserves merge results)
+    local_apps.clear()
+    local_apps.extend(local_by_id.values())
 
     local_only = sum(1 for a in local_apps
                      if a.get("job_id") and a["job_id"] not in remote_ids)
