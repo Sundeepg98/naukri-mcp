@@ -66,6 +66,34 @@ async def naukri_get_subscription_status() -> dict:
 - **Browser intercept** can miss responses — always set appropriate timeout
 - **.backup files** — all JSON data files use atomic writes with backup recovery
 
+## AmbitionBox REST Bridge
+- `ambitionbox.py` has 7 REST helper functions: `ab_get_benefits`, `ab_get_work_culture`, `ab_get_interview_questions`, `ab_get_competitors`, `ab_get_locations`, `ab_get_applied_jobs_insights`, `ab_get_salary_rest`
+- Uses cookies extracted from browser context (cached with 30min TTL)
+- Auto-refreshes cookies on 401/403
+- Config constants: `AB_SALARY_API`, `AB_BENEFITS_API`, `AB_REVIEW_DIST_API`, etc.
+- Used by `research.py` for parallel data fetching alongside browser scraping
+
+## Screening Question Handling
+- First apply attempt may return `status: "needs_input"` with `questions` list
+- Questions cached in `questions.json` for fuzzy matching
+- Retry with answers: `naukri_apply(job_id, answers={"question_id": "answer"})`
+- `apply.py` allows retry when existing record has `status == "needs_input"` AND answers provided
+- `smart_apply._apply_top_fits` auto-retries needs_input jobs if general answers provided
+
+## Fit Scoring (`scoring.py`)
+- 88 canonical skills with 150 aliases for normalization
+- Base score: 60% skill match + 40% experience match
+- Bonuses (up to +15): location (+5), work_mode (+5), salary (+5), agent_eligible (+5)
+- Over-qualification: sqrt penalty curve (floor 60, not linear cliff at 50)
+- Returns `reasons` list explaining skill gaps, experience mismatch, missing bonuses
+- Experience parsed with month precision: "5 years 6 months" = 5.5
+
+## Data Persistence
+- JSON files: `applications.json`, `saved_jobs.json`, `reminders.json`, `questions.json`
+- Atomic writes via `save_json_atomic()` with `.backup` recovery
+- Thread-safe via `asyncio.Lock` per file (`_applications_lock`, `_saved_jobs_lock`)
+- Merge deduplicates by `job_id` before syncing remote data
+
 ## File Ownership for Parallel Development
 Each parallel agent should ONLY modify its assigned files. Conflicts break merges.
 Check the implementation plan for file assignments before starting.
