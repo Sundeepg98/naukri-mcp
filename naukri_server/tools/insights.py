@@ -350,13 +350,22 @@ async def _get_profile_prompts() -> dict:
     """
     async with _get_browser().page_pool.acquire() as page:
         url = f"{NAUKRI_BASE}{CCS_PAGE_API}/{CCS_DASHBOARD_PAGE}"
+        # Try full fetch first (returns all state keys), fall back to partial
         data = await page.evaluate("""
             async (url) => {
                 try {
-                    const resp = await fetch(url, {
+                    let resp = await fetch(url, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({"states": {}, "existingSets": []})
+                    });
+                    let result = await resp.json();
+                    if (result.states && Object.keys(result.states).length > 0) return result;
+                    // Fallback: partial with sync (matches Naukri's frontend call)
+                    resp = await fetch(url + '?partial=true&rules=true&sync=true', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({"states": {}})
                     });
                     return await resp.json();
                 } catch (e) {
