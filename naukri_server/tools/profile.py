@@ -43,6 +43,11 @@ async def get_cached_profile() -> dict:
 # ---------------------------------------------------------------------------
 
 _SAVE_MODAL_JS = """() => {
+    // Strategy 1: stable structural selectors (preferred)
+    var save = document.querySelector('.profileEditDrawer button[type="submit"]')
+            || document.querySelector('.keySkillsEdit button[type="submit"]');
+    if (save) { save.click(); return 'structural'; }
+    // Strategy 2: text matching inside modal (fallback)
     const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
     if (modal) {
         const btn = Array.from(modal.querySelectorAll('button')).find(
@@ -50,6 +55,7 @@ _SAVE_MODAL_JS = """() => {
         );
         if (btn) { btn.click(); return 'modal_save'; }
     }
+    // Strategy 3: visible Save button anywhere (last resort)
     const exactSave = Array.from(document.querySelectorAll('button')).find(
         b => b.textContent.trim() === 'Save' && b.offsetParent !== null
     );
@@ -334,6 +340,10 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
             edit_clicked = await page.evaluate("""() => {
+                // Strategy 1: stable structural selector (preferred)
+                var editBtn = document.querySelector('.resumeHeadline .edit');
+                if (editBtn) { editBtn.click(); return 'headline_edit'; }
+                // Strategy 2: text matching (fallback)
                 const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                     el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
                 );
@@ -367,20 +377,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
             page.on("response", on_response)
 
             try:
-                save_result = await page.evaluate("""() => {
-                    const modal = document.querySelector('[class*="modal"], [class*="dialog"], [class*="overlay"], [role="dialog"]');
-                    if (modal) {
-                        const btn = Array.from(modal.querySelectorAll('button')).find(
-                            b => b.textContent.trim().toLowerCase() === 'save'
-                        );
-                        if (btn) { btn.click(); return 'modal_save'; }
-                    }
-                    const exactSave = Array.from(document.querySelectorAll('button')).find(
-                        b => b.textContent.trim() === 'Save' && b.offsetParent !== null
-                    );
-                    if (exactSave) { exactSave.click(); return 'exact_save'; }
-                    return null;
-                }""")
+                save_result = await page.evaluate(_SAVE_MODAL_JS)
 
                 if not save_result:
                     return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
@@ -410,6 +407,10 @@ async def _update_headline(page, value) -> dict:
     """Update resume headline via browser UI. Operates on an already-loaded profile page."""
     try:
         edit_clicked = await page.evaluate("""() => {
+            // Strategy 1: stable structural selector (preferred)
+            var editBtn = document.querySelector('.resumeHeadline .edit');
+            if (editBtn) { editBtn.click(); return 'headline_edit'; }
+            // Strategy 2: text matching (fallback)
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
             );
@@ -464,6 +465,10 @@ async def _update_key_skills(page, value) -> dict:
     try:
         # Navigate to key skills section and click edit
         edit_clicked = await page.evaluate("""() => {
+            // Strategy 1: stable structural selector (preferred)
+            var editBtn = document.querySelector('.keySkills .edit');
+            if (editBtn) { editBtn.click(); return 'skills_edit'; }
+            // Strategy 2: text matching (fallback)
             const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
                 el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
             );
@@ -629,6 +634,10 @@ async def _update_key_skills(page, value) -> dict:
         save_result = await page.evaluate("""() => {
             const lightbox = document.querySelector('.keySkillsEdit');
             if (!lightbox) return 'no_lightbox';
+            // Strategy 1: stable structural selector (preferred)
+            var save = lightbox.querySelector('button[type="submit"]');
+            if (save) { save.click(); return 'save_clicked'; }
+            // Strategy 2: text matching (fallback)
             const btns = lightbox.querySelectorAll('button');
             for (const btn of btns) {
                 if (btn.textContent.trim() === 'Save') {
@@ -825,10 +834,13 @@ _FIELD_HANDLERS = {**_STANDALONE_HANDLERS, **_CAREER_FIELD_HANDLERS}
 async def _open_career_profile_modal(page) -> str | None:
     """Open the Career Profile edit modal. Returns edit method or None."""
     edit_clicked = await page.evaluate("""() => {
+        // Strategy 1: stable structural selector (preferred)
+        var editBtn = document.querySelector('.dashboard-component .icon.edit');
+        if (editBtn) { editBtn.click(); return 'career_profile_edit'; }
+        // Strategy 2: text matching — find edit icon near "Career profile" text (fallback)
         const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
             el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
         );
-        // Strategy 1: find edit icon near "Career profile" or "Notice period" text
         for (const icon of editIcons) {
             const parent = icon.closest('div, section');
             if (parent && (
@@ -843,7 +855,7 @@ async def _open_career_profile_modal(page) -> str | None:
                 return 'career_profile_edit';
             }
         }
-        // Strategy 2: look for section with class containing "careerProfile"
+        // Strategy 3: look for section with class containing "careerProfile"
         for (const icon of editIcons) {
             const section = icon.closest('[class*="careerProfile"], [class*="career-profile"], [class*="CareerProfile"]');
             if (section) { icon.click(); return 'career_section_edit'; }
