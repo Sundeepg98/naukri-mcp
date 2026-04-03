@@ -94,10 +94,26 @@ async def _research_company(
                 errors.append(f"Jobs: {type(e).__name__}: {e}")
                 logger.warning("Research company jobs failed: %s", e)
 
-        # Step 2: Get AmbitionBox salary + reviews + interviews (if requested)
+        # Step 2: Get AmbitionBox data (REST bridge first, browser fallback)
         if include_reviews or include_interviews:
             gather_coros = []
             gather_labels = []
+
+            # Try AB REST bridge for work culture + benefits (fast, no browser)
+            try:
+                from naukri_server.tools.ambitionbox import ab_get_work_culture, ab_get_benefits
+                # company_id lookup — use group_id if available
+                if result.get("jobs", {}).get("sample"):
+                    sample_job = result["jobs"]["sample"][0]
+                    ab_company_id = str(sample_job.get("company_id", ""))
+                    if ab_company_id:
+                        gather_coros.append(ab_get_work_culture(ab_company_id))
+                        gather_labels.append("work_culture")
+                        gather_coros.append(ab_get_benefits(ab_company_id))
+                        gather_labels.append("benefits")
+            except Exception:
+                pass  # REST bridge unavailable, fall back to browser
+
             if include_reviews:
                 gather_coros.append(_fetch_salary(company_slug=slug))
                 gather_labels.append("salary")
@@ -113,6 +129,16 @@ async def _research_company(
             salary_result = results_map.get("salary")
             reviews_result = results_map.get("reviews")
             interviews_result = results_map.get("interviews")
+
+            # AB REST results (work culture + benefits)
+            for ab_key in ("work_culture", "benefits"):
+                ab_result = results_map.get(ab_key)
+                if ab_result is not None:
+                    if isinstance(ab_result, Exception):
+                        errors.append(f"{ab_key}: {type(ab_result).__name__}: {ab_result}")
+                    elif isinstance(ab_result, dict) and ab_result.get("status") == "success":
+                        result[ab_key] = {k: v for k, v in ab_result.items() if k != "status"}
+                    # Silently skip failed AB REST calls (not critical)
 
             if salary_result is not None:
                 if isinstance(salary_result, Exception):

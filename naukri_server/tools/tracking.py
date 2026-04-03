@@ -12,8 +12,8 @@ from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
-    SAVE_JOB_API, UNSAVE_JOB_API, BATCH_APPLY_DEFAULT_DELAY_MS,
-    BATCH_APPLY_DEFAULT_CONCURRENCY,
+    SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
+    BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
 )
 from naukri_server.validation import validate_limit, validate_page
 
@@ -796,6 +796,45 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
     return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
 
 
+async def _sync_saved_jobs_from_naukri() -> dict:
+    """Pull saved jobs from Naukri server and merge with local tracking."""
+    try:
+        data = await api_get(SAVED_JOBS_API, params={"start": "0", "limit": "100"})
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to fetch saved jobs: {e}", "error_code": "API_ERROR"}
+
+    remote_jobs = data.get("list", data.get("savedJobs", []))
+    if not isinstance(remote_jobs, list):
+        remote_jobs = []
+
+    async with _saved_jobs_lock:
+        local = _load_json(SAVED_JOBS_FILE)
+        local_ids = {str(j.get("job_id")) for j in local}
+        new_added = 0
+        for rj in remote_jobs:
+            jid = str(rj.get("jobId", rj.get("job_id", "")))
+            if jid and jid not in local_ids:
+                local.append({
+                    "job_id": jid,
+                    "title": rj.get("title"),
+                    "company": rj.get("companyName", rj.get("company")),
+                    "saved_at": rj.get("savedDate") or datetime.now(timezone.utc).isoformat(),
+                    "source": "naukri_sync",
+                })
+                local_ids.add(jid)
+                new_added += 1
+        if new_added:
+            _save_json(SAVED_JOBS_FILE, local)
+
+    return {
+        "status": "success",
+        "total_remote": len(remote_jobs),
+        "new_added": new_added,
+        "already_local": len(remote_jobs) - new_added,
+        "total_local": len(local),
+    }
+
+
 async def _unsave_job(job_id: str) -> dict:
     """Unsave/unbookmark a job locally and on Naukri."""
     # Always attempt the remote unsave regardless of local state
@@ -831,15 +870,16 @@ async def naukri_saved_jobs(
     limit: int = 50,
     page: int = 1,
 ) -> dict:
-    """Unified saved/bookmarked jobs management — list, save, and unsave.
+    """Unified saved/bookmarked jobs management — list, save, unsave, and sync.
 
     Actions:
       - "list": Get saved/bookmarked jobs (use limit/page for pagination)
       - "save": Save/bookmark a job for later (requires job_id)
       - "unsave": Unsave/unbookmark a job (requires job_id)
+      - "sync": Pull saved jobs from Naukri server and merge with local tracking
 
     Args:
-        action: "list" | "save" | "unsave"
+        action: "list" | "save" | "unsave" | "sync"
         job_id: Required for save/unsave — the Naukri job ID
         title: Job title for display (optional, save only)
         company: Company name for display (optional, save only)
@@ -872,9 +912,13 @@ async def naukri_saved_jobs(
             return {"status": "error", "message": "unsave requires job_id.", "error_code": "VALIDATION_ERROR"}
         return await _unsave_job(job_id)
 
+    # ── sync ───────────────────────────────────────────────────────────
+    elif action == "sync":
+        return await _sync_saved_jobs_from_naukri()
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave, sync", "error_code": "VALIDATION_ERROR"}
 
 
 async def _get_match_analytics(days: int = 7) -> dict:

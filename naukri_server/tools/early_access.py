@@ -138,6 +138,9 @@ async def naukri_early_access(
     job_id: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
+    filter_company: Optional[str] = None,
+    filter_location: Optional[str] = None,
+    filter_experience: Optional[int] = None,
 ) -> dict:
     """Unified early access management — browse pre-posted roles and share interest.
 
@@ -153,6 +156,9 @@ async def naukri_early_access(
         job_id: Required for share — the early access role job ID
         page: Page number for list action (default 1)
         limit: Max roles for list action (default 20)
+        filter_company: Filter roles by company name (case-insensitive substring match)
+        filter_location: Filter by location (case-insensitive substring match)
+        filter_experience: Filter by max experience years (only roles where min exp <= this value)
 
     Returns:
         - list: {status, total, count, page, has_more, roles: [{job_id, title, company_hint, location, experience, salary, job_type, tags, url}]}
@@ -162,7 +168,34 @@ async def naukri_early_access(
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
         try:
-            return await _list_early_access_roles(page=page, limit=limit)
+            result = await _list_early_access_roles(page=page, limit=limit)
+            # Client-side filtering (API doesn't support server-side)
+            if any((filter_company, filter_location, filter_experience is not None)):
+                roles = result.get("roles", [])
+                if filter_company:
+                    fc = filter_company.lower()
+                    roles = [r for r in roles if fc in (r.get("company_hint") or "").lower()]
+                if filter_location:
+                    fl = filter_location.lower()
+                    roles = [r for r in roles if fl in (r.get("location") or "").lower()]
+                if filter_experience is not None:
+                    import re
+                    filtered = []
+                    for r in roles:
+                        exp_str = r.get("experience", "")
+                        nums = re.findall(r'\d+', str(exp_str))
+                        if nums and int(nums[0]) <= filter_experience:
+                            filtered.append(r)
+                    roles = filtered
+                result["roles"] = roles
+                result["count"] = len(roles)
+                result["filters_applied"] = {
+                    k: v for k, v in {
+                        "company": filter_company, "location": filter_location,
+                        "experience": filter_experience,
+                    }.items() if v is not None
+                }
+            return result
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
