@@ -27,6 +27,10 @@ async def naukri_profile_media(
 ) -> dict:
     """Unified resume and photo management — info, download, upload, delete.
 
+    Note: Uses two-level dispatch — 'media_type' selects the resource (resume or photo),
+    then 'action' selects the operation (info, upload, download, delete). This avoids
+    combinatorial explosion of action values like "resume_info", "photo_upload", etc.
+
     Combines former naukri_resume + naukri_photo into one tool.
 
     media_type="resume" actions:
@@ -157,11 +161,15 @@ async def _resume_download(save_path: str) -> dict:
 
 
 async def _resume_upload(file_path: str) -> dict:
-    path = Path(file_path)
+    path = Path(file_path).resolve()
 
     # Validate file exists
     if not path.exists():
         return {"status": "error", "message": f"File not found: {file_path}", "error_code": "NOT_FOUND"}
+
+    # Validate path — only allow files from user's home directory or current working directory
+    if not (str(path).startswith(str(Path.home())) or str(path).startswith(str(Path.cwd()))):
+        return {"status": "error", "message": "File access denied — only files in home or working directory allowed", "error_code": "VALIDATION_ERROR"}
 
     # Validate format
     if path.suffix.lower() not in RESUME_ALLOWED_FORMATS:
@@ -244,11 +252,15 @@ async def _photo_info() -> dict:
 
 
 async def _photo_upload(file_path: str) -> dict:
-    path = Path(file_path)
+    path = Path(file_path).resolve()
 
     # Validate file exists
     if not path.exists():
         return {"status": "error", "message": f"File not found: {file_path}", "error_code": "NOT_FOUND"}
+
+    # Validate path — only allow files from user's home directory or current working directory
+    if not (str(path).startswith(str(Path.home())) or str(path).startswith(str(Path.cwd()))):
+        return {"status": "error", "message": "File access denied — only files in home or working directory allowed", "error_code": "VALIDATION_ERROR"}
 
     # Validate format
     if path.suffix.lower() not in PHOTO_ALLOWED_FORMATS:

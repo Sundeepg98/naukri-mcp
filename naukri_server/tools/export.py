@@ -96,7 +96,10 @@ async def _export_data(
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     ext = format
     if output_path:
-        file_path = Path(output_path)
+        file_path = Path(output_path).resolve()
+        exports_dir = _EXPORTS_DIR.resolve()
+        if not str(file_path).startswith(str(exports_dir)):
+            return {"status": "error", "message": "output_path must be within the exports/ directory", "error_code": "VALIDATION_ERROR"}
     else:
         file_path = _EXPORTS_DIR / f"{data_type}_{date_str}.{ext}"
 

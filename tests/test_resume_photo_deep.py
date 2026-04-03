@@ -21,6 +21,22 @@ def _fake_page_pool(mock_page):
     return _acquire
 
 
+def _setup_path_validation(mock_path_cls, mock_path):
+    """Configure mock Path class so the path validation check passes.
+
+    The source code calls Path.home() and Path.cwd() and checks that
+    str(path) starts with one of them. Set up consistent string representations.
+    """
+    mock_path.resolve.return_value = mock_path
+    mock_path.__str__ = lambda self: "/home/user/some/file"
+    home_mock = MagicMock()
+    home_mock.__str__ = lambda self: "/home/user"
+    mock_path_cls.home.return_value = home_mock
+    cwd_mock = MagicMock()
+    cwd_mock.__str__ = lambda self: "/home/user/cwd"
+    mock_path_cls.cwd.return_value = cwd_mock
+
+
 # ===========================================================================
 # 1. media_type validation
 # ===========================================================================
@@ -170,6 +186,7 @@ class TestResumeUpload:
             mock_path.exists.return_value = False
             mock_path.suffix.lower.return_value = ".pdf"
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
             result = await _resume_upload("/nonexistent/cv.pdf")
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
@@ -186,6 +203,7 @@ class TestResumeUpload:
             mock_path.exists.return_value = True
             type(mock_path).suffix = PropertyMock(return_value=".txt")
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
             result = await _resume_upload("/some/file.txt")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
@@ -205,6 +223,7 @@ class TestResumeUpload:
             mock_stat.st_size = int((RESUME_MAX_SIZE_MB + 1) * 1024 * 1024)
             mock_path.stat.return_value = mock_stat
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
             result = await _resume_upload("/big/file.pdf")
 
         assert result["status"] == "error"
@@ -235,8 +254,9 @@ class TestResumeUpload:
             mock_stat.st_size = int(0.5 * 1024 * 1024)  # 0.5 MB — under limit
             mock_path.stat.return_value = mock_stat
             mock_path.name = "cv.pdf"
-            mock_path.resolve.return_value = "/resolved/cv.pdf"
+            mock_path.resolve.return_value = mock_path
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
 
             mock_browser.page_pool.acquire = _fake_page_pool(mock_page)
 
@@ -267,6 +287,7 @@ class TestResumeUpload:
             mock_path.stat.return_value = mock_stat
             mock_path.name = "cv.pdf"
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
 
             mock_browser.page_pool.acquire = _fake_page_pool(mock_page)
 
@@ -321,6 +342,7 @@ class TestPhotoUpload:
             mock_path = MagicMock()
             mock_path.exists.return_value = False
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
             result = await _photo_upload("/missing/photo.jpg")
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
@@ -333,6 +355,7 @@ class TestPhotoUpload:
             mock_path.exists.return_value = True
             type(mock_path).suffix = PropertyMock(return_value=".bmp")
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
             result = await _photo_upload("/some/image.bmp")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
@@ -357,6 +380,7 @@ class TestPhotoUpload:
             mock_path.suffix.lower.return_value = ".jpg"
             mock_path.name = "me.jpg"
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
 
             mock_browser.page_pool.acquire = _fake_page_pool(mock_page)
 
@@ -396,8 +420,9 @@ class TestPhotoUpload:
             mock_path.exists.return_value = True
             mock_path.suffix.lower.return_value = ".jpg"
             mock_path.name = "me.jpg"
-            mock_path.resolve.return_value = "/resolved/me.jpg"
+            mock_path.resolve.return_value = mock_path
             mock_path_cls.return_value = mock_path
+            _setup_path_validation(mock_path_cls, mock_path)
 
             mock_browser.page_pool.acquire = _fake_page_pool(mock_page)
 

@@ -1,5 +1,6 @@
 """Shared fit scoring logic for job-profile matching."""
 
+import math
 import re
 from typing import Optional
 
@@ -249,9 +250,16 @@ def compute_fit_score(
 
     # ── Experience match ──
     exp_score = 50  # Default if can't determine
+    p_exp = 0.0
+    min_exp = max_exp = None
     if profile_exp is not None and (job_exp_str or experience_min is not None):
         p_exp_match = re.findall(r'(\d+)', str(profile_exp))
-        p_exp = float(p_exp_match[0]) if p_exp_match else 0
+        if len(p_exp_match) >= 2:
+            p_exp = float(p_exp_match[0]) + float(p_exp_match[1]) / 12.0
+        elif p_exp_match:
+            p_exp = float(p_exp_match[0])
+        else:
+            p_exp = 0.0
 
         # Prefer numeric fields (avoid regex round-trip), fall back to regex
         if experience_min is not None and experience_max is not None:
@@ -271,7 +279,7 @@ def compute_fit_score(
             elif p_exp < min_exp:
                 exp_score = max(0, 100 - (min_exp - p_exp) * 20)
             else:
-                exp_score = max(50, 100 - (p_exp - max_exp) * 10)
+                exp_score = max(60, 100 - math.sqrt(max(0, p_exp - max_exp)) * 15)
 
     # ── Base score (unchanged formula) ──
     base_score = skill_score * 0.6 + exp_score * 0.4
@@ -295,6 +303,18 @@ def compute_fit_score(
     else:
         recommendation = "Weak match — consider upskilling first"
 
+    # ── Recommendation reasons ──
+    reasons = []
+    if skill_score < 50:
+        reasons.append(f"Skill gap: missing {', '.join(list(missing_skills)[:3])}")
+    if exp_score < 70 and min_exp is not None and max_exp is not None:
+        if p_exp < min_exp:
+            reasons.append(f"Under-experienced: {p_exp:.0f}yr vs {min_exp:.0f}-{max_exp:.0f}yr required")
+        elif p_exp > max_exp:
+            reasons.append(f"Over-experienced: {p_exp:.0f}yr vs {min_exp:.0f}-{max_exp:.0f}yr range")
+    if total_bonus == 0:
+        reasons.append("No location/salary/work-mode bonuses")
+
     result = {
         "overall_score": overall_score,
         "skill_match": {
@@ -308,6 +328,7 @@ def compute_fit_score(
             "required": job_exp_str,
         },
         "recommendation": recommendation,
+        "reasons": reasons,
     }
 
     # Include bonus breakdown when any enrichment data was provided

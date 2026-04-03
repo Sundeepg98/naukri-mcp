@@ -155,6 +155,10 @@ async def naukri_performance(
 ) -> dict:
     """Unified performance dashboard — impressions, recruiter activity, and activity level.
 
+    Note: Uses 'metric' instead of 'action' because each value selects a performance
+    metric to retrieve (impressions, recruiter_activity, activity_level), not an operation
+    to perform. All dispatches are read-only data fetches with no side effects.
+
     Metrics:
       - "impressions": Search appearance stats — how many times recruiters found you,
         which keywords they searched, and day-by-day timeline. Uses days param.

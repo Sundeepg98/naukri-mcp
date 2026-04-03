@@ -4,6 +4,7 @@ Browser state — Playwright browser with multi-tab page pool and cached token m
 
 import asyncio
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,6 +54,7 @@ class TokenManager:
             tmp = self._AUTH_STATE_FILE.with_suffix(".tmp")
             tmp.write_text(json.dumps(state))
             tmp.replace(self._AUTH_STATE_FILE)
+            os.chmod(str(self._AUTH_STATE_FILE), 0o600)
         except Exception as e:
             logger.debug("Auth state export failed: %s", e)
 

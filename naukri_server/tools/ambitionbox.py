@@ -701,6 +701,10 @@ async def naukri_company_intel(
 ) -> dict:
     """Unified company intelligence — salary data, employee reviews, or interview experiences from AmbitionBox.
 
+    Note: Uses 'intel_type' instead of 'action' because each value selects a category of
+    company intelligence to fetch (salary, reviews, interviews), not a CRUD operation.
+    All dispatches are read-only scrapes from AmbitionBox.
+
     Note: AmbitionBox data is scraped, may break if site structure changes.
 
     Replaces separate salary/reviews/interviews tools. Accepts a company slug OR name.

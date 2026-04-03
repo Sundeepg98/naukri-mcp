@@ -530,7 +530,7 @@ class TestOutputPath:
 
     @pytest.mark.asyncio
     async def test_custom_output_path_used_verbatim(self):
-        """When output_path is given, _export_data uses Path(output_path) directly."""
+        """When output_path is given within exports/, _export_data uses it directly."""
         from naukri_server.tools.export import _export_data
         from naukri_server.tools import export as export_mod
         from pathlib import Path
@@ -539,14 +539,19 @@ class TestOutputPath:
         original_root = export_mod._PACKAGE_ROOT
         export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
 
-        custom_path = "/tmp/my_custom_export.json"
+        # Use a path within exports/ so the path validation passes
+        import os
+        exports_resolved = str(export_mod._EXPORTS_DIR.resolve())
+        custom_path = os.path.join(exports_resolved, "my_custom_export.json")
 
         try:
             with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir, \
                  patch("naukri_server.tools.export.Path") as mock_path_cls:
                 mock_dir.mkdir = MagicMock()
+                mock_dir.resolve.return_value = Path(exports_resolved)
                 fake_file = MagicMock()
                 fake_file.__str__ = lambda self: custom_path
+                fake_file.resolve.return_value = Path(custom_path)
                 mock_path_cls.return_value = fake_file
                 result = await _export_data(
                     data_type="applications",

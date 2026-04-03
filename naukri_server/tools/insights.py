@@ -359,6 +359,10 @@ async def naukri_insights(
 ) -> dict:
     """Unified intelligence layer — application insights, salary analysis, cached answers.
 
+    Note: Uses 'insight_type' instead of 'action' because each value selects a different
+    analytical lens (applications, salary, skill_gap, taxonomy, etc.) rather than a CRUD
+    operation. The tool also has a secondary 'action' param for cached_answers sub-dispatch.
+
     Insight types:
       - "applications": Analyze application history for patterns (velocity, status, companies)
       - "salary": Analyze salary positioning across applied jobs

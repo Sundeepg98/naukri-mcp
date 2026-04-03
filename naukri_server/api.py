@@ -160,6 +160,10 @@ async def _api_request(method: str, path: str, params: dict = None,
                 api_metrics.success += 1
                 if resp.status == 204:
                     return {}
+                content_type = resp.headers.get("content-type", "").lower()
+                if "json" not in content_type and "javascript" not in content_type:
+                    text = await resp.text()
+                    raise NaukriAPIError(resp.status, f"Expected JSON response, got {content_type}: {text[:200]}")
                 return await resp.json()
             text = await resp.text()
 

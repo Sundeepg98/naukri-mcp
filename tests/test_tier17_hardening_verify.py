@@ -15,7 +15,10 @@ def _make_mock_response(status, json_data=None, text="", headers=None):
     """Create a mock aiohttp response with the given status and data."""
     resp = AsyncMock()
     resp.status = status
-    resp.headers = headers or {}
+    default_headers = {"content-type": "application/json"}
+    if headers:
+        default_headers.update(headers)
+    resp.headers = default_headers
     resp.json = AsyncMock(return_value=json_data or {})
     resp.text = AsyncMock(return_value=text)
     return resp

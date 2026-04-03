@@ -714,6 +714,10 @@ async def naukri_sync(
 ) -> dict:
     """Unified sync & export — pull data from Naukri.com or export local data to files.
 
+    Note: Uses 'entity' instead of 'action' because the dispatch selects a data source
+    to synchronize (applications, saved_jobs) or an export target, not an operation to
+    perform on a single resource. Each entity triggers a full sync pipeline.
+
     Note: Uses 3-tier fallback (REST → browser → HTML scrape) for sync entities.
 
     Entities:
