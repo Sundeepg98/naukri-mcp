@@ -10,7 +10,7 @@ from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API,
     LAKHS_MULTIPLIER, BROWSER_FORM_LOAD, BROWSER_FORM_SAVE, BROWSER_MODAL_APPEAR,
-    BROWSER_PAGE_LOAD,
+    BROWSER_PAGE_LOAD, BROWSER_OPERATION_TIMEOUT,
 )
 
 
@@ -42,6 +42,210 @@ async def _get_alerts_list() -> dict:
         "count": len(alerts),
         "alerts": alerts,
     }
+
+
+async def _update_alert_browser(a_id: str, alert_name: str, keywords, location, experience, min_salary, new_name) -> dict:
+    """Browser-based alert update — extracted for timeout wrapping."""
+    async with browser.page_pool.acquire() as page:
+        try:
+            logger.info("Editing alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
+
+            # Navigate to modify page -- form loads via /intercept/alert POST
+            modify_url = f"{NAUKRI_BASE}/alert/modify?aId={a_id}"
+            await page_goto(page, modify_url)
+            await asyncio.sleep(BROWSER_FORM_LOAD)
+
+            # Wait for the form to appear
+            form_found = await page.evaluate("""() => {
+                const form = document.getElementById('cjaFrm') || document.querySelector('form');
+                return !!form;
+            }""")
+
+            if not form_found:
+                # Wait a bit more for the intercept/alert POST to complete
+                await asyncio.sleep(BROWSER_FORM_SAVE)
+                form_found = await page.evaluate("""() => {
+                    return !!(document.getElementById('cjaFrm') || document.querySelector('form'));
+                }""")
+
+            if not form_found:
+                return {"status": "error", "message": "Modify form did not load on the alert edit page.", "error_code": "BROWSER_ERROR"}
+
+            # Fill in the fields that need updating
+            updates = {}
+            fill_script = ""
+
+            if keywords is not None:
+                updates["keywords"] = keywords
+                fill_script += f"""
+                    var kwdInput = document.getElementById('Sug_kwdsugg') || document.querySelector('input[name="keyskills"]');
+                    if (kwdInput) {{ kwdInput.value = {json.dumps(keywords)}; }}
+                """
+
+            if location is not None:
+                updates["location"] = location
+                fill_script += f"""
+                    var locInput = document.getElementById('Sug_locsugg') || document.querySelector('input[name="location"]');
+                    if (locInput) {{ locInput.value = {json.dumps(location)}; }}
+                """
+
+            if experience is not None:
+                updates["experience"] = experience
+                fill_script += f"""
+                    var expInput = document.getElementById('exp_dd_cjaHid') || document.querySelector('input[name="exp"]');
+                    if (expInput) {{ expInput.value = {json.dumps(str(experience))}; }}
+                """
+
+            if min_salary is not None:
+                updates["min_salary"] = min_salary
+                fill_script += f"""
+                    var salInput = document.getElementById('minsal_dd_cjaHid') || document.querySelector('input[name="minsal"]');
+                    if (salInput) {{ salInput.value = {json.dumps(str(min_salary))}; }}
+                """
+
+            if new_name is not None:
+                updates["name"] = new_name
+                fill_script += f"""
+                    var nameInput = document.querySelector('input[name="janame"]');
+                    if (nameInput) {{ nameInput.value = {json.dumps(new_name)}; }}
+                """
+
+            await page.evaluate(f"() => {{ {fill_script} }}")
+
+            # Submit the form
+            submit_result = await page.evaluate("""() => {
+                var submitBtn = document.getElementById('cjaSubmit')
+                    || document.querySelector('button[type="submit"]')
+                    || document.querySelector('input[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.click();
+                    return 'button_clicked';
+                }
+                var form = document.getElementById('cjaFrm') || document.querySelector('form');
+                if (form) {
+                    form.submit();
+                    return 'form_submitted';
+                }
+                return null;
+            }""")
+
+            if not submit_result:
+                return {"status": "error", "message": "Could not find submit button or form on the modify page.", "error_code": "BROWSER_ERROR"}
+
+            await asyncio.sleep(BROWSER_FORM_SAVE)
+
+            display_name = new_name or alert_name
+            logger.info("Alert '%s' updated: %s", display_name, updates)
+            return {
+                "status": "success",
+                "alert_name": display_name,
+                "updated_fields": list(updates.keys()),
+                "message": f"Job alert '{display_name}' updated: {', '.join(updates.keys())}.",
+            }
+
+        except Exception as e:
+            logger.error("Failed to update job alert: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to update job alert: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
+            }
+
+
+async def _delete_alert_browser(a_id: str, alert_name: str) -> dict:
+    """Browser-based alert deletion — extracted for timeout wrapping."""
+    async with browser.page_pool.acquire() as page:
+        try:
+            logger.info("Deleting alert '%s' (id=%s)...", alert_name, a_id[:16] + "...")
+
+            # Navigate to the delete confirmation page
+            delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
+            await page_goto(page, delete_url)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
+
+            # Check if logged in
+            if "/nlogin" in page.url:
+                return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
+
+            # Submit the delete confirmation via fetch POST
+            delete_result = await page.evaluate("""(params) => {
+                const { deleteUrl, aId } = params;
+                return fetch(deleteUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: 'confirm=1&aId=' + encodeURIComponent(aId),
+                    credentials: 'include'
+                }).then(resp => ({
+                    ok: resp.ok,
+                    status: resp.status,
+                    redirected: resp.redirected,
+                    url: resp.url
+                })).catch(err => ({
+                    ok: false,
+                    status: 0,
+                    error: err.message
+                }));
+            }""", {"deleteUrl": f"/alert/delete?aId={a_id}", "aId": a_id})
+
+            if not delete_result:
+                return {"status": "error", "message": "Delete fetch returned no result.", "error_code": "BROWSER_ERROR"}
+
+            if delete_result.get("error"):
+                return {
+                    "status": "error",
+                    "message": f"Delete request failed: {delete_result['error']}",
+                    "error_code": "BROWSER_ERROR",
+                }
+
+            # Also try clicking the submit button as a fallback if fetch didn't work cleanly
+            if not delete_result.get("ok"):
+                logger.info("Fetch POST returned status %s, trying button click fallback...",
+                            delete_result.get("status"))
+                button_clicked = await page.evaluate("""() => {
+                    var buttons = Array.from(document.querySelectorAll(
+                        'input[type="submit"], button[type="submit"], button, input[value*="Delete"], input[value*="Confirm"]'
+                    ));
+                    for (var i = 0; i < buttons.length; i++) {
+                        var btn = buttons[i];
+                        var text = (btn.textContent || btn.value || '').toLowerCase();
+                        if (text.includes('delete') || text.includes('confirm') || text.includes('yes')) {
+                            btn.click();
+                            return text;
+                        }
+                    }
+                    var form = document.querySelector('form');
+                    if (form) { form.submit(); return 'form_submit'; }
+                    return null;
+                }""")
+
+                if button_clicked:
+                    logger.info("Clicked button/form: %s", button_clicked)
+                    await asyncio.sleep(BROWSER_MODAL_APPEAR)
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Delete POST returned status {delete_result.get('status')} "
+                                   f"and no confirm button found on page.",
+                        "error_code": "BROWSER_ERROR",
+                    }
+
+            logger.info("Alert '%s' (id=%s) deleted successfully.", alert_name, a_id)
+            return {
+                "status": "success",
+                "alert_id": a_id,
+                "alert_name": alert_name,
+                "message": f"Job alert '{alert_name}' (id={a_id}) has been deleted.",
+            }
+
+        except Exception as e:
+            logger.error("Failed to delete job alert: %s: %s", type(e).__name__, e)
+            return {
+                "status": "error",
+                "message": f"Failed to delete job alert: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
+            }
 
 
 @mcp.tool()
@@ -193,110 +397,13 @@ async def naukri_job_alerts(
 
         a_id = str(alert_id)
 
-        async with browser.page_pool.acquire() as page:
-            try:
-                logger.info("Editing alert '%s' with aId=%s...", alert_name, a_id[:16] + "...")
-
-                # Navigate to modify page -- form loads via /intercept/alert POST
-                modify_url = f"{NAUKRI_BASE}/alert/modify?aId={a_id}"
-                await page_goto(page, modify_url)
-                await asyncio.sleep(BROWSER_FORM_LOAD)
-
-                # Wait for the form to appear
-                form_found = await page.evaluate("""() => {
-                    const form = document.getElementById('cjaFrm') || document.querySelector('form');
-                    return !!form;
-                }""")
-
-                if not form_found:
-                    # Wait a bit more for the intercept/alert POST to complete
-                    await asyncio.sleep(BROWSER_FORM_SAVE)
-                    form_found = await page.evaluate("""() => {
-                        return !!(document.getElementById('cjaFrm') || document.querySelector('form'));
-                    }""")
-
-                if not form_found:
-                    return {"status": "error", "message": "Modify form did not load on the alert edit page.", "error_code": "BROWSER_ERROR"}
-
-                # Fill in the fields that need updating
-                updates = {}
-                fill_script = ""
-
-                if keywords is not None:
-                    updates["keywords"] = keywords
-                    fill_script += f"""
-                        var kwdInput = document.getElementById('Sug_kwdsugg') || document.querySelector('input[name="keyskills"]');
-                        if (kwdInput) {{ kwdInput.value = {json.dumps(keywords)}; }}
-                    """
-
-                if location is not None:
-                    updates["location"] = location
-                    fill_script += f"""
-                        var locInput = document.getElementById('Sug_locsugg') || document.querySelector('input[name="location"]');
-                        if (locInput) {{ locInput.value = {json.dumps(location)}; }}
-                    """
-
-                if experience is not None:
-                    updates["experience"] = experience
-                    fill_script += f"""
-                        var expInput = document.getElementById('exp_dd_cjaHid') || document.querySelector('input[name="exp"]');
-                        if (expInput) {{ expInput.value = {json.dumps(str(experience))}; }}
-                    """
-
-                if min_salary is not None:
-                    updates["min_salary"] = min_salary
-                    fill_script += f"""
-                        var salInput = document.getElementById('minsal_dd_cjaHid') || document.querySelector('input[name="minsal"]');
-                        if (salInput) {{ salInput.value = {json.dumps(str(min_salary))}; }}
-                    """
-
-                if new_name is not None:
-                    updates["name"] = new_name
-                    fill_script += f"""
-                        var nameInput = document.querySelector('input[name="janame"]');
-                        if (nameInput) {{ nameInput.value = {json.dumps(new_name)}; }}
-                    """
-
-                await page.evaluate(f"() => {{ {fill_script} }}")
-
-                # Submit the form
-                submit_result = await page.evaluate("""() => {
-                    var submitBtn = document.getElementById('cjaSubmit')
-                        || document.querySelector('button[type="submit"]')
-                        || document.querySelector('input[type="submit"]');
-                    if (submitBtn) {
-                        submitBtn.click();
-                        return 'button_clicked';
-                    }
-                    var form = document.getElementById('cjaFrm') || document.querySelector('form');
-                    if (form) {
-                        form.submit();
-                        return 'form_submitted';
-                    }
-                    return null;
-                }""")
-
-                if not submit_result:
-                    return {"status": "error", "message": "Could not find submit button or form on the modify page.", "error_code": "BROWSER_ERROR"}
-
-                await asyncio.sleep(BROWSER_FORM_SAVE)
-
-                display_name = new_name or alert_name
-                logger.info("Alert '%s' updated: %s", display_name, updates)
-                return {
-                    "status": "success",
-                    "alert_name": display_name,
-                    "updated_fields": list(updates.keys()),
-                    "message": f"Job alert '{display_name}' updated: {', '.join(updates.keys())}.",
-                }
-
-            except Exception as e:
-                logger.error("Failed to update job alert: %s: %s", type(e).__name__, e)
-                return {
-                    "status": "error",
-                    "message": f"Failed to update job alert: {type(e).__name__}: {e}",
-                    "error_code": "BROWSER_ERROR",
-                }
+        try:
+            return await asyncio.wait_for(
+                _update_alert_browser(a_id, alert_name, keywords, location, experience, min_salary, new_name),
+                timeout=BROWSER_OPERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return {"status": "error", "message": f"Alert update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 
     elif action == "delete":
         if not alert_id:
@@ -324,98 +431,13 @@ async def naukri_job_alerts(
         a_id = str(target["alert_id"])
         alert_name = target.get("name", a_id)
 
-        async with browser.page_pool.acquire() as page:
-            try:
-                logger.info("Deleting alert '%s' (id=%s)...", alert_name, a_id[:16] + "...")
-
-                # Navigate to the delete confirmation page
-                delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
-                await page_goto(page, delete_url)
-                await asyncio.sleep(BROWSER_PAGE_LOAD)
-
-                # Check if logged in
-                if "/nlogin" in page.url:
-                    return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
-
-                # Submit the delete confirmation via fetch POST
-                delete_result = await page.evaluate("""(params) => {
-                    const { deleteUrl, aId } = params;
-                    return fetch(deleteUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded'
-                        },
-                        body: 'confirm=1&aId=' + encodeURIComponent(aId),
-                        credentials: 'include'
-                    }).then(resp => ({
-                        ok: resp.ok,
-                        status: resp.status,
-                        redirected: resp.redirected,
-                        url: resp.url
-                    })).catch(err => ({
-                        ok: false,
-                        status: 0,
-                        error: err.message
-                    }));
-                }""", {"deleteUrl": f"/alert/delete?aId={a_id}", "aId": a_id})
-
-                if not delete_result:
-                    return {"status": "error", "message": "Delete fetch returned no result.", "error_code": "BROWSER_ERROR"}
-
-                if delete_result.get("error"):
-                    return {
-                        "status": "error",
-                        "message": f"Delete request failed: {delete_result['error']}",
-                        "error_code": "BROWSER_ERROR",
-                    }
-
-                # Also try clicking the submit button as a fallback if fetch didn't work cleanly
-                if not delete_result.get("ok"):
-                    logger.info("Fetch POST returned status %s, trying button click fallback...",
-                                delete_result.get("status"))
-                    button_clicked = await page.evaluate("""() => {
-                        var buttons = Array.from(document.querySelectorAll(
-                            'input[type="submit"], button[type="submit"], button, input[value*="Delete"], input[value*="Confirm"]'
-                        ));
-                        for (var i = 0; i < buttons.length; i++) {
-                            var btn = buttons[i];
-                            var text = (btn.textContent || btn.value || '').toLowerCase();
-                            if (text.includes('delete') || text.includes('confirm') || text.includes('yes')) {
-                                btn.click();
-                                return text;
-                            }
-                        }
-                        var form = document.querySelector('form');
-                        if (form) { form.submit(); return 'form_submit'; }
-                        return null;
-                    }""")
-
-                    if button_clicked:
-                        logger.info("Clicked button/form: %s", button_clicked)
-                        await asyncio.sleep(BROWSER_MODAL_APPEAR)
-                    else:
-                        return {
-                            "status": "error",
-                            "message": f"Delete POST returned status {delete_result.get('status')} "
-                                       f"and no confirm button found on page.",
-                            "error_code": "BROWSER_ERROR",
-                        }
-
-                logger.info("Alert '%s' (id=%s) deleted successfully.", alert_name, a_id)
-                return {
-                    "status": "success",
-                    "alert_id": a_id,
-                    "alert_name": alert_name,
-                    "message": f"Job alert '{alert_name}' (id={a_id}) has been deleted.",
-                }
-
-            except Exception as e:
-                logger.error("Failed to delete job alert: %s: %s", type(e).__name__, e)
-                return {
-                    "status": "error",
-                    "message": f"Failed to delete job alert: {type(e).__name__}: {e}",
-                    "error_code": "BROWSER_ERROR",
-                }
+        try:
+            return await asyncio.wait_for(
+                _delete_alert_browser(a_id, alert_name),
+                timeout=BROWSER_OPERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return {"status": "error", "message": f"Alert delete timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, create, update, delete", "error_code": "VALIDATION_ERROR"}

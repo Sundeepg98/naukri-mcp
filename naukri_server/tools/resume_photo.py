@@ -8,7 +8,8 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_tool
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
-    PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB, logger,
+    PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB,
+    BROWSER_OPERATION_TIMEOUT, logger,
     BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_UPLOAD_COMPLETE, BROWSER_FORM_SAVE,
     BROWSER_PAGE_SETTLE, BROWSER_DOM_SETTLE,
 )
@@ -84,7 +85,13 @@ async def naukri_profile_media(
         elif action == "upload":
             if not file_path:
                 return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
-            return await _resume_upload(file_path)
+            try:
+                return await asyncio.wait_for(
+                    _resume_upload(file_path),
+                    timeout=BROWSER_OPERATION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                return {"status": "error", "message": f"Resume upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 
     # ── photo actions ─────────────────────────────────────────────────
     elif media_type == "photo":
@@ -93,7 +100,13 @@ async def naukri_profile_media(
         elif action == "upload":
             if not file_path:
                 return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
-            return await _photo_upload(file_path)
+            try:
+                return await asyncio.wait_for(
+                    _photo_upload(file_path),
+                    timeout=BROWSER_OPERATION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                return {"status": "error", "message": f"Photo upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
         elif action == "delete":
             return await _photo_delete()
 

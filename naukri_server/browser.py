@@ -13,7 +13,7 @@ from typing import Optional
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
-from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, logger
+from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT, logger
 
 
 class TokenManager:
@@ -121,6 +121,8 @@ class TokenManager:
 class PagePool:
     """Manages a pool of browser pages (tabs) with semaphore-based checkout."""
 
+    _MAX_CRASHES = 10  # Max crashes before entering degraded mode
+
     def __init__(self, context: BrowserContext, max_pages: int = 3):
         self._context = context
         self._max_pages = max_pages
@@ -165,7 +167,10 @@ class PagePool:
                 result = await page.evaluate(...)
         """
         t0 = time.monotonic()
-        await self._semaphore.acquire()
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=POOL_CHECKOUT_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Page pool exhausted — all tabs busy for >%ds" % POOL_CHECKOUT_TIMEOUT)
         wait_ms = int((time.monotonic() - t0) * 1000)
         if wait_ms > self._max_wait_ms:
             self._max_wait_ms = wait_ms
@@ -186,6 +191,8 @@ class PagePool:
                 _ = page.url  # Quick liveness check (property access, not network)
             except (TargetClosedError, Exception):
                 self._crashes += 1
+                if self._crashes > self._MAX_CRASHES:
+                    logger.error("Page pool unstable (>%d crashes). Consider restarting.", self._MAX_CRASHES)
                 page = await self._recover_page(page)
 
             yield page
@@ -253,6 +260,39 @@ async def page_evaluate_safe(page: Page, expression, arg=None, timeout=15):
     except asyncio.TimeoutError:
         logger.warning("page.evaluate timed out after %ds", timeout)
         return None
+
+
+async def browser_retry(async_fn, max_retries=2, description="browser operation"):
+    """Retry a browser operation with exponential backoff.
+
+    Args:
+        async_fn: Async callable that performs the browser operation
+        max_retries: Maximum retry attempts (default 2, total 3 attempts)
+        description: Operation name for logging
+
+    Returns:
+        Result from async_fn on success
+
+    Raises:
+        Last exception if all retries fail
+    """
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await async_fn()
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = (2 ** attempt) * 0.5  # 0.5s, 1s
+                logger.warning(
+                    "%s failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                    description, attempt + 1, max_retries + 1,
+                    type(e).__name__, delay
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error("%s failed after %d attempts: %s", description, max_retries + 1, e)
+    raise last_error
 
 
 async def page_text(page: Page, selector: str) -> Optional[str]:

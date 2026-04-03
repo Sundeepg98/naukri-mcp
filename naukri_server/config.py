@@ -174,6 +174,7 @@ BROWSER_FORM_LOAD = 4.0           # Wait for form to load after navigation (aler
 # Browser hardcoded timeouts
 SESSION_VALIDATE_TIMEOUT = 5  # Seconds for session validation on startup
 TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation
+POOL_CHECKOUT_TIMEOUT = 30  # Max seconds to wait for a browser tab
 
 # Cache purge threshold
 CACHE_PURGE_DAYS = 30  # Days before cached answers are purged
@@ -181,6 +182,12 @@ CACHE_PURGE_DAYS = 30  # Days before cached answers are purged
 # Apply timeouts (seconds)
 BATCH_APPLY_PER_JOB_TIMEOUT = 30    # Per-job apply timeout
 BATCH_APPLY_TOTAL_TIMEOUT = 120     # Overall batch gather timeout
+
+# Overall browser operation timeout (seconds) — caps total wall-clock time for any
+# single browser-based mutation (profile update, boost, alert edit/delete, file upload).
+# Individual element timeouts are shorter, but this prevents indefinite hangs if the
+# site itself is unresponsive.
+BROWSER_OPERATION_TIMEOUT = 60
 
 # Browser intercept wait (seconds)
 INTERCEPT_WAIT_TIMEOUT = 10         # Wait for API response intercept

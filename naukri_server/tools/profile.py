@@ -5,11 +5,11 @@ import time
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser, page_goto
+from naukri_server.browser import browser, browser_retry, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import (
     NAUKRI_BASE, DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API, FULLPROFILES_API,
-    PROFILE_CACHE_TTL, DFP_PROFILE_API, logger,
+    PROFILE_CACHE_TTL, DFP_PROFILE_API, BROWSER_OPERATION_TIMEOUT, logger,
     BROWSER_DOM_SETTLE, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD,
     BROWSER_PAGE_SETTLE,
 )
@@ -1201,12 +1201,20 @@ async def naukri_profile(
     # ── update ──────────────────────────────────────────────────────────
     elif action == "update":
         try:
-            return await _update_profile(
-                fields=fields or {},
-                notice_period=notice_period,
-                expected_ctc=expected_ctc,
-                current_ctc=current_ctc,
+            return await asyncio.wait_for(
+                browser_retry(
+                    lambda: _update_profile(
+                        fields=fields or {},
+                        notice_period=notice_period,
+                        expected_ctc=expected_ctc,
+                        current_ctc=current_ctc,
+                    ),
+                    description="profile update",
+                ),
+                timeout=BROWSER_OPERATION_TIMEOUT,
             )
+        except asyncio.TimeoutError:
+            return {"status": "error", "message": f"Profile update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
@@ -1226,7 +1234,15 @@ async def naukri_profile(
     # ── boost ───────────────────────────────────────────────────────────
     elif action == "boost":
         try:
-            return await _boost_visibility(randomize=randomize)
+            return await asyncio.wait_for(
+                browser_retry(
+                    lambda: _boost_visibility(randomize=randomize),
+                    description="profile boost",
+                ),
+                timeout=BROWSER_OPERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return {"status": "error", "message": f"Profile boost timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
