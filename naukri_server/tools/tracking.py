@@ -24,6 +24,7 @@ SAVED_JOBS_FILE = _PACKAGE_ROOT / "saved_jobs.json"
 
 _applications_lock = asyncio.Lock()
 _saved_jobs_lock = asyncio.Lock()
+_tracking_composite_lock = asyncio.Lock()
 
 
 def _load_json(path: Path) -> list:
@@ -668,21 +669,22 @@ async def naukri_applications(
                     "job_id": job_id,
                 }
         try:
-            result = await _apply_single(job_id, answers, tracking_extra={"source": "single"})
-            # Auto-set reminder if requested and apply succeeded
-            if set_reminder_days and result.get("status") == "applied":
-                from naukri_server.tools.reminders import _set_reminder
-                try:
-                    await _set_reminder(
-                        job_id=job_id,
-                        days=set_reminder_days,
-                        note=f"Follow up on application to {result.get('company', 'unknown')}",
-                    )
-                    result["reminder_set"] = True
-                    result["reminder_days"] = set_reminder_days
-                except Exception as e:
-                    result["reminder_set"] = False
-                    result["reminder_error"] = str(e)
+            async with _tracking_composite_lock:
+                result = await _apply_single(job_id, answers, tracking_extra={"source": "single"})
+                # Auto-set reminder if requested and apply succeeded
+                if set_reminder_days and result.get("status") == "applied":
+                    from naukri_server.tools.reminders import _set_reminder
+                    try:
+                        await _set_reminder(
+                            job_id=job_id,
+                            days=set_reminder_days,
+                            note=f"Follow up on application to {result.get('company', 'unknown')}",
+                        )
+                        result["reminder_set"] = True
+                        result["reminder_days"] = set_reminder_days
+                    except Exception as e:
+                        result["reminder_set"] = False
+                        result["reminder_error"] = str(e)
             return result
         except Exception as e:
             return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
@@ -693,31 +695,32 @@ async def naukri_applications(
             return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.apply import _batch_apply
         try:
-            result = await _batch_apply(
-                keywords=keywords, location=location, experience=experience,
-                salary_min=salary_min, salary_max=salary_max, sort_by=sort_by,
-                freshness=freshness, work_mode=work_mode, job_type=job_type,
-                company_type=company_type, limit=limit, answers=answers,
-                delay_ms=delay_ms, max_concurrent=max_concurrent,
-            )
-            # Auto-set reminders for successful batch applications
-            if set_reminder_days and result.get("results"):
-                from naukri_server.tools.reminders import _set_reminder
-                reminder_count = 0
-                for r in result["results"]:
-                    if r.get("status") == "applied":
-                        try:
-                            await _set_reminder(
-                                job_id=r.get("job_id", ""),
-                                days=set_reminder_days,
-                                note=f"Follow up on application to {r.get('company', 'unknown')}",
-                            )
-                            reminder_count += 1
-                        except Exception as e:
-                            logger.debug("Failed to set reminder for job %s: %s", r.get("job_id", ""), e)
-                if reminder_count:
-                    result["reminders_set"] = reminder_count
-                    result["reminder_days"] = set_reminder_days
+            async with _tracking_composite_lock:
+                result = await _batch_apply(
+                    keywords=keywords, location=location, experience=experience,
+                    salary_min=salary_min, salary_max=salary_max, sort_by=sort_by,
+                    freshness=freshness, work_mode=work_mode, job_type=job_type,
+                    company_type=company_type, limit=limit, answers=answers,
+                    delay_ms=delay_ms, max_concurrent=max_concurrent,
+                )
+                # Auto-set reminders for successful batch applications
+                if set_reminder_days and result.get("results"):
+                    from naukri_server.tools.reminders import _set_reminder
+                    reminder_count = 0
+                    for r in result["results"]:
+                        if r.get("status") == "applied":
+                            try:
+                                await _set_reminder(
+                                    job_id=r.get("job_id", ""),
+                                    days=set_reminder_days,
+                                    note=f"Follow up on application to {r.get('company', 'unknown')}",
+                                )
+                                reminder_count += 1
+                            except Exception as e:
+                                logger.debug("Failed to set reminder for job %s: %s", r.get("job_id", ""), e)
+                    if reminder_count:
+                        result["reminders_set"] = reminder_count
+                        result["reminder_days"] = set_reminder_days
             return result
         except Exception as e:
             return {"status": "error", "message": f"Batch apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

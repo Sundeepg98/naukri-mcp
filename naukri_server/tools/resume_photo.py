@@ -8,6 +8,7 @@ from naukri_server import mcp
 from naukri_server.api import api_get, api_tool
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB, logger
+from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
 RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
@@ -208,6 +209,8 @@ async def _resume_upload(file_path: str) -> dict:
             await file_input.set_input_files(str(path.resolve()))
             await asyncio.sleep(5)  # Wait for upload to complete
 
+            _profile_ttl_cache.invalidate()
+            _dashboard_ttl_cache.invalidate()
             return {
                 "status": "success",
                 "action": "uploaded",

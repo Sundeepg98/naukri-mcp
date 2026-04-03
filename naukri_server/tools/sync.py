@@ -45,6 +45,18 @@ def _save_sync_state(state: dict):
     os.replace(str(tmp), str(_SYNC_STATE_FILE))
 
 
+# Async wrappers — avoid blocking the event loop with sync I/O
+_sync_state_lock = asyncio.Lock()
+
+
+async def _load_sync_state_async() -> dict:
+    return await asyncio.to_thread(_load_sync_state)
+
+
+async def _save_sync_state_async(state: dict):
+    await asyncio.to_thread(_save_sync_state, state)
+
+
 # ---------------------------------------------------------------------------
 # HTML scrape: adaptive JS for extracting applied jobs from server-rendered page
 # ---------------------------------------------------------------------------
@@ -626,11 +638,12 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         _save_json(APPLICATIONS_FILE, local_apps)
 
     # Record sync metadata
-    state = _load_sync_state()
-    state["last_applications_sync"] = datetime.now(timezone.utc).isoformat()
-    state["last_applications_method"] = method
-    state["last_applications_count"] = len(remote_jobs)
-    _save_sync_state(state)
+    async with _sync_state_lock:
+        state = await _load_sync_state_async()
+        state["last_applications_sync"] = datetime.now(timezone.utc).isoformat()
+        state["last_applications_method"] = method
+        state["last_applications_count"] = len(remote_jobs)
+        await _save_sync_state_async(state)
 
     result = {
         "status": "success",
@@ -681,11 +694,12 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
         _save_json(SAVED_JOBS_FILE, local_saved)
 
     # Record sync metadata
-    state = _load_sync_state()
-    state["last_saved_jobs_sync"] = datetime.now(timezone.utc).isoformat()
-    state["last_saved_jobs_method"] = method
-    state["last_saved_jobs_count"] = len(remote_jobs)
-    _save_sync_state(state)
+    async with _sync_state_lock:
+        state = await _load_sync_state_async()
+        state["last_saved_jobs_sync"] = datetime.now(timezone.utc).isoformat()
+        state["last_saved_jobs_method"] = method
+        state["last_saved_jobs_count"] = len(remote_jobs)
+        await _save_sync_state_async(state)
 
     return {
         "status": "success",

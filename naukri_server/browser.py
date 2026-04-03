@@ -241,6 +241,20 @@ async def page_goto(page: Page, url: str, wait: str = "domcontentloaded") -> Non
             raise
 
 
+async def page_evaluate_safe(page: Page, expression, arg=None, timeout=15):
+    """Evaluate JS on page with timeout protection.
+
+    Prevents JS deadlocks from freezing the entire page pool.
+    """
+    try:
+        if arg is not None:
+            return await asyncio.wait_for(page.evaluate(expression, arg), timeout=timeout)
+        return await asyncio.wait_for(page.evaluate(expression), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("page.evaluate timed out after %ds", timeout)
+        return None
+
+
 async def page_text(page: Page, selector: str) -> Optional[str]:
     """Get text content of an element on the page."""
     el = await page.query_selector(selector)

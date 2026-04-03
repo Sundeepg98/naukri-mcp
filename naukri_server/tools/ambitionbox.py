@@ -16,7 +16,7 @@ import time
 import aiohttp
 
 from naukri_server import mcp
-from naukri_server.browser import browser, page_goto
+from naukri_server.browser import browser, page_goto, page_evaluate_safe
 from naukri_server.config import (
     AMBITIONBOX_BASE, AMBITIONBOX_FALLBACK_SLEEP, AMBITIONBOX_WAIT_TIMEOUT,
     AB_SALARY_API, AB_BENEFITS_API, AB_REVIEW_DIST_API, AB_INTERVIEW_QS_API,
@@ -70,7 +70,7 @@ async def _extract_next_data(page) -> dict | None:
     except Exception as e:
         logger.debug("__NEXT_DATA__ selector not found, using fallback: %s", e)
         await asyncio.sleep(AMBITIONBOX_FALLBACK_SLEEP)  # Fallback if selector not found
-    return await page.evaluate("""
+    return await page_evaluate_safe(page, """
         () => {
             const el = document.getElementById('__NEXT_DATA__');
             if (el) return JSON.parse(el.textContent);

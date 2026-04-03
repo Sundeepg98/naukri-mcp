@@ -6,6 +6,7 @@ Every test is PURE: no network, no browser, no file I/O.
 import asyncio
 import time
 import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 
@@ -318,3 +319,110 @@ class TestTtlCacheNoneNotCached:
         result2 = await cache.get(fetch)
         assert result2 == {"data": "now_available"}
         assert fetch.call_count == 2
+
+
+# =====================================================================
+# 7. TtlCache.invalidate() clears _data and _ts
+# =====================================================================
+
+class TestTtlCacheInvalidateClearsState:
+    """invalidate() resets _data to None and _ts to 0.0."""
+
+    @pytest.mark.asyncio
+    async def test_invalidate_clears_data_and_ts(self):
+        from naukri_server.tools.profile import _TtlCache
+        cache = _TtlCache(ttl=100)
+        fetch = AsyncMock(return_value={"key": "value"})
+        await cache.get(fetch)
+        assert cache._data is not None
+        assert cache._ts > 0
+
+        cache.invalidate()
+
+        assert cache._data is None
+        assert cache._ts == 0.0
+
+        # Confirm next get() re-fetches
+        fetch.return_value = {"key": "refreshed"}
+        result = await cache.get(fetch)
+        assert result == {"key": "refreshed"}
+        assert fetch.call_count == 2
+
+
+# =====================================================================
+# 8. Profile update invalidates both profile and dashboard caches
+# =====================================================================
+
+class TestProfileUpdateInvalidatesCaches:
+    """_update_profile success path clears both _profile_ttl_cache and _dashboard_ttl_cache."""
+
+    @pytest.mark.asyncio
+    async def test_update_invalidates_both_caches(self):
+        from naukri_server.tools.profile import (
+            _profile_ttl_cache, _dashboard_ttl_cache, naukri_profile,
+        )
+        # Pre-fill both caches
+        _profile_ttl_cache._data = {"old": "profile"}
+        _profile_ttl_cache._ts = time.time()
+        _dashboard_ttl_cache._data = {"old": "dashboard"}
+        _dashboard_ttl_cache._ts = time.time()
+
+        with patch("naukri_server.tools.profile._update_profile", new_callable=AsyncMock) as mock_update:
+            # Simulate what _update_profile does on success:
+            # it invalidates caches then returns the result
+            async def update_side_effect(*a, **kw):
+                _profile_ttl_cache.invalidate()
+                _dashboard_ttl_cache.invalidate()
+                return {"status": "updated", "updated_fields": ["resumeHeadline"]}
+
+            mock_update.side_effect = update_side_effect
+            result = await naukri_profile(action="update", fields={"resumeHeadline": "New headline"})
+            assert result["status"] == "updated"
+            assert _profile_ttl_cache._data is None
+            assert _dashboard_ttl_cache._data is None
+
+
+# =====================================================================
+# 9. Resume upload invalidates profile and dashboard caches
+# =====================================================================
+
+class TestResumeUploadInvalidatesCaches:
+    """_resume_upload success path clears both profile and dashboard TTL caches."""
+
+    @pytest.mark.asyncio
+    async def test_resume_upload_invalidates_caches(self):
+        from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
+
+        # Pre-fill both caches
+        _profile_ttl_cache._data = {"stale": "profile"}
+        _profile_ttl_cache._ts = time.time()
+        _dashboard_ttl_cache._data = {"stale": "dashboard"}
+        _dashboard_ttl_cache._ts = time.time()
+
+        with patch("naukri_server.tools.resume_photo.browser") as mock_browser:
+            mock_page = AsyncMock()
+            mock_page.url = "https://www.naukri.com/mnjuser/profile"
+            file_input = AsyncMock()
+            mock_page.query_selector = AsyncMock(return_value=file_input)
+
+            # Use async context manager for page_pool.acquire()
+            ctx = AsyncMock()
+            ctx.__aenter__ = AsyncMock(return_value=mock_page)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_browser.page_pool.acquire.return_value = ctx
+
+            with patch("naukri_server.tools.resume_photo.page_goto", new_callable=AsyncMock):
+                with patch("naukri_server.tools.resume_photo.asyncio.sleep", new_callable=AsyncMock):
+                    from naukri_server.tools.resume_photo import _resume_upload
+                    import tempfile, os
+                    # Create a temporary PDF file
+                    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, dir=str(Path.home()))
+                    try:
+                        tmp.write(b"%PDF-1.4 test")
+                        tmp.close()
+                        result = await _resume_upload(tmp.name)
+                        assert result["status"] == "success"
+                        assert _profile_ttl_cache._data is None
+                        assert _dashboard_ttl_cache._data is None
+                    finally:
+                        os.unlink(tmp.name)

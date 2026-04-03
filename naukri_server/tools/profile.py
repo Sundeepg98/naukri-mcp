@@ -306,6 +306,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                         endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
                         await api_post(endpoint, {"resumeHeadline": headline})
                         _profile_ttl_cache.invalidate()
+                        _dashboard_ttl_cache.invalidate()
                         return {
                             "status": "success", "action": "refreshed",
                             "method": f"rest_api_{version}",
@@ -384,6 +385,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                 page.remove_listener("response", on_response)
 
             _profile_ttl_cache.invalidate()
+            _dashboard_ttl_cache.invalidate()
             return {
                 "status": "success", "action": "refreshed",
                 "method": f"browser_{edit_clicked}",
@@ -906,6 +908,7 @@ async def _update_profile(
                 page.remove_listener("response", on_response)
 
             _profile_ttl_cache.invalidate()
+            _dashboard_ttl_cache.invalidate()
             return {
                 "status": "updated",
                 "method": "browser_ui",
