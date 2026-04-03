@@ -253,8 +253,9 @@ class TestProfileInvalidationOnUpdate:
     """After naukri_profile(action='update'), the profile TTL cache is invalidated."""
 
     @pytest.mark.asyncio
+    @patch("naukri_server.tools.profile_update.api_get", new_callable=AsyncMock)
     @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
-    async def test_profile_invalidation_on_update(self, mock_api_get):
+    async def test_profile_invalidation_on_update(self, mock_api_get, mock_update_api_get):
         """Update path (via browser) invalidates _profile_ttl_cache.
 
         We can't easily run the full browser path, so we verify that
@@ -265,6 +266,9 @@ class TestProfileInvalidationOnUpdate:
         """
         # Set up profile data for boost's REST path
         mock_api_get.return_value = {
+            "profile": [{"resumeHeadline": "My Headline"}],
+        }
+        mock_update_api_get.return_value = {
             "profile": [{"resumeHeadline": "My Headline"}],
         }
         from naukri_server.tools.profile import (
@@ -288,7 +292,10 @@ class TestProfileInvalidationOnUpdate:
         mock_api_get.return_value = {
             "profile": [{"resumeHeadline": "My Headline"}],
         }
-        with patch("naukri_server.tools.profile.api_post", new_callable=AsyncMock) as mock_post:
+        mock_update_api_get.return_value = {
+            "profile": [{"resumeHeadline": "My Headline"}],
+        }
+        with patch("naukri_server.tools.profile_update.api_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
             result = await naukri_profile(action="boost")
             assert result["status"] == "success"

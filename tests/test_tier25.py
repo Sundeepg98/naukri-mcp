@@ -342,7 +342,7 @@ class TestABRestBridge:
     """Tests for AmbitionBox REST bridge functions."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_benefits(self, mock_get):
         """ab_get_benefits returns structured benefits data."""
         mock_get.return_value = {
@@ -363,7 +363,7 @@ class TestABRestBridge:
         assert result["benefits"][0]["name"] == "Health Insurance"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_work_culture(self, mock_get):
         """ab_get_work_culture returns timing, travel, work days, shifts."""
         mock_get.return_value = {
@@ -391,7 +391,7 @@ class TestABRestBridge:
         assert result["work_days"]["values"] == [89, 11]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_interview_questions(self, mock_get):
         """ab_get_interview_questions returns questions list."""
         mock_get.return_value = {
@@ -411,7 +411,7 @@ class TestABRestBridge:
         assert len(result["questions"]) == 2
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_competitors(self, mock_get):
         """ab_get_competitors returns competitor list."""
         mock_get.return_value = [
@@ -426,7 +426,7 @@ class TestABRestBridge:
         assert result["competitors"][0]["CompanyName"] == "TCS"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_locations(self, mock_get):
         """ab_get_locations returns office locations."""
         mock_get.return_value = {
@@ -443,7 +443,7 @@ class TestABRestBridge:
         assert result["locations"][0]["city"] == "Bengaluru"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_applied_jobs_insights(self, mock_get):
         """ab_get_applied_jobs_insights returns salary insights for your applications."""
         mock_get.return_value = [
@@ -464,7 +464,7 @@ class TestABRestBridge:
         assert result["insights"][0]["minCtc"] == 2500000
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_get_salary_rest(self, mock_get):
         """ab_get_salary_rest returns detailed salary breakdown."""
         mock_get.return_value = {
@@ -486,7 +486,7 @@ class TestABRestBridge:
         assert len(result["experience_levels"]) == 1
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.ambitionbox._ab_rest_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
     async def test_empty_response_handling(self, mock_get):
         """REST bridge handles empty responses gracefully."""
         mock_get.return_value = {}
@@ -506,7 +506,7 @@ class TestDFPTargeting:
     """Verify DFP targeting action parses ad-system profile fields and identifies gaps."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
     async def test_targeting_returns_profile_fields(self, mock_get):
         """Targeting action returns parsed profile fields."""
         mock_get.return_value = {
@@ -540,7 +540,7 @@ class TestDFPTargeting:
         assert result["ad_slots"] == 1
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
     async def test_targeting_identifies_gaps(self, mock_get):
         """Empty Profile-* fields are listed as completeness gaps."""
         mock_get.return_value = {
@@ -559,7 +559,7 @@ class TestDFPTargeting:
         assert "pg course" in result["completeness_gaps"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
     async def test_targeting_empty_response(self, mock_get):
         """Empty DFP response returns zero fields."""
         mock_get.return_value = {}
@@ -570,7 +570,7 @@ class TestDFPTargeting:
         assert result["gap_count"] == 0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
     async def test_targeting_api_error(self, mock_get):
         """API error returns error status."""
         from naukri_server.api import NaukriAPIError
@@ -581,7 +581,7 @@ class TestDFPTargeting:
         assert result["error_code"] == "API_ERROR"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
     async def test_targeting_zero_values_not_gaps(self, mock_get):
         """Fields with value 0 are NOT treated as gaps."""
         mock_get.return_value = {
