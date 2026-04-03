@@ -113,20 +113,14 @@ class TestFormatValidation:
     async def test_format_case_insensitive_csv(self):
         """'CSV' (uppercase) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        fake_root = _make_fake_root_with_apps([{"title": "SDE"}])
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = fake_root
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                # Provide a fake file path that accepts write_text
-                fake_file = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="applications", format="CSV")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        fake_apps = _make_fake_file([{"title": "SDE"}])
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            fake_file = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="applications", format="CSV")
 
         # Should NOT be a VALIDATION_ERROR — format accepted
         assert result.get("error_code") != "VALIDATION_ERROR"
@@ -135,19 +129,14 @@ class TestFormatValidation:
     async def test_format_case_insensitive_json(self):
         """'JSON' (uppercase) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        fake_root = _make_fake_root_with_apps([{"title": "SDE"}])
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = fake_root
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                fake_file = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="applications", format="JSON")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        fake_apps = _make_fake_file([{"title": "SDE"}])
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            fake_file = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="applications", format="JSON")
 
         assert result.get("error_code") != "VALIDATION_ERROR"
 
@@ -181,19 +170,14 @@ class TestDataTypeValidation:
     async def test_data_type_case_insensitive_applications(self):
         """'Applications' (mixed case) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        fake_root = _make_fake_root_with_apps([{"title": "SDE"}])
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = fake_root
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                fake_file = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="Applications", format="json")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        fake_apps = _make_fake_file([{"title": "SDE"}])
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            fake_file = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="Applications", format="json")
 
         assert result.get("error_code") != "VALIDATION_ERROR"
 
@@ -236,14 +220,10 @@ class TestFileNotFound:
     @pytest.mark.asyncio
     async def test_applications_file_not_found(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_file_missing("applications.json")
-        try:
+        fake_missing = _make_fake_file([], exists=False)
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_missing):
             result = await _export_data(data_type="applications")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
@@ -252,14 +232,10 @@ class TestFileNotFound:
     @pytest.mark.asyncio
     async def test_saved_jobs_file_not_found(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_file_missing("saved_jobs.json")
-        try:
+        fake_missing = _make_fake_file([], exists=False)
+        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_missing):
             result = await _export_data(data_type="saved_jobs")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
@@ -277,14 +253,10 @@ class TestFileReadError:
     @pytest.mark.asyncio
     async def test_applications_read_error(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_read_error("applications.json")
-        try:
+        fake_erroring = _make_fake_file([], exists=True, read_error=True)
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_erroring):
             result = await _export_data(data_type="applications")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -293,14 +265,10 @@ class TestFileReadError:
     @pytest.mark.asyncio
     async def test_saved_jobs_read_error(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_read_error("saved_jobs.json")
-        try:
+        fake_erroring = _make_fake_file([], exists=True, read_error=True)
+        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_erroring):
             result = await _export_data(data_type="saved_jobs")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -317,14 +285,10 @@ class TestNoRecords:
     @pytest.mark.asyncio
     async def test_applications_empty_list(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps([])
-        try:
+        fake_apps = _make_fake_file([])
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps):
             result = await _export_data(data_type="applications")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
@@ -357,21 +321,17 @@ class TestJsonExport:
     @pytest.mark.asyncio
     async def test_json_export_success_returns_metadata(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE", "company": "Google"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
         fake_file.__str__ = lambda self: "/fake/exports/applications_2026-01-01.json"
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="applications", format="json")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="applications", format="json")
 
         assert result["status"] == "success"
         assert result["record_count"] == 1
@@ -382,20 +342,16 @@ class TestJsonExport:
     async def test_json_export_writes_with_indent(self):
         """file_path.write_text must be called once with indent=2 JSON."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                await _export_data(data_type="applications", format="json")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            await _export_data(data_type="applications", format="json")
 
         fake_file.write_text.assert_called_once()
         written_text = fake_file.write_text.call_args[0][0]
@@ -416,20 +372,16 @@ class TestCsvExport:
     @pytest.mark.asyncio
     async def test_csv_export_success_returns_metadata(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE", "company": "Google"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="applications", format="csv")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="applications", format="csv")
 
         assert result["status"] == "success"
         assert result["format"] == "csv"
@@ -439,20 +391,16 @@ class TestCsvExport:
     async def test_csv_export_writes_header_and_rows(self):
         """The written CSV text must contain the header and data row."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE", "company": "Google"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                await _export_data(data_type="applications", format="csv")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            await _export_data(data_type="applications", format="csv")
 
         fake_file.write_text.assert_called_once()
         csv_text = fake_file.write_text.call_args[0][0]
@@ -467,20 +415,16 @@ class TestCsvExport:
     async def test_csv_flattening_applied_to_nested_record(self):
         """Nested dicts in records result in dot-notation columns in CSV."""
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE", "loc": {"city": "Bangalore"}}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                await _export_data(data_type="applications", format="csv")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            await _export_data(data_type="applications", format="csv")
 
         csv_text = fake_file.write_text.call_args[0][0]
         assert "loc.city" in csv_text
@@ -498,25 +442,20 @@ class TestOutputPath:
     @pytest.mark.asyncio
     async def test_default_output_path_contains_data_type_and_date(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "SDE"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
-
+        fake_apps = _make_fake_file(records)
         captured_name = []
 
         def fake_truediv(self, name):
             captured_name.append(name)
             return MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = fake_truediv
-                await _export_data(data_type="applications", format="json")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = fake_truediv
+            await _export_data(data_type="applications", format="json")
 
         assert len(captured_name) == 1
         generated_name = captured_name[0]
@@ -536,30 +475,27 @@ class TestOutputPath:
         from pathlib import Path
 
         records = [{"title": "SDE"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_apps(records)
+        fake_apps = _make_fake_file(records)
 
         # Use a path within exports/ so the path validation passes
         import os
         exports_resolved = str(export_mod._EXPORTS_DIR.resolve())
         custom_path = os.path.join(exports_resolved, "my_custom_export.json")
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir, \
-                 patch("naukri_server.tools.export.Path") as mock_path_cls:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.resolve.return_value = Path(exports_resolved)
-                fake_file = MagicMock()
-                fake_file.__str__ = lambda self: custom_path
-                fake_file.resolve.return_value = Path(custom_path)
-                mock_path_cls.return_value = fake_file
-                result = await _export_data(
-                    data_type="applications",
-                    format="json",
-                    output_path=custom_path,
-                )
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir, \
+             patch("naukri_server.tools.export.Path") as mock_path_cls:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.resolve.return_value = Path(exports_resolved)
+            fake_file = MagicMock()
+            fake_file.__str__ = lambda self: custom_path
+            fake_file.resolve.return_value = Path(custom_path)
+            mock_path_cls.return_value = fake_file
+            result = await _export_data(
+                data_type="applications",
+                format="json",
+                output_path=custom_path,
+            )
 
         # Path() should have been called with the custom path string
         mock_path_cls.assert_called_with(custom_path)
@@ -635,20 +571,16 @@ class TestSavedJobsExport:
     @pytest.mark.asyncio
     async def test_saved_jobs_json_export_success(self):
         from naukri_server.tools.export import _export_data
-        from naukri_server.tools import export as export_mod
 
         records = [{"title": "Data Scientist", "company": "Meta"}]
-        original_root = export_mod._PACKAGE_ROOT
-        export_mod._PACKAGE_ROOT = _make_fake_root_with_saved_jobs(records)
+        fake_saved = _make_fake_file(records)
         fake_file = MagicMock()
 
-        try:
-            with patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
-                mock_dir.mkdir = MagicMock()
-                mock_dir.__truediv__ = MagicMock(return_value=fake_file)
-                result = await _export_data(data_type="saved_jobs", format="json")
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
+        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_saved), \
+             patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
+            mock_dir.mkdir = MagicMock()
+            mock_dir.__truediv__ = MagicMock(return_value=fake_file)
+            result = await _export_data(data_type="saved_jobs", format="json")
 
         assert result["status"] == "success"
         assert result["data_type"] == "saved_jobs"
@@ -670,67 +602,3 @@ def _make_fake_file(records: list, exists: bool = True, read_error: bool = False
     else:
         fake.read_text.return_value = json.dumps(records)
     return fake
-
-
-def _make_fake_root_with_apps(records: list):
-    """Fake _PACKAGE_ROOT whose applications.json holds *records*."""
-    fake_root = MagicMock()
-    fake_apps = _make_fake_file(records, exists=True)
-    fake_exports_dir = MagicMock()
-    fake_exports_dir.mkdir = MagicMock()
-
-    def _div(self, key):
-        if key == "applications.json":
-            return fake_apps
-        if key == "exports":
-            return fake_exports_dir
-        return MagicMock()
-
-    fake_root.__truediv__ = _div
-    return fake_root
-
-
-def _make_fake_root_with_saved_jobs(records: list):
-    """Fake _PACKAGE_ROOT whose saved_jobs.json holds *records*."""
-    fake_root = MagicMock()
-    fake_saved = _make_fake_file(records, exists=True)
-    fake_exports_dir = MagicMock()
-    fake_exports_dir.mkdir = MagicMock()
-
-    def _div(self, key):
-        if key == "saved_jobs.json":
-            return fake_saved
-        if key == "exports":
-            return fake_exports_dir
-        return MagicMock()
-
-    fake_root.__truediv__ = _div
-    return fake_root
-
-
-def _make_fake_root_file_missing(filename: str):
-    """Fake _PACKAGE_ROOT where *filename* does not exist."""
-    fake_root = MagicMock()
-    fake_missing = _make_fake_file([], exists=False)
-
-    def _div(self, key):
-        if key == filename:
-            return fake_missing
-        return MagicMock()
-
-    fake_root.__truediv__ = _div
-    return fake_root
-
-
-def _make_fake_root_read_error(filename: str):
-    """Fake _PACKAGE_ROOT where *filename* exists but read_text raises OSError."""
-    fake_root = MagicMock()
-    fake_erroring = _make_fake_file([], exists=True, read_error=True)
-
-    def _div(self, key):
-        if key == filename:
-            return fake_erroring
-        return MagicMock()
-
-    fake_root.__truediv__ = _div
-    return fake_root

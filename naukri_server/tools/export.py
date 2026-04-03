@@ -7,10 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from naukri_server.config import logger
+from naukri_server.config import logger, APPLICATIONS_FILE, SAVED_JOBS_FILE, EXPORTS_DIR
 
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent
-_EXPORTS_DIR = _PACKAGE_ROOT / "exports"
+_EXPORTS_DIR = EXPORTS_DIR
 
 
 def _flatten_for_csv(records: list[dict]) -> list[dict]:
@@ -62,7 +61,7 @@ async def _export_data(
     # Load data
     records = []
     if data_type == "applications":
-        apps_file = _PACKAGE_ROOT / "applications.json"
+        apps_file = APPLICATIONS_FILE
         if not apps_file.exists():
             return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
         try:
@@ -71,7 +70,7 @@ async def _export_data(
             return {"status": "error", "message": f"Failed to read applications: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "saved_jobs":
-        saved_file = _PACKAGE_ROOT / "saved_jobs.json"
+        saved_file = SAVED_JOBS_FILE
         if not saved_file.exists():
             return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first.", "error_code": "NOT_FOUND"}
         try:

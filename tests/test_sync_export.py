@@ -107,47 +107,27 @@ class TestExportData:
     async def test_export_applications_no_file(self):
         """When applications.json does not exist, should return NOT_FOUND."""
         from naukri_server.tools.export import naukri_export_data
-        with patch("naukri_server.tools.export._PACKAGE_ROOT") as mock_root:
-            mock_path = mock_root / "applications.json"
-            mock_path.exists.return_value = False
-            # We need to patch at a deeper level — use the actual path check
-            from naukri_server.tools import export as export_mod
-            original_root = export_mod._PACKAGE_ROOT
-            from pathlib import Path
-            from unittest.mock import MagicMock
-            fake_root = MagicMock(spec=Path)
-            fake_apps_file = MagicMock(spec=Path)
-            fake_apps_file.exists.return_value = False
-            fake_root.__truediv__ = lambda self, key: fake_apps_file if key == "applications.json" else MagicMock()
-            export_mod._PACKAGE_ROOT = fake_root
-            try:
-                result = await naukri_export_data(data_type="applications")
-                assert result["status"] == "error"
-                assert result["error_code"] == "NOT_FOUND"
-                assert "applications" in result["message"].lower()
-            finally:
-                export_mod._PACKAGE_ROOT = original_root
+        from unittest.mock import MagicMock
+        fake_apps_file = MagicMock()
+        fake_apps_file.exists.return_value = False
+        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps_file):
+            result = await naukri_export_data(data_type="applications")
+            assert result["status"] == "error"
+            assert result["error_code"] == "NOT_FOUND"
+            assert "applications" in result["message"].lower()
 
     @pytest.mark.asyncio
     async def test_export_saved_jobs_no_file(self):
         """When saved_jobs.json does not exist, should return NOT_FOUND."""
         from naukri_server.tools.export import naukri_export_data
-        from naukri_server.tools import export as export_mod
-        from pathlib import Path
         from unittest.mock import MagicMock
-        original_root = export_mod._PACKAGE_ROOT
-        fake_root = MagicMock(spec=Path)
-        fake_saved_file = MagicMock(spec=Path)
+        fake_saved_file = MagicMock()
         fake_saved_file.exists.return_value = False
-        fake_root.__truediv__ = lambda self, key: fake_saved_file if key == "saved_jobs.json" else MagicMock()
-        export_mod._PACKAGE_ROOT = fake_root
-        try:
+        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_saved_file):
             result = await naukri_export_data(data_type="saved_jobs")
             assert result["status"] == "error"
             assert result["error_code"] == "NOT_FOUND"
             assert "saved jobs" in result["message"].lower()
-        finally:
-            export_mod._PACKAGE_ROOT = original_root
 
 
 # =====================================================================

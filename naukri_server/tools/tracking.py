@@ -14,13 +14,9 @@ from naukri_server.config import (
     logger, APPLICATION_STATUS_API, MATCH_ANALYTICS_API,
     SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
     BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
+    APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
 from naukri_server.validation import validate_limit, validate_page
-
-# Data files live alongside questions.json in the naukri/ directory
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent
-APPLICATIONS_FILE = _PACKAGE_ROOT / "applications.json"
-SAVED_JOBS_FILE = _PACKAGE_ROOT / "saved_jobs.json"
 
 _applications_lock = asyncio.Lock()
 _saved_jobs_lock = asyncio.Lock()

@@ -3,8 +3,7 @@
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
@@ -14,10 +13,11 @@ from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
     BROWSER_MODAL_APPEAR,
+    APPLICATIONS_FILE, SAVED_JOBS_FILE, SYNC_STATE_FILE,
+    AUTO_PURGE_DAYS,
 )
 from naukri_server.tools.tracking import (
     _load_json, _save_json, _applications_lock, _saved_jobs_lock,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
 
 
@@ -25,14 +25,13 @@ from naukri_server.tools.tracking import (
 _APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
 _SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
 
-# Sync state persistence
-_SYNC_STATE_FILE = Path(__file__).parent.parent.parent / "sync_state.json"
+# Sync state persistence — path comes from config.SYNC_STATE_FILE
 
 
 def _load_sync_state() -> dict:
-    if _SYNC_STATE_FILE.exists():
+    if SYNC_STATE_FILE.exists():
         try:
-            return json.loads(_SYNC_STATE_FILE.read_text(encoding="utf-8"))
+            return json.loads(SYNC_STATE_FILE.read_text(encoding="utf-8"))
         except Exception as e:
             logger.debug("Corrupted sync state file, resetting: %s", e)
             return {}
@@ -41,9 +40,9 @@ def _load_sync_state() -> dict:
 
 def _save_sync_state(state: dict):
     text = json.dumps(state, indent=2)
-    tmp = _SYNC_STATE_FILE.with_suffix(".tmp")
+    tmp = SYNC_STATE_FILE.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(_SYNC_STATE_FILE))
+    os.replace(str(tmp), str(SYNC_STATE_FILE))
 
 
 # Async wrappers — avoid blocking the event loop with sync I/O
@@ -623,6 +622,13 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         # Snapshot old statuses for change detection
         old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
         stats = _merge_applications(local_apps, remote_jobs)
+        # Auto-purge applications older than AUTO_PURGE_DAYS
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+        before_count = len(local_apps)
+        local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
+        purged = before_count - len(local_apps)
+        if purged:
+            logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
         # Detect status changes
         status_changes = []
         for app in local_apps:
@@ -651,6 +657,7 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         "method": method,
         "total_remote": len(remote_jobs),
         **stats,
+        "purged": purged,
         "days_back": days_back,
         "last_sync": state.get("last_applications_sync"),
         "applications": local_apps[:20],

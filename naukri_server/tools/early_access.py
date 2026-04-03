@@ -1,16 +1,14 @@
 """Early access tools — pre-posted roles from top companies."""
 
-from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger
+from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger, EARLY_ACCESS_TRACKING_FILE
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.validation import validate_limit, validate_page
 
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent
-_TRACKING_FILE = _PACKAGE_ROOT / "early_access_tracking.json"
+_TRACKING_FILE = EARLY_ACCESS_TRACKING_FILE
 
 
 # ---------------------------------------------------------------------------

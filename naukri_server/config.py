@@ -15,9 +15,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("naukri")
 
-# Paths — go up from naukri_server/ to naukri/ where chrome-profile/ and questions.json live
-CHROME_PROFILE = str(Path(__file__).parent.parent / "chrome-profile")
-CACHE_FILE = Path(__file__).parent.parent / "questions.json"
+# Paths — go up from naukri_server/ to naukri/ where chrome-profile/ and data files live
+_PACKAGE_ROOT = Path(__file__).parent.parent
+CHROME_PROFILE = str(_PACKAGE_ROOT / "chrome-profile")
+
+# Configurable data directory — override via NAUKRI_DATA_DIR env var
+DATA_DIR = Path(os.environ.get("NAUKRI_DATA_DIR", str(_PACKAGE_ROOT)))
+APPLICATIONS_FILE = DATA_DIR / "applications.json"
+SAVED_JOBS_FILE = DATA_DIR / "saved_jobs.json"
+REMINDERS_FILE = DATA_DIR / "reminders.json"
+QUESTIONS_FILE = DATA_DIR / "questions.json"
+SYNC_STATE_FILE = DATA_DIR / "sync_state.json"
+EARLY_ACCESS_TRACKING_FILE = DATA_DIR / "early_access_tracking.json"
+EXPORTS_DIR = DATA_DIR / "exports"
+
+# Backward-compatible alias
+CACHE_FILE = QUESTIONS_FILE
+
+# Auto-purge threshold
+AUTO_PURGE_DAYS = 180  # Auto-purge applications older than this many days during sync
 NAUKRI_BASE = "https://www.naukri.com"
 
 # Timeouts (ms for Playwright, seconds for aiohttp)

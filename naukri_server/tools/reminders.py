@@ -2,15 +2,11 @@
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.config import logger
+from naukri_server.config import logger, REMINDERS_FILE
 from naukri_server.utils import load_json_with_backup, save_json_atomic
-
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent
-REMINDERS_FILE = _PACKAGE_ROOT / "reminders.json"
 _reminders_lock = asyncio.Lock()
 
 
