@@ -343,50 +343,37 @@ def _get_browser():
 
 
 async def _get_profile_prompts() -> dict:
-    """Fetch CCS widget state keys to identify pending profile completion actions.
+    """Fetch CCS widget state keys by intercepting Naukri's dashboard CCS call.
 
-    The CCS endpoint requires browser cookies (not just JWT), so we POST
-    from inside a Playwright page context using page.evaluate(fetch(...)).
+    Navigates to the homepage and captures the CCS response that Naukri's
+    own JavaScript makes (with proper cookies/headers). This avoids the
+    issue of page.evaluate(fetch) not having the right auth context.
     """
+    import asyncio
     from naukri_server.browser import page_goto
+    ccs_pattern = CCS_PAGE_API
+    captured = {}
+
+    async def _on_response(response):
+        if ccs_pattern in response.url and response.status == 200:
+            try:
+                captured["data"] = await response.json()
+            except Exception:
+                pass
+
     async with _get_browser().page_pool.acquire() as page:
-        # Ensure page is on naukri.com domain (required for same-origin fetch)
-        if not page.url or "naukri.com" not in page.url:
+        page.on("response", _on_response)
+        try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/homepage")
-        url = f"{NAUKRI_BASE}{CCS_PAGE_API}/{CCS_DASHBOARD_PAGE}"
-        # CCS requires filters.parts body to return state keys
-        # These widget part IDs match Naukri's frontend dashboard call
-        data = await page.evaluate("""
-            async (url) => {
-                try {
-                    const resp = await fetch(url + '?partial=true&rules=true&sync=true', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            "filters": {
-                                "parts": [
-                                    "top-banner-wdgt=>inventory-1=>ni-desktop-naukripro-pre-purchase-dashboard-animation-wdgt_v0",
-                                    "top-banner-wdgt=>inventory-4=>ni-desktop-dashboard-v2_top-banner-wdgt_inventory-4_poll_v0",
-                                    "belly-wdgts=>inventory-2=>ni-desktop-potd-wdgt_v0",
-                                    "mnj-dashboard-diversity-ads=>inventory-1=>ni-desktop-dashboard-v2_mnj-dashboard-diversity-ads_inventory-1_v0",
-                                    "bottom-wdgts=>inventory-1=>naukri-interview-questions-wdgt_v1",
-                                    "bottom-wdgts=>inventory-2=>naukri-interview-experiences-wdgt_v0",
-                                    "revival-welcome-back-wdgts=>inventory-1=>ni-desktop-dpdp-wdgt_v0",
-                                    "revival-welcome-back-wdgts=>inventory-1=>ni-desktop-nps-dashboard-wdgt_v0",
-                                    "resume360=>inventory-1=>desktop-dash-resume-ai-draft-wdgt_v0",
-                                    "resume360=>inventory-1=>desktop-dash-resume-ai-high-wdgt_v0",
-                                    "resume360=>inventory-1=>desktop-dash-resume-ai-low-wdgt_v0",
-                                    "resume360=>inventory-1=>desktop-dash-resume-ai-analyze-wdgt_v0"
-                                ]
-                            }
-                        })
-                    });
-                    return await resp.json();
-                } catch (e) {
-                    return {"error": e.message};
-                }
-            }
-        """, url)
+            # Wait briefly for CCS call to complete
+            for _ in range(10):
+                if captured.get("data"):
+                    break
+                await asyncio.sleep(0.5)
+        finally:
+            page.remove_listener("response", _on_response)
+
+    data = captured.get("data", {})
 
     if not data or data.get("error"):
         return {

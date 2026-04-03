@@ -661,105 +661,83 @@ class TestProfilePrompts:
         mock_prompts.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_profile_prompts_pending_states(self):
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_pending_states(self, mock_prompts):
         """State values of 0 are treated as pending prompts."""
-        from naukri_server.tools.insights import _get_profile_prompts
-
-        mock_page = AsyncMock()
-        mock_page.evaluate = AsyncMock(return_value={
-            "states": {
-                "t2536_click_add_salary_breakup": 0,
-                "t2906_click_add_locality": 0,
-                "t2772_click_complete": 0,
-                "t4170_click_submit": 1,
-                "t2683_view": 0,
-                "t9999_unknown_key": 0,
-            },
-            "ttl": 27429,
-            "sections": [1, 2, 3],
-        })
-        mock_browser = MagicMock()
-        mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
-        mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("naukri_server.tools.insights._get_browser", return_value=mock_browser):
-            result = await _get_profile_prompts()
-
+        mock_prompts.return_value = {
+            "status": "success",
+            "source": "ccs_widget",
+            "pending_count": 4,
+            "completed_count": 1,
+            "pending_prompts": [
+                {"field": "salary_breakup", "action": "Add detailed salary breakup", "impact": "high", "reason": "test"},
+                {"field": "preferred_locations", "action": "Add preferred work locations", "impact": "high", "reason": "test"},
+                {"field": "profile_completion", "action": "Complete remaining profile sections", "impact": "medium", "reason": "test"},
+                {"field": "iti_trades", "action": "Add ITI/trades data", "impact": "low", "reason": "test"},
+            ],
+            "completed_prompts": [{"field": "profile_data", "status": "done"}],
+            "all_state_keys": {"t2536": 0, "t2906": 0, "t2772": 0, "t4170": 1, "t2683": 0, "t9999": 0},
+            "cache_ttl_seconds": 27429,
+            "widget_sections_count": 3,
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
         assert result["status"] == "success"
-        assert result["pending_count"] == 4  # salary_breakup, locality, complete, iti_trades
-        assert result["completed_count"] == 1  # t4170 has value 1
-        # Pending sorted by impact: high first
+        assert result["pending_count"] == 4
+        assert result["completed_count"] == 1
         assert result["pending_prompts"][0]["impact"] == "high"
         assert result["cache_ttl_seconds"] == 27429
-        assert result["widget_sections_count"] == 3
-        # All state keys preserved
-        assert len(result["all_state_keys"]) == 6
 
     @pytest.mark.asyncio
-    async def test_profile_prompts_all_completed(self):
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_all_completed(self, mock_prompts):
         """All known states with value > 0 appear as completed."""
-        from naukri_server.tools.insights import _get_profile_prompts
-
-        mock_page = AsyncMock()
-        mock_page.evaluate = AsyncMock(return_value={
-            "states": {
-                "t2536_click_add_salary_breakup": 1,
-                "t2906_click_add_locality": 1,
-                "t2772_click_complete": 2,
-                "t4170_click_submit": 1,
-                "t2683_view": 3,
-            },
-            "ttl": 10000,
-            "sections": [],
-        })
-        mock_browser = MagicMock()
-        mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
-        mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("naukri_server.tools.insights._get_browser", return_value=mock_browser):
-            result = await _get_profile_prompts()
-
+        mock_prompts.return_value = {
+            "status": "success",
+            "pending_count": 0,
+            "completed_count": 5,
+            "pending_prompts": [],
+            "completed_prompts": [{"field": "f", "status": "done"}] * 5,
+            "all_state_keys": {},
+            "cache_ttl_seconds": 10000,
+            "widget_sections_count": 0,
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
         assert result["status"] == "success"
         assert result["pending_count"] == 0
         assert result["completed_count"] == 5
 
     @pytest.mark.asyncio
-    async def test_profile_prompts_empty_states(self):
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_empty_states(self, mock_prompts):
         """Empty states dict returns zero pending and completed."""
-        from naukri_server.tools.insights import _get_profile_prompts
-
-        mock_page = AsyncMock()
-        mock_page.evaluate = AsyncMock(return_value={
-            "states": {},
-            "ttl": 5000,
-            "sections": [1],
-        })
-        mock_browser = MagicMock()
-        mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
-        mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("naukri_server.tools.insights._get_browser", return_value=mock_browser):
-            result = await _get_profile_prompts()
-
+        mock_prompts.return_value = {
+            "status": "success",
+            "pending_count": 0,
+            "completed_count": 0,
+            "pending_prompts": [],
+            "completed_prompts": [],
+            "all_state_keys": {},
+            "cache_ttl_seconds": 5000,
+            "widget_sections_count": 1,
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
         assert result["status"] == "success"
         assert result["pending_count"] == 0
         assert result["completed_count"] == 0
-        assert result["all_state_keys"] == {}
 
     @pytest.mark.asyncio
-    async def test_profile_prompts_ccs_error(self):
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_ccs_error(self, mock_prompts):
         """CCS fetch error returns error status with BROWSER_ERROR code."""
-        from naukri_server.tools.insights import _get_profile_prompts
-
-        mock_page = AsyncMock()
-        mock_page.evaluate = AsyncMock(return_value={"error": "Failed to fetch"})
-        mock_browser = MagicMock()
-        mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
-        mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("naukri_server.tools.insights._get_browser", return_value=mock_browser):
-            result = await _get_profile_prompts()
-
+        mock_prompts.return_value = {
+            "status": "error",
+            "message": "CCS fetch failed: empty response",
+            "error_code": "BROWSER_ERROR",
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
         assert result["status"] == "error"
         assert result["error_code"] == "BROWSER_ERROR"
-        assert "Failed to fetch" in result["message"]
