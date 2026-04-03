@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server.api import api_post
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT, logger
+from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.validation import validate_limit
@@ -209,7 +210,7 @@ async def naukri_apply(
         )
         if existing_app:
             # Allow retry if previous attempt needs_input and answers are provided
-            if existing_app.get("status") == "needs_input" and answers:
+            if ApplicationStatus.from_string(existing_app.get("status", "")) == ApplicationStatus.NEEDS_INPUT and answers:
                 pass  # Fall through to _apply_single for retry
             else:
                 return {

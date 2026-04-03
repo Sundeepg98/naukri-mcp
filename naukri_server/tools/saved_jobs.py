@@ -10,6 +10,7 @@ from naukri_server.config import (
     logger, SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
     APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
+from naukri_server.models import paginate
 from naukri_server.validation import validate_limit, validate_page
 from naukri_server.tools.tracking import _load_json, _save_json
 
@@ -38,16 +39,11 @@ async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
 
     saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
 
-    total = len(saved)
-    offset = (page - 1) * limit
-    page_items = saved[offset:offset + limit]
+    pagination, page_items = paginate(saved, page, limit)
 
     return {
         "status": "success",
-        "total": total,
-        "count": len(page_items),
-        "page": page,
-        "has_more": (offset + limit) < total,
+        **pagination,
         "saved_jobs": page_items,
     }
 

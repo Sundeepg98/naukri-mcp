@@ -10,6 +10,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import paginate
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API,
@@ -106,16 +107,11 @@ async def _list_applications(
 
     filtered.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
 
-    total = len(filtered)
-    offset = (page - 1) * limit
-    page_items = filtered[offset:offset + limit]
+    pagination, page_items = paginate(filtered, page, limit)
 
     return {
         "status": "success",
-        "total": total,
-        "count": len(page_items),
-        "page": page,
-        "has_more": (offset + limit) < total,
+        **pagination,
         "summary": {"total_all_statuses": len(apps), "by_status": by_status},
         "applications": page_items,
     }
@@ -439,17 +435,12 @@ async def _get_stale_applications(
     # Sort by follow_up_priority descending (most worth following up first)
     stale_apps.sort(key=lambda x: x["follow_up_priority"], reverse=True)
 
-    total = len(stale_apps)
-    offset = (page - 1) * limit
-    page_items = stale_apps[offset:offset + limit]
+    pagination, page_items = paginate(stale_apps, page, limit)
 
     return {
         "status": "success",
         "total_applications": len(apps),
-        "total": total,
-        "count": len(page_items),
-        "page": page,
-        "has_more": (offset + limit) < total,
+        **pagination,
         "stale_applications": page_items,
     }
 
