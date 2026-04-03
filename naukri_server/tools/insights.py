@@ -8,6 +8,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.cache import _load_cache, _cache_lock
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE, logger
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.utils import TtlCache
@@ -511,6 +512,63 @@ async def _get_profile_prompts() -> dict:
     }
 
 
+async def _detect_status_changes(days_back: int = 30) -> dict:
+    """Detect application status changes by syncing with Naukri and comparing.
+
+    Runs a quick sync to get latest statuses, then categorizes any detected
+    transitions as positive (forward movement) or neutral.
+
+    Args:
+        days_back: Number of days to sync (default 30)
+
+    Returns:
+        {status, total_changes, positive_changes, positive, neutral, sync_method, last_sync}
+    """
+    from naukri_server.tools.sync import _sync_applications
+
+    # Run a quick sync to get latest statuses
+    sync_result = await _sync_applications(days_back=days_back)
+
+    if sync_result.get("status") == "error":
+        return sync_result
+
+    changes = sync_result.get("status_changes", [])
+
+    # Categorize changes
+    positive = []  # applied -> viewed, viewed -> interview, etc.
+    neutral = []
+
+    POSITIVE_TRANSITIONS = {
+        ("applied", "viewed"), ("applied", "viewed_by_recruiter"),
+        ("applied", "interview"), ("applied", "shortlisted"),
+        ("viewed", "interview"), ("viewed", "shortlisted"),
+        ("viewed_by_recruiter", "interview"), ("viewed_by_recruiter", "shortlisted"),
+        ("interview", "offered"), ("interview", "hired"),
+        ("shortlisted", "offered"), ("shortlisted", "hired"),
+        ("shortlisted", "interview"),
+    }
+
+    for change in changes:
+        old = (change.get("old_status") or "").lower()
+        new = (change.get("new_status") or "").lower()
+        if (old, new) in POSITIVE_TRANSITIONS:
+            change["transition_type"] = "positive"
+            positive.append(change)
+        else:
+            change["transition_type"] = "neutral"
+            neutral.append(change)
+
+    return {
+        "status": "success",
+        "total_changes": len(changes),
+        "positive_changes": len(positive),
+        "positive": positive,
+        "neutral": neutral,
+        "sync_method": sync_result.get("method"),
+        "last_sync": sync_result.get("last_sync"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
@@ -549,9 +607,10 @@ async def naukri_insights(
       - "taxonomy": Get Naukri's job taxonomy hierarchy (37 departments → 167 role categories → 1461 roles) with synonyms. Cached for 24h.
       - "profile_prompts": Fetch CCS widget state keys to identify pending profile completion actions (salary breakup, locations, etc.). Uses browser cookies.
       - "conversion_funnel": Analyze application-to-interview conversion funnel — status breakdown, company response rates, and dead zones (companies with 3+ applies and 0 responses)
+      - "status_changes": Detect application status changes by syncing with Naukri. Categorizes transitions as positive (applied→viewed, viewed→interview, etc.) or neutral. Uses days param for sync window (default 30).
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts" | "conversion_funnel"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts" | "conversion_funnel" | "status_changes"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
@@ -578,6 +637,7 @@ async def naukri_insights(
         - taxonomy: {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories: [{id, label, roles: [{id, label, synonyms}]}]}]}
         - profile_prompts: {status, source, pending_count, completed_count, pending_prompts: [{field, action, impact, reason}], completed_prompts, all_state_keys, cache_ttl_seconds, widget_sections_count}
         - conversion_funnel: {status, days, total_applied, funnel, conversion_rate, top_responsive_companies: [{company, applied, responded, rate}], dead_zones: [{company, applied, responded, rate}]}
+        - status_changes: {status, total_changes, positive_changes, positive: [{job_id, title, old_status, new_status, transition_type}], neutral: [...], sync_method, last_sync}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -685,14 +745,12 @@ async def naukri_insights(
 
     # ── conversion_funnel ─────────────────────────────────────────────
     elif insight_type == "conversion_funnel":
-        try:
-            return await _conversion_funnel(days=days)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", insight_type)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _conversion_funnel(days=days), "insights.conversion_funnel")
+
+    # ── status_changes ───────────────────────────────────────────────
+    elif insight_type == "status_changes":
+        return await handle_tool_action(lambda: _detect_status_changes(days_back=days), "insights.status_changes")
 
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts, conversion_funnel", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts, conversion_funnel, status_changes", "error_code": "VALIDATION_ERROR"}

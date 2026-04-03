@@ -251,3 +251,62 @@ async def test_conversion_funnel_empty_applications(mock_load):
     assert result["conversion_rate"] == 0
     assert result["top_responsive_companies"] == []
     assert result["dead_zones"] == []
+
+
+# ===========================================================================
+# 7. _detect_status_changes
+# ===========================================================================
+
+@pytest.mark.asyncio
+@patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock)
+async def test_detect_status_changes_positive_transitions(mock_sync):
+    """Positive transitions (applied->viewed, viewed->interview) detected correctly."""
+    mock_sync.return_value = {
+        "status": "success",
+        "method": "rest_api",
+        "last_sync": "2026-04-03T10:00:00+00:00",
+        "status_changes": [
+            {"job_id": "1001", "title": "Backend Engineer", "old_status": "applied", "new_status": "viewed_by_recruiter"},
+            {"job_id": "1002", "title": "Frontend Dev", "old_status": "viewed_by_recruiter", "new_status": "interview"},
+            {"job_id": "1003", "title": "DevOps Engineer", "old_status": "applied", "new_status": "rejected"},
+        ],
+    }
+
+    from naukri_server.tools.insights import _detect_status_changes
+    result = await _detect_status_changes(days_back=30)
+
+    assert result["status"] == "success"
+    assert result["total_changes"] == 3
+    assert result["positive_changes"] == 2
+    assert len(result["positive"]) == 2
+    assert len(result["neutral"]) == 1
+    # Check positive entries
+    positive_ids = {c["job_id"] for c in result["positive"]}
+    assert positive_ids == {"1001", "1002"}
+    assert all(c["transition_type"] == "positive" for c in result["positive"])
+    # Check neutral entry
+    assert result["neutral"][0]["job_id"] == "1003"
+    assert result["neutral"][0]["transition_type"] == "neutral"
+    assert result["sync_method"] == "rest_api"
+    assert result["last_sync"] == "2026-04-03T10:00:00+00:00"
+
+
+@pytest.mark.asyncio
+@patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock)
+async def test_detect_status_changes_no_changes(mock_sync):
+    """No changes returns empty lists."""
+    mock_sync.return_value = {
+        "status": "success",
+        "method": "rest_api",
+        "last_sync": "2026-04-03T10:00:00+00:00",
+        # No status_changes key — sync returns it only when changes exist
+    }
+
+    from naukri_server.tools.insights import _detect_status_changes
+    result = await _detect_status_changes(days_back=7)
+
+    assert result["status"] == "success"
+    assert result["total_changes"] == 0
+    assert result["positive_changes"] == 0
+    assert result["positive"] == []
+    assert result["neutral"] == []

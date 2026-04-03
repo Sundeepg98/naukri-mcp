@@ -137,6 +137,28 @@ def _build_recommended_actions(brief: dict) -> list:
             "tool": "naukri_applications(action='follow_up')",
         })
 
+    # High priority: stale applications with high follow-up priority
+    if brief.get("stale_applications", {}).get("top_stale"):
+        top_stale = brief["stale_applications"]["top_stale"]
+        high_priority = [s for s in top_stale if s.get("follow_up_priority", 0) >= 70]
+        if high_priority:
+            actions.append({
+                "priority": "high",
+                "action": f"Follow up on {len(high_priority)} high-priority stale application(s) — recruiter showed interest",
+                "tool": "naukri_applications(action='draft_follow_up', job_id='...')",
+            })
+
+    # Medium priority: conversion funnel dead zones
+    funnel = brief.get("conversion_funnel", {})
+    dead_zones = funnel.get("dead_zones", [])
+    if dead_zones:
+        companies = ", ".join(d.get("company", "?") for d in dead_zones[:3])
+        actions.append({
+            "priority": "medium",
+            "action": f"Dead zones detected: {companies} — consider stopping applications there",
+            "tool": "naukri_insights(insight_type='conversion_funnel')",
+        })
+
     # High priority: recruiter search activity (from notification_summary)
     notify = brief.get("notification_summary", {})
     recruiter_search = notify.get("categories", {}).get("recruiterSearch", {})
@@ -208,11 +230,12 @@ def _build_recommended_actions(brief: dict) -> list:
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 18 checks in parallel: unread messages, notifications, new recommendations,
-    recruiter activity, profile activity level, today's applications, dashboard stats,
-    early access roles, subscription status, due reminders, stale applications,
-    job alerts, profile completeness, saved jobs count, search impressions,
-    assessment status, match quality, and unified notify summary.
+    Runs 19 checks in parallel plus a post-gather conversion funnel analysis:
+    unread messages, notifications, new recommendations, recruiter activity,
+    profile activity level, today's applications, dashboard stats, early access
+    roles, subscription status, due reminders, stale applications, job alerts,
+    profile completeness, saved jobs count, search impressions, assessment status,
+    match quality, unified notify summary, and AmbitionBox salary insights.
 
     Returns:
         - {status: "success", unread_messages, notifications, notification_summary,
@@ -221,7 +244,9 @@ async def naukri_daily_brief() -> dict:
            stale_applications, job_alerts, profile_completeness, saved_jobs,
            search_impressions, assessments, match_quality,
            competition_overview (total_with_data, low, medium, high, very_high,
-           average_applicants, top_competitive), recommended_actions, errors}
+           average_applicants, top_competitive),
+           conversion_funnel (total_applied, conversion_rate, dead_zones),
+           recommended_actions, errors}
     """
     from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications, _get_unified_notify
@@ -363,6 +388,19 @@ async def naukri_daily_brief() -> dict:
         "competition_overview": _build_competition_section(apps),
         "applied_salary_insights": ab_insights if ab_insights else None,
     }
+
+    # Conversion funnel summary (loads applications.json which is already loaded, so run after gather)
+    try:
+        from naukri_server.tools.insights import _conversion_funnel
+        funnel = await _conversion_funnel(days=30)
+        if isinstance(funnel, dict) and funnel.get("status") == "success":
+            brief["conversion_funnel"] = {
+                "total_applied": funnel.get("total_applied", 0),
+                "conversion_rate": funnel.get("conversion_rate", 0),
+                "dead_zones": funnel.get("dead_zones", [])[:3],
+            }
+    except Exception:
+        pass
 
     # Enrich top recommendations with fit scores
     if recs and dashboard:
