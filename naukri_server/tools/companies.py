@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
-from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, logger
+from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, BROWSER_MODAL_APPEAR, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
@@ -190,7 +190,7 @@ async def _get_company_slug(group_id: str) -> dict:
 
             # Strategy 2: Scrape AmbitionBox links from the rendered page
             logger.info("API interception didn't yield slug, trying DOM scrape")
-            await asyncio.sleep(2)  # Let page render fully
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)  # Let page render fully
             ab_link = await page.evaluate("""
                 () => {
                     // Look for links to ambitionbox.com

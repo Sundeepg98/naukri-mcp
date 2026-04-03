@@ -7,7 +7,11 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API, LAKHS_MULTIPLIER
+from naukri_server.config import (
+    logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API,
+    LAKHS_MULTIPLIER, BROWSER_FORM_LOAD, BROWSER_FORM_SAVE, BROWSER_MODAL_APPEAR,
+    BROWSER_PAGE_LOAD,
+)
 
 
 async def _get_alerts_list() -> dict:
@@ -196,7 +200,7 @@ async def naukri_job_alerts(
                 # Navigate to modify page -- form loads via /intercept/alert POST
                 modify_url = f"{NAUKRI_BASE}/alert/modify?aId={a_id}"
                 await page_goto(page, modify_url)
-                await asyncio.sleep(4)
+                await asyncio.sleep(BROWSER_FORM_LOAD)
 
                 # Wait for the form to appear
                 form_found = await page.evaluate("""() => {
@@ -206,7 +210,7 @@ async def naukri_job_alerts(
 
                 if not form_found:
                     # Wait a bit more for the intercept/alert POST to complete
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(BROWSER_FORM_SAVE)
                     form_found = await page.evaluate("""() => {
                         return !!(document.getElementById('cjaFrm') || document.querySelector('form'));
                     }""")
@@ -275,7 +279,7 @@ async def naukri_job_alerts(
                 if not submit_result:
                     return {"status": "error", "message": "Could not find submit button or form on the modify page.", "error_code": "BROWSER_ERROR"}
 
-                await asyncio.sleep(3)
+                await asyncio.sleep(BROWSER_FORM_SAVE)
 
                 display_name = new_name or alert_name
                 logger.info("Alert '%s' updated: %s", display_name, updates)
@@ -327,7 +331,7 @@ async def naukri_job_alerts(
                 # Navigate to the delete confirmation page
                 delete_url = f"{NAUKRI_BASE}/alert/delete?aId={a_id}"
                 await page_goto(page, delete_url)
-                await asyncio.sleep(2)
+                await asyncio.sleep(BROWSER_PAGE_LOAD)
 
                 # Check if logged in
                 if "/nlogin" in page.url:
@@ -388,7 +392,7 @@ async def naukri_job_alerts(
 
                     if button_clicked:
                         logger.info("Clicked button/form: %s", button_clicked)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(BROWSER_MODAL_APPEAR)
                     else:
                         return {
                             "status": "error",

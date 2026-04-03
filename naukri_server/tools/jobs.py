@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, logger
+from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -311,7 +311,7 @@ async def _get_job(job_id_or_url: str) -> dict:
                     logger.warning("Job details response capture timed out after %ss for job: %s", INTERCEPT_WAIT_TIMEOUT, job_id)
                 # Give a moment for match score to arrive too
                 if "score" not in captured:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(BROWSER_PAGE_SETTLE)
             finally:
                 page.remove_listener("response", on_response_with_event)
 

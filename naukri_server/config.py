@@ -162,6 +162,15 @@ STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale
 AMBITIONBOX_WAIT_TIMEOUT = 10000  # Playwright timeout for __NEXT_DATA__ selector (ms)
 AMBITIONBOX_FALLBACK_SLEEP = 2  # Seconds to wait if selector times out
 
+# Browser timing constants (seconds) — used by tools to wait for browser state transitions
+BROWSER_DOM_SETTLE = 0.5           # Wait for DOM to update after input/chip removal
+BROWSER_MODAL_APPEAR = 2.0        # Wait for modal/dialog to appear after clicking edit
+BROWSER_FORM_SAVE = 3.0           # Wait for form save to complete (POST round-trip)
+BROWSER_PAGE_SETTLE = 1.0         # Wait for page to finish rendering after navigation
+BROWSER_UPLOAD_COMPLETE = 5.0     # Wait for file upload to complete
+BROWSER_PAGE_LOAD = 3.0           # Wait for full page load after goto (profile, settings)
+BROWSER_FORM_LOAD = 4.0           # Wait for form to load after navigation (alert modify)
+
 # Browser hardcoded timeouts
 SESSION_VALIDATE_TIMEOUT = 5  # Seconds for session validation on startup
 TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation

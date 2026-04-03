@@ -7,7 +7,11 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_tool
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB, logger
+from naukri_server.config import (
+    PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB, logger,
+    BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_UPLOAD_COMPLETE, BROWSER_FORM_SAVE,
+    BROWSER_PAGE_SETTLE, BROWSER_DOM_SETTLE,
+)
 from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
@@ -184,7 +188,7 @@ async def _resume_upload(file_path: str) -> dict:
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
 
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -199,7 +203,7 @@ async def _resume_upload(file_path: str) -> dict:
                 )
                 if upload_btn:
                     await upload_btn.click()
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(BROWSER_MODAL_APPEAR)
                     file_input = await page.query_selector('input[type="file"]')
 
             if not file_input:
@@ -207,7 +211,7 @@ async def _resume_upload(file_path: str) -> dict:
 
             # Upload the file
             await file_input.set_input_files(str(path.resolve()))
-            await asyncio.sleep(5)  # Wait for upload to complete
+            await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)
 
             _profile_ttl_cache.invalidate()
             _dashboard_ttl_cache.invalidate()
@@ -276,7 +280,7 @@ async def _photo_upload(file_path: str) -> dict:
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
 
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -302,7 +306,7 @@ async def _photo_upload(file_path: str) -> dict:
                     }
                 }
             }""")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_FORM_SAVE)
 
             # Set the file on the hidden file input
             file_input = await page.query_selector('#fileUpload')
@@ -324,7 +328,7 @@ async def _photo_upload(file_path: str) -> dict:
             logger.info("Photo file set: %s", path.name)
 
             # Wait for the image to load in the cropper preview
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_FORM_SAVE)
 
             # Click the save/submit button
             save_btn = await page.query_selector(
@@ -335,11 +339,11 @@ async def _photo_upload(file_path: str) -> dict:
             if save_btn:
                 await save_btn.click()
                 logger.info("Clicked save button for photo upload")
-                await asyncio.sleep(5)  # Wait for upload to complete
+                await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)
             else:
                 # Some flows auto-upload without a save button; wait for network idle
                 logger.info("No save button found, waiting for auto-upload")
-                await asyncio.sleep(5)
+                await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)
 
             return {
                 "status": "success",
@@ -355,7 +359,7 @@ async def _photo_delete() -> dict:
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
 
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -398,7 +402,7 @@ async def _photo_delete() -> dict:
             # Wait for the photo cropper modal to appear
             modal_appeared = False
             for _ in range(10):
-                await asyncio.sleep(1)
+                await asyncio.sleep(BROWSER_PAGE_SETTLE)
                 modal_appeared = await page.evaluate("""() => {
                     const modal = document.querySelector('#photoCropper, [class*="photoCropper"], [class*="PhotoCropper"], [class*="cropModal"], [class*="photo-modal"], [class*="modal"][class*="photo"], [role="dialog"]');
                     return !!modal;
@@ -409,7 +413,7 @@ async def _photo_delete() -> dict:
             if not modal_appeared:
                 return {"status": "error", "message": "Photo cropper modal did not appear after clicking photo.", "error_code": "BROWSER_ERROR"}
 
-            await asyncio.sleep(1)  # Let modal fully render
+            await asyncio.sleep(BROWSER_PAGE_SETTLE)  # Let modal fully render
 
             # Step 1: Click the initial "Delete" option (.delBtn) in the photo modal
             delete_clicked = await page.evaluate("""() => {
@@ -432,7 +436,7 @@ async def _photo_delete() -> dict:
             logger.info("Clicked initial delete option: %s", delete_clicked)
 
             # Step 2: Click the confirmation "Delete" button
-            await asyncio.sleep(2)
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)
             confirm_clicked = await page.evaluate("""() => {
                 // Find all visible Delete buttons, click the one in the confirmation overlay
                 const buttons = Array.from(document.querySelectorAll('button'));
@@ -452,7 +456,7 @@ async def _photo_delete() -> dict:
                 return {"status": "error", "message": "Could not find confirmation dialog to delete photo.", "error_code": "BROWSER_ERROR"}
 
             logger.info("Clicked confirmation button: %s", confirm_clicked)
-            await asyncio.sleep(5)  # Wait for deletion to complete
+            await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)  # Wait for deletion to complete
 
             return {
                 "status": "success",

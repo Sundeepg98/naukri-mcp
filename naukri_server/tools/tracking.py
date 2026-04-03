@@ -611,8 +611,11 @@ async def naukri_applications(
     if action == "list":
         try:
             return await _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"List applications failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── detail ─────────────────────────────────────────────────────────
     elif action == "detail":
@@ -623,7 +626,8 @@ async def naukri_applications(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get application status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── purge ──────────────────────────────────────────────────────────
     elif action == "purge":
@@ -631,15 +635,21 @@ async def naukri_applications(
             return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
         try:
             return await _purge_applications(before_date=before_date, dry_run=dry_run)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Purge applications failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── stale ──────────────────────────────────────────────────────────
     elif action == "stale":
         try:
             return await _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit, page=page)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Stale detection failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── follow_up ──────────────────────────────────────────────────────
     elif action == "follow_up":
@@ -649,8 +659,11 @@ async def naukri_applications(
                 min_stale_score=min_stale_score,
                 limit=limit,
             )
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Follow-up analysis failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── apply ─────────────────────────────────────────────────────────
     elif action == "apply":
@@ -686,8 +699,11 @@ async def naukri_applications(
                         result["reminder_set"] = False
                         result["reminder_error"] = str(e)
             return result
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── batch_apply ───────────────────────────────────────────────────
     elif action == "batch_apply":
@@ -722,8 +738,11 @@ async def naukri_applications(
                         result["reminders_set"] = reminder_count
                         result["reminder_days"] = set_reminder_days
             return result
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Batch apply failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

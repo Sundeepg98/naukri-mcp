@@ -256,7 +256,8 @@ async def naukri_inbox(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get inbox failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── read ───────────────────────────────────────────────────────────
     elif action == "read":
@@ -267,7 +268,8 @@ async def naukri_inbox(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Read message failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── mark_interested ────────────────────────────────────────────────
     elif action == "mark_interested":
@@ -278,7 +280,8 @@ async def naukri_inbox(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Mark interested failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── accept_nvite ──────────────────────────────────────────────────
     elif action == "accept_nvite":
@@ -289,7 +292,8 @@ async def naukri_inbox(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Accept NVite failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

@@ -5,7 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API
+from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API, BROWSER_DOM_SETTLE
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -234,7 +234,7 @@ async def naukri_notifications(
                     else:
                         all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(BROWSER_DOM_SETTLE)
 
                 # If we got fewer than 50, we've reached the end
                 if len(notifications) < 50:

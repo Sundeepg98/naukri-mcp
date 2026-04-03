@@ -7,7 +7,12 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API, FULLPROFILES_API, PROFILE_CACHE_TTL, DFP_PROFILE_API, logger
+from naukri_server.config import (
+    NAUKRI_BASE, DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API, FULLPROFILES_API,
+    PROFILE_CACHE_TTL, DFP_PROFILE_API, logger,
+    BROWSER_DOM_SETTLE, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD,
+    BROWSER_PAGE_SETTLE,
+)
 from naukri_server.utils import TtlCache
 from naukri_server.validation import validate_profile
 
@@ -95,7 +100,7 @@ async def _fill_ctc_input(page, field_key: str, value: str, label_text: str) -> 
     await input_el.fill("")
     await input_el.fill(value)
     await input_el.dispatch_event("change")
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(BROWSER_DOM_SETTLE)
     return field_key
 
 
@@ -323,7 +328,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
     try:
         async with browser.page_pool.acquire() as page:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
 
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -351,7 +356,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
             if not edit_clicked:
                 return {"status": "error", "message": "Could not find edit button on profile", "error_code": "BROWSER_ERROR"}
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)
 
             api_confirmed = {}
 
@@ -380,7 +385,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                 if not save_result:
                     return {"status": "partial", "method": edit_clicked, "message": "Edit opened but Save not found."}
 
-                await asyncio.sleep(3)
+                await asyncio.sleep(BROWSER_FORM_SAVE)
             finally:
                 page.remove_listener("response", on_response)
 
@@ -397,13 +402,470 @@ async def _boost_visibility(randomize: bool = False) -> dict:
         return {"status": "error", "message": f"Browser fallback failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
 
 
+# ---------------------------------------------------------------------------
+# Field-specific update handlers (extracted from _update_profile monolith)
+# ---------------------------------------------------------------------------
+
+async def _update_headline(page, value) -> dict:
+    """Update resume headline via browser UI. Operates on an already-loaded profile page."""
+    try:
+        edit_clicked = await page.evaluate("""() => {
+            const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+            );
+            if (editIcons.length === 0) return null;
+            for (const icon of editIcons) {
+                const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
+                if (section) { icon.click(); return 'headline_edit'; }
+            }
+            for (const icon of editIcons) {
+                const parent = icon.closest('div, section');
+                if (parent && parent.textContent.includes('Resume headline')) {
+                    icon.click();
+                    return 'headline_parent';
+                }
+            }
+            editIcons[0].click();
+            return 'first_edit';
+        }""")
+
+        if not edit_clicked:
+            return {"status": "error", "message": "Could not find edit button for resume headline", "error_code": "BROWSER_ERROR"}
+
+        await asyncio.sleep(BROWSER_MODAL_APPEAR)
+
+        # Find textarea in the modal and fill with new headline
+        textarea = await page.query_selector(
+            '[class*="modal"] textarea, [class*="dialog"] textarea, '
+            '[role="dialog"] textarea, textarea[class*="headline"], '
+            'textarea'
+        )
+        if not textarea:
+            return {"status": "error", "message": "Edit modal opened but textarea not found", "error_code": "NOT_FOUND"}
+
+        await textarea.click()
+        await textarea.fill("")
+        await textarea.fill(value)
+        await asyncio.sleep(BROWSER_DOM_SETTLE)
+
+        # Click save
+        save_result = await _click_save_modal(page)
+        if not save_result:
+            return {"status": "error", "message": "Edit modal opened but Save button not found", "error_code": "NOT_FOUND"}
+
+        await asyncio.sleep(BROWSER_FORM_SAVE)
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to update resumeHeadline: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
+
+
+async def _update_key_skills(page, value) -> dict:
+    """Update key skills via browser UI. Operates on an already-loaded profile page."""
+    try:
+        # Navigate to key skills section and click edit
+        edit_clicked = await page.evaluate("""() => {
+            const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+                el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+            );
+            for (const icon of editIcons) {
+                const parent = icon.closest('div, section');
+                if (parent && parent.textContent.includes('Key skills')) {
+                    icon.click();
+                    return 'skills_edit';
+                }
+            }
+            return null;
+        }""")
+
+        if not edit_clicked:
+            return {"status": "error", "message": "Could not find edit button for key skills", "error_code": "BROWSER_ERROR"}
+
+        await asyncio.sleep(BROWSER_MODAL_APPEAR)
+
+        # Dismiss any chat/notification overlays blocking interaction
+        await page.evaluate("""() => {
+            for (const sel of ['.ltLayer', '.ltCont', '[class*="chatWidget"]',
+                               '[class*="ChatWidget"]', '[class*="livechat"]']) {
+                const el = document.querySelector(sel);
+                if (el) el.style.display = 'none';
+            }
+        }""")
+        await asyncio.sleep(BROWSER_DOM_SETTLE)
+
+        # Read current skills from the hidden #chipsVal input
+        current_skills_str = await page.evaluate("""() => {
+            const hidden = document.querySelector('#chipsVal');
+            return hidden ? hidden.value : '';
+        }""")
+        current_skills = [s.strip() for s in (current_skills_str or "").split(",") if s.strip()]
+        current_lower = {s.lower(): s for s in current_skills}
+
+        # Parse desired skills (full replacement set)
+        desired_skills = [s.strip() for s in value.split(",") if s.strip()]
+        desired_lower = {s.lower(): s for s in desired_skills}
+
+        # Validate 250 character limit before doing anything
+        new_csv = ",".join(desired_skills)
+        if len(new_csv) > 250:
+            # Cancel the editor
+            await page.evaluate("""() => {
+                const lb = document.querySelector('.keySkillsEdit');
+                if (lb) {
+                    const cancel = lb.querySelector('a');
+                    if (cancel && cancel.textContent.trim() === 'Cancel') cancel.click();
+                }
+            }""")
+            return {
+                "status": "error",
+                "message": f"keySkills total length is {len(new_csv)} chars, exceeds 250 char limit. "
+                           f"Reduce skills or shorten names. Current CSV: {new_csv}",
+                "error_code": "VALIDATION_ERROR",
+            }
+
+        # Determine removals and additions
+        to_remove = [current_lower[k] for k in current_lower if k not in desired_lower]
+        to_add = [desired_lower[k] for k in desired_lower if k not in current_lower]
+
+        logger.info(f"Skills update: current={current_skills}, desired={desired_skills}, "
+                    f"removing={to_remove}, adding={to_add}")
+
+        # Remove skills: click the X on each chip to remove
+        for skill in to_remove:
+            removed = await page.evaluate("""(skillName) => {
+                const container = document.querySelector('.chipsContainer');
+                if (!container) return 'no_container';
+                const chips = container.querySelectorAll('.chip');
+                for (const chip of chips) {
+                    const txt = chip.querySelector('span.tagTxt');
+                    if (txt && txt.textContent.trim().toLowerCase() === skillName.toLowerCase()) {
+                        const closeBtn = chip.querySelector('a.close');
+                        if (closeBtn) { closeBtn.click(); return 'removed'; }
+                    }
+                }
+                return 'not_found';
+            }""", skill)
+            logger.info(f"Remove skill '{skill}': {removed}")
+            await asyncio.sleep(BROWSER_DOM_SETTLE)
+
+        # Add skills: create chip DOM elements and update #chipsVal
+        if to_add:
+            add_result = await page.evaluate("""(newSkills) => {
+                const container = document.querySelector('.chipsContainer');
+                if (!container) return 'no_container';
+                const hiddenInput = document.querySelector('#chipsVal');
+                if (!hiddenInput) return 'no_hidden_input';
+
+                // Add chip DOM elements for each new skill
+                for (const skill of newSkills) {
+                    const chip = document.createElement('div');
+                    chip.className = 'waves-effect chip';
+                    const dataId = skill + '_' + skill.toLowerCase().replace(/\\s+/g, '_');
+                    chip.setAttribute('data-id', dataId);
+                    chip.setAttribute('title', skill);
+
+                    const span = document.createElement('span');
+                    span.className = 'tagTxt';
+                    span.textContent = skill;
+                    chip.appendChild(span);
+
+                    const closeLink = document.createElement('a');
+                    closeLink.className = 'material-icons close';
+                    closeLink.href = 'javascript:void(0)';
+                    closeLink.textContent = 'Cross';
+                    chip.appendChild(closeLink);
+
+                    // Insert before the input wrapper
+                    const inputWrap = container.querySelector('.input-wrap, .inputWrap, [class*="input"]');
+                    if (inputWrap) {
+                        container.insertBefore(chip, inputWrap);
+                    } else {
+                        container.appendChild(chip);
+                    }
+                }
+
+                // Read current chips from DOM to rebuild the CSV
+                const allChips = container.querySelectorAll('.chip span.tagTxt');
+                const allSkills = [];
+                for (const c of allChips) {
+                    const t = c.textContent.trim();
+                    if (t) allSkills.push(t);
+                }
+                const newValue = allSkills.join(',');
+
+                // Use native setter to trigger React change detection
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(hiddenInput, newValue);
+                hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+                hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+                return 'added_' + newSkills.length;
+            }""", to_add)
+            logger.info(f"Add skills result: {add_result}")
+        else:
+            # Even if no additions, update #chipsVal to reflect removals
+            if to_remove:
+                await page.evaluate("""(newCsv) => {
+                    const hiddenInput = document.querySelector('#chipsVal');
+                    if (!hiddenInput) return;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeSetter.call(hiddenInput, newCsv);
+                    hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", new_csv)
+
+        # Set form chk attribute to "true" so save is accepted
+        await page.evaluate("""() => {
+            const form = document.querySelector('form[name="keySkillsForm"]');
+            if (form) form.setAttribute('chk', 'true');
+        }""")
+
+        changed = bool(to_remove or to_add)
+
+        # Click Save inside the .keySkillsEdit lightbox
+        save_result = await page.evaluate("""() => {
+            const lightbox = document.querySelector('.keySkillsEdit');
+            if (!lightbox) return 'no_lightbox';
+            const btns = lightbox.querySelectorAll('button');
+            for (const btn of btns) {
+                if (btn.textContent.trim() === 'Save') {
+                    btn.click();
+                    return 'save_clicked';
+                }
+            }
+            return 'no_save_button';
+        }""")
+
+        if save_result != "save_clicked":
+            return {"status": "error", "message": f"Skills updated in DOM but Save failed: {save_result}", "error_code": "BROWSER_ERROR"}
+
+        await asyncio.sleep(BROWSER_FORM_SAVE)
+
+        # Verify: check if the editor closed (success) or validation error appeared
+        post_save = await page.evaluate("""() => {
+            const lightbox = document.querySelector('.keySkillsEdit');
+            if (!lightbox) return 'closed';
+            const style = window.getComputedStyle(lightbox);
+            if (style.display === 'none') return 'closed';
+            // Check for validation error message
+            const errEl = lightbox.querySelector('.error, .errorMsg, [class*="error"]');
+            if (errEl && errEl.textContent.trim()) return 'error: ' + errEl.textContent.trim();
+            return 'still_open';
+        }""")
+        logger.info(f"Skills save post-check: {post_save}")
+
+        if post_save.startswith("error:"):
+            return {"status": "error", "message": f"Skills save validation failed: {post_save}", "error_code": "BROWSER_ERROR"}
+
+        return {"status": "success", "changed": changed}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to update keySkills: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
+
+
+async def _update_notice_period(page, value) -> dict:
+    """Update notice period inside an already-open Career Profile modal."""
+    try:
+        VALID_NOTICE_PERIODS = {
+            "Serving Notice Period",
+            "15 Days or less",
+            "1 Month",
+            "2 Months",
+            "3 Months",
+            "More than 3 Months",
+        }
+        if value not in VALID_NOTICE_PERIODS:
+            return {
+                "status": "error",
+                "message": f"Invalid noticePeriod: '{value}'. "
+                           f"Valid options: {', '.join(sorted(VALID_NOTICE_PERIODS))}",
+                "error_code": "VALIDATION_ERROR",
+            }
+
+        # Try to find and set the notice period dropdown/select
+        notice_set = await page.evaluate("""(targetValue) => {
+            // Strategy 1: native <select> element
+            const selectors = [
+                'select[name*="notice"]', 'select[name*="Notice"]',
+                '[class*="notice"] select', '[class*="Notice"] select',
+                '#noticePeriod', 'select[id*="notice"]', 'select[id*="Notice"]'
+            ];
+            for (const sel of selectors) {
+                const select = document.querySelector(sel);
+                if (select) {
+                    // Find matching option
+                    const options = Array.from(select.options);
+                    const match = options.find(o =>
+                        o.text.trim() === targetValue || o.value === targetValue
+                    );
+                    if (match) {
+                        select.value = match.value;
+                        select.dispatchEvent(new Event('change', {bubbles: true}));
+                        return 'select_set';
+                    }
+                }
+            }
+
+            // Strategy 2: custom dropdown (React/Naukri style)
+            // Find the notice period label, then the dropdown trigger near it
+            const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
+                el.textContent.trim().toLowerCase().includes('notice period') &&
+                el.children.length <= 2
+            );
+            for (const label of labels) {
+                const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
+                if (container) {
+                    // Look for a clickable dropdown trigger
+                    const trigger = container.querySelector(
+                        '[class*="dropdown"], [class*="select"], [class*="Dropdown"], ' +
+                        '[class*="Select"], [role="listbox"], [role="combobox"]'
+                    );
+                    if (trigger) {
+                        trigger.click();
+                        return 'custom_dropdown_clicked';
+                    }
+                }
+            }
+            return null;
+        }""", value)
+
+        if notice_set == "custom_dropdown_clicked":
+            # Wait for dropdown options to appear, then click the matching one
+            await asyncio.sleep(BROWSER_PAGE_SETTLE)
+            option_clicked = await page.evaluate("""(targetValue) => {
+                // Look for dropdown options/list items
+                const items = Array.from(document.querySelectorAll(
+                    '[class*="option"], [class*="Option"], [role="option"], ' +
+                    'li[class*="dropdown"], li[class*="Dropdown"], ' +
+                    'ul[class*="dropdown"] li, ul[class*="Dropdown"] li, ' +
+                    '[class*="listItem"], [class*="list-item"]'
+                ));
+                const match = items.find(item =>
+                    item.textContent.trim() === targetValue
+                );
+                if (match) { match.click(); return 'option_selected'; }
+
+                // Broader search: any visible element with exact text
+                const allVisible = Array.from(document.querySelectorAll('*')).filter(el =>
+                    el.offsetParent !== null &&
+                    el.children.length === 0 &&
+                    el.textContent.trim() === targetValue
+                );
+                if (allVisible.length > 0) {
+                    allVisible[0].click();
+                    return 'text_match_selected';
+                }
+                return null;
+            }""", value)
+
+            if not option_clicked:
+                return {
+                    "status": "error",
+                    "message": f"Notice period dropdown opened but could not select '{value}'",
+                    "error_code": "BROWSER_ERROR",
+                }
+        elif notice_set == "select_set":
+            pass  # success via native select
+        else:
+            return {
+                "status": "error",
+                "message": "Could not find notice period dropdown in Career Profile modal",
+                "error_code": "BROWSER_ERROR",
+            }
+
+        await asyncio.sleep(BROWSER_DOM_SETTLE)
+        return {"status": "success"}
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to update noticePeriod: {type(e).__name__}: {e}",
+            "error_code": "BROWSER_ERROR",
+        }
+
+
+async def _update_current_ctc(page, value) -> dict:
+    """Update current CTC inside an already-open Career Profile modal."""
+    try:
+        filled = await _fill_ctc_input(page, "currentCtc", str(value), "current ctc")
+        if filled:
+            return {"status": "success"}
+        return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to update currentCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+async def _update_expected_ctc(page, value) -> dict:
+    """Update expected CTC inside an already-open Career Profile modal."""
+    try:
+        filled = await _fill_ctc_input(page, "expectedCtc", str(value), "expected ctc")
+        if filled:
+            return {"status": "success"}
+        return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+# Handler dispatch tables
+_STANDALONE_HANDLERS = {
+    "resumeHeadline": _update_headline,
+    "keySkills": _update_key_skills,
+}
+
+_CAREER_FIELD_HANDLERS = {
+    "noticePeriod": _update_notice_period,
+    "expectedCtc": _update_expected_ctc,
+    "currentCtc": _update_current_ctc,
+}
+
+_FIELD_HANDLERS = {**_STANDALONE_HANDLERS, **_CAREER_FIELD_HANDLERS}
+
+
+async def _open_career_profile_modal(page) -> str | None:
+    """Open the Career Profile edit modal. Returns edit method or None."""
+    edit_clicked = await page.evaluate("""() => {
+        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
+            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
+        );
+        // Strategy 1: find edit icon near "Career profile" or "Notice period" text
+        for (const icon of editIcons) {
+            const parent = icon.closest('div, section');
+            if (parent && (
+                parent.textContent.includes('Career profile') ||
+                parent.textContent.includes('career profile') ||
+                parent.textContent.includes('Notice period') ||
+                parent.textContent.includes('notice period') ||
+                parent.textContent.includes('Current CTC') ||
+                parent.textContent.includes('Expected CTC')
+            )) {
+                icon.click();
+                return 'career_profile_edit';
+            }
+        }
+        // Strategy 2: look for section with class containing "careerProfile"
+        for (const icon of editIcons) {
+            const section = icon.closest('[class*="careerProfile"], [class*="career-profile"], [class*="CareerProfile"]');
+            if (section) { icon.click(); return 'career_section_edit'; }
+        }
+        return null;
+    }""")
+    return edit_clicked
+
+
 async def _update_profile(
     fields: dict,
     notice_period: Optional[str] = None,
     expected_ctc: Optional[float] = None,
     current_ctc: Optional[float] = None,
 ) -> dict:
-    """Update Naukri profile fields via browser UI automation (internal helper)."""
+    """Update Naukri profile fields via browser UI automation (internal helper).
+
+    Dispatches to field-specific handlers:
+      - _update_headline / _update_key_skills: standalone modal per field
+      - _update_notice_period / _update_current_ctc / _update_expected_ctc:
+        share the Career Profile modal (opened once, saved once)
+    """
     # Merge convenience parameters into fields dict
     if notice_period is not None:
         fields["noticePeriod"] = notice_period
@@ -429,7 +891,7 @@ async def _update_profile(
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
-            await asyncio.sleep(3)
+            await asyncio.sleep(BROWSER_PAGE_LOAD)
 
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -445,294 +907,28 @@ async def _update_profile(
             page.on("response", on_response)
 
             try:
-                # --- Resume Headline ---
-                if "resumeHeadline" in fields:
-                    edit_clicked = await page.evaluate("""() => {
-                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
-                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
-                        );
-                        if (editIcons.length === 0) return null;
-                        for (const icon of editIcons) {
-                            const section = icon.closest('[class*="headline"], [class*="resumeHeadline"]');
-                            if (section) { icon.click(); return 'headline_edit'; }
-                        }
-                        for (const icon of editIcons) {
-                            const parent = icon.closest('div, section');
-                            if (parent && parent.textContent.includes('Resume headline')) {
-                                icon.click();
-                                return 'headline_parent';
-                            }
-                        }
-                        editIcons[0].click();
-                        return 'first_edit';
-                    }""")
+                # --- Standalone fields (each opens and saves its own modal) ---
+                for field_name in ("resumeHeadline", "keySkills"):
+                    if field_name not in fields:
+                        continue
+                    handler = _STANDALONE_HANDLERS[field_name]
+                    result = await handler(page, fields[field_name])
+                    if result.get("status") == "error":
+                        return result
+                    if result.get("status") == "success":
+                        # keySkills handler tracks whether anything actually changed
+                        if field_name == "keySkills" and not result.get("changed", True):
+                            pass  # no-op update, don't append
+                        else:
+                            ui_updated.append(field_name)
 
-                    if not edit_clicked:
-                        return {"status": "error", "message": "Could not find edit button for resume headline", "error_code": "BROWSER_ERROR"}
-
-                    await asyncio.sleep(2)
-
-                    # Find textarea in the modal and fill with new headline
-                    textarea = await page.query_selector(
-                        '[class*="modal"] textarea, [class*="dialog"] textarea, '
-                        '[role="dialog"] textarea, textarea[class*="headline"], '
-                        'textarea'
-                    )
-                    if textarea:
-                        await textarea.click()
-                        await textarea.fill("")
-                        await textarea.fill(fields["resumeHeadline"])
-                        await asyncio.sleep(0.5)
-                        ui_updated.append("resumeHeadline")
-                    else:
-                        return {"status": "error", "message": "Edit modal opened but textarea not found", "error_code": "NOT_FOUND"}
-
-                    # Click save
-                    save_result = await _click_save_modal(page)
-                    if not save_result:
-                        return {"status": "error", "message": "Edit modal opened but Save button not found", "error_code": "NOT_FOUND"}
-
-                    await asyncio.sleep(3)
-
-                # --- Key Skills ---
-                if "keySkills" in fields:
-                    # Navigate to key skills section and click edit
-                    edit_clicked = await page.evaluate("""() => {
-                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
-                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
-                        );
-                        for (const icon of editIcons) {
-                            const parent = icon.closest('div, section');
-                            if (parent && parent.textContent.includes('Key skills')) {
-                                icon.click();
-                                return 'skills_edit';
-                            }
-                        }
-                        return null;
-                    }""")
-
-                    if not edit_clicked:
-                        return {"status": "error", "message": "Could not find edit button for key skills", "error_code": "BROWSER_ERROR"}
-
-                    await asyncio.sleep(2)
-
-                    # Dismiss any chat/notification overlays blocking interaction
-                    await page.evaluate("""() => {
-                        for (const sel of ['.ltLayer', '.ltCont', '[class*="chatWidget"]',
-                                           '[class*="ChatWidget"]', '[class*="livechat"]']) {
-                            const el = document.querySelector(sel);
-                            if (el) el.style.display = 'none';
-                        }
-                    }""")
-                    await asyncio.sleep(0.5)
-
-                    # Read current skills from the hidden #chipsVal input
-                    current_skills_str = await page.evaluate("""() => {
-                        const hidden = document.querySelector('#chipsVal');
-                        return hidden ? hidden.value : '';
-                    }""")
-                    current_skills = [s.strip() for s in (current_skills_str or "").split(",") if s.strip()]
-                    current_lower = {s.lower(): s for s in current_skills}
-
-                    # Parse desired skills (full replacement set)
-                    desired_skills = [s.strip() for s in fields["keySkills"].split(",") if s.strip()]
-                    desired_lower = {s.lower(): s for s in desired_skills}
-
-                    # Validate 250 character limit before doing anything
-                    new_csv = ",".join(desired_skills)
-                    if len(new_csv) > 250:
-                        # Cancel the editor
-                        await page.evaluate("""() => {
-                            const lb = document.querySelector('.keySkillsEdit');
-                            if (lb) {
-                                const cancel = lb.querySelector('a');
-                                if (cancel && cancel.textContent.trim() === 'Cancel') cancel.click();
-                            }
-                        }""")
-                        return {
-                            "status": "error",
-                            "message": f"keySkills total length is {len(new_csv)} chars, exceeds 250 char limit. "
-                                       f"Reduce skills or shorten names. Current CSV: {new_csv}",
-                            "error_code": "VALIDATION_ERROR",
-                        }
-
-                    # Determine removals and additions
-                    to_remove = [current_lower[k] for k in current_lower if k not in desired_lower]
-                    to_add = [desired_lower[k] for k in desired_lower if k not in current_lower]
-
-                    logger.info(f"Skills update: current={current_skills}, desired={desired_skills}, "
-                                f"removing={to_remove}, adding={to_add}")
-
-                    # Remove skills: click the X on each chip to remove
-                    for skill in to_remove:
-                        removed = await page.evaluate("""(skillName) => {
-                            const container = document.querySelector('.chipsContainer');
-                            if (!container) return 'no_container';
-                            const chips = container.querySelectorAll('.chip');
-                            for (const chip of chips) {
-                                const txt = chip.querySelector('span.tagTxt');
-                                if (txt && txt.textContent.trim().toLowerCase() === skillName.toLowerCase()) {
-                                    const closeBtn = chip.querySelector('a.close');
-                                    if (closeBtn) { closeBtn.click(); return 'removed'; }
-                                }
-                            }
-                            return 'not_found';
-                        }""", skill)
-                        logger.info(f"Remove skill '{skill}': {removed}")
-                        await asyncio.sleep(0.3)
-
-                    # Add skills: create chip DOM elements and update #chipsVal
-                    if to_add:
-                        add_result = await page.evaluate("""(newSkills) => {
-                            const container = document.querySelector('.chipsContainer');
-                            if (!container) return 'no_container';
-                            const hiddenInput = document.querySelector('#chipsVal');
-                            if (!hiddenInput) return 'no_hidden_input';
-
-                            // Add chip DOM elements for each new skill
-                            for (const skill of newSkills) {
-                                const chip = document.createElement('div');
-                                chip.className = 'waves-effect chip';
-                                const dataId = skill + '_' + skill.toLowerCase().replace(/\\s+/g, '_');
-                                chip.setAttribute('data-id', dataId);
-                                chip.setAttribute('title', skill);
-
-                                const span = document.createElement('span');
-                                span.className = 'tagTxt';
-                                span.textContent = skill;
-                                chip.appendChild(span);
-
-                                const closeLink = document.createElement('a');
-                                closeLink.className = 'material-icons close';
-                                closeLink.href = 'javascript:void(0)';
-                                closeLink.textContent = 'Cross';
-                                chip.appendChild(closeLink);
-
-                                // Insert before the input wrapper
-                                const inputWrap = container.querySelector('.input-wrap, .inputWrap, [class*="input"]');
-                                if (inputWrap) {
-                                    container.insertBefore(chip, inputWrap);
-                                } else {
-                                    container.appendChild(chip);
-                                }
-                            }
-
-                            // Read current chips from DOM to rebuild the CSV
-                            const allChips = container.querySelectorAll('.chip span.tagTxt');
-                            const allSkills = [];
-                            for (const c of allChips) {
-                                const t = c.textContent.trim();
-                                if (t) allSkills.push(t);
-                            }
-                            const newValue = allSkills.join(',');
-
-                            // Use native setter to trigger React change detection
-                            const nativeSetter = Object.getOwnPropertyDescriptor(
-                                window.HTMLInputElement.prototype, 'value'
-                            ).set;
-                            nativeSetter.call(hiddenInput, newValue);
-                            hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
-                            hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-                            return 'added_' + newSkills.length;
-                        }""", to_add)
-                        logger.info(f"Add skills result: {add_result}")
-                    else:
-                        # Even if no additions, update #chipsVal to reflect removals
-                        if to_remove:
-                            await page.evaluate("""(newCsv) => {
-                                const hiddenInput = document.querySelector('#chipsVal');
-                                if (!hiddenInput) return;
-                                const nativeSetter = Object.getOwnPropertyDescriptor(
-                                    window.HTMLInputElement.prototype, 'value'
-                                ).set;
-                                nativeSetter.call(hiddenInput, newCsv);
-                                hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
-                                hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            }""", new_csv)
-
-                    # Set form chk attribute to "true" so save is accepted
-                    await page.evaluate("""() => {
-                        const form = document.querySelector('form[name="keySkillsForm"]');
-                        if (form) form.setAttribute('chk', 'true');
-                    }""")
-
-                    if to_remove or to_add:
-                        ui_updated.append("keySkills")
-
-                    # Click Save inside the .keySkillsEdit lightbox
-                    save_result = await page.evaluate("""() => {
-                        const lightbox = document.querySelector('.keySkillsEdit');
-                        if (!lightbox) return 'no_lightbox';
-                        const btns = lightbox.querySelectorAll('button');
-                        for (const btn of btns) {
-                            if (btn.textContent.trim() === 'Save') {
-                                btn.click();
-                                return 'save_clicked';
-                            }
-                        }
-                        return 'no_save_button';
-                    }""")
-
-                    if save_result != "save_clicked":
-                        return {"status": "error", "message": f"Skills updated in DOM but Save failed: {save_result}", "error_code": "BROWSER_ERROR"}
-
-                    await asyncio.sleep(3)
-
-                    # Verify: check if the editor closed (success) or validation error appeared
-                    post_save = await page.evaluate("""() => {
-                        const lightbox = document.querySelector('.keySkillsEdit');
-                        if (!lightbox) return 'closed';
-                        const style = window.getComputedStyle(lightbox);
-                        if (style.display === 'none') return 'closed';
-                        // Check for validation error message
-                        const errEl = lightbox.querySelector('.error, .errorMsg, [class*="error"]');
-                        if (errEl && errEl.textContent.trim()) return 'error: ' + errEl.textContent.trim();
-                        return 'still_open';
-                    }""")
-                    logger.info(f"Skills save post-check: {post_save}")
-
-                    if post_save.startswith("error:"):
-                        return {"status": "error", "message": f"Skills save validation failed: {post_save}", "error_code": "BROWSER_ERROR"}
-
-                # --- Notice Period / Expected CTC / Current CTC (Career Profile section) ---
-                # These three fields share the same "Career profile" edit modal on Naukri.
-                # We open the modal once and update whichever fields are requested.
-                # NOTE: Selectors are best-effort based on common Naukri UI patterns;
-                # they may need adjustment based on live browser testing.
+                # --- Career profile fields (share one modal) ---
                 career_fields = {
                     k: fields[k] for k in ("noticePeriod", "expectedCtc", "currentCtc")
                     if k in fields
                 }
                 if career_fields:
-                    # Open the Career Profile edit modal
-                    edit_clicked = await page.evaluate("""() => {
-                        const editIcons = Array.from(document.querySelectorAll('*')).filter(el =>
-                            el.children.length === 0 && el.textContent.trim() === 'editOneTheme'
-                        );
-                        // Strategy 1: find edit icon near "Career profile" or "Notice period" text
-                        for (const icon of editIcons) {
-                            const parent = icon.closest('div, section');
-                            if (parent && (
-                                parent.textContent.includes('Career profile') ||
-                                parent.textContent.includes('career profile') ||
-                                parent.textContent.includes('Notice period') ||
-                                parent.textContent.includes('notice period') ||
-                                parent.textContent.includes('Current CTC') ||
-                                parent.textContent.includes('Expected CTC')
-                            )) {
-                                icon.click();
-                                return 'career_profile_edit';
-                            }
-                        }
-                        // Strategy 2: look for section with class containing "careerProfile"
-                        for (const icon of editIcons) {
-                            const section = icon.closest('[class*="careerProfile"], [class*="career-profile"], [class*="CareerProfile"]');
-                            if (section) { icon.click(); return 'career_section_edit'; }
-                        }
-                        return null;
-                    }""")
-
+                    edit_clicked = await _open_career_profile_modal(page)
                     if not edit_clicked:
                         return {
                             "status": "error",
@@ -740,158 +936,23 @@ async def _update_profile(
                                        "(needed for noticePeriod/expectedCtc/currentCtc)",
                             "error_code": "BROWSER_ERROR",
                         }
+                    await asyncio.sleep(BROWSER_MODAL_APPEAR)
 
-                    await asyncio.sleep(2)
+                    for field_name in ("noticePeriod", "currentCtc", "expectedCtc"):
+                        if field_name not in career_fields:
+                            continue
+                        handler = _CAREER_FIELD_HANDLERS[field_name]
+                        result = await handler(page, career_fields[field_name])
+                        if result.get("status") == "error":
+                            return result
+                        if result.get("status") == "success":
+                            ui_updated.append(field_name)
 
-                    # --- Notice Period ---
-                    if "noticePeriod" in career_fields:
-                        try:
-                            VALID_NOTICE_PERIODS = {
-                                "Serving Notice Period",
-                                "15 Days or less",
-                                "1 Month",
-                                "2 Months",
-                                "3 Months",
-                                "More than 3 Months",
-                            }
-                            notice_val = career_fields["noticePeriod"]
-                            if notice_val not in VALID_NOTICE_PERIODS:
-                                return {
-                                    "status": "error",
-                                    "message": f"Invalid noticePeriod: '{notice_val}'. "
-                                               f"Valid options: {', '.join(sorted(VALID_NOTICE_PERIODS))}",
-                                    "error_code": "VALIDATION_ERROR",
-                                }
-
-                            # Try to find and set the notice period dropdown/select
-                            notice_set = await page.evaluate("""(targetValue) => {
-                                // Strategy 1: native <select> element
-                                const selectors = [
-                                    'select[name*="notice"]', 'select[name*="Notice"]',
-                                    '[class*="notice"] select', '[class*="Notice"] select',
-                                    '#noticePeriod', 'select[id*="notice"]', 'select[id*="Notice"]'
-                                ];
-                                for (const sel of selectors) {
-                                    const select = document.querySelector(sel);
-                                    if (select) {
-                                        // Find matching option
-                                        const options = Array.from(select.options);
-                                        const match = options.find(o =>
-                                            o.text.trim() === targetValue || o.value === targetValue
-                                        );
-                                        if (match) {
-                                            select.value = match.value;
-                                            select.dispatchEvent(new Event('change', {bubbles: true}));
-                                            return 'select_set';
-                                        }
-                                    }
-                                }
-
-                                // Strategy 2: custom dropdown (React/Naukri style)
-                                // Find the notice period label, then the dropdown trigger near it
-                                const labels = Array.from(document.querySelectorAll('label, span, div')).filter(el =>
-                                    el.textContent.trim().toLowerCase().includes('notice period') &&
-                                    el.children.length <= 2
-                                );
-                                for (const label of labels) {
-                                    const container = label.closest('div[class*="field"], div[class*="form"], div[class*="row"]');
-                                    if (container) {
-                                        // Look for a clickable dropdown trigger
-                                        const trigger = container.querySelector(
-                                            '[class*="dropdown"], [class*="select"], [class*="Dropdown"], ' +
-                                            '[class*="Select"], [role="listbox"], [role="combobox"]'
-                                        );
-                                        if (trigger) {
-                                            trigger.click();
-                                            return 'custom_dropdown_clicked';
-                                        }
-                                    }
-                                }
-                                return null;
-                            }""", career_fields["noticePeriod"])
-
-                            if notice_set == "custom_dropdown_clicked":
-                                # Wait for dropdown options to appear, then click the matching one
-                                await asyncio.sleep(1)
-                                option_clicked = await page.evaluate("""(targetValue) => {
-                                    // Look for dropdown options/list items
-                                    const items = Array.from(document.querySelectorAll(
-                                        '[class*="option"], [class*="Option"], [role="option"], ' +
-                                        'li[class*="dropdown"], li[class*="Dropdown"], ' +
-                                        'ul[class*="dropdown"] li, ul[class*="Dropdown"] li, ' +
-                                        '[class*="listItem"], [class*="list-item"]'
-                                    ));
-                                    const match = items.find(item =>
-                                        item.textContent.trim() === targetValue
-                                    );
-                                    if (match) { match.click(); return 'option_selected'; }
-
-                                    // Broader search: any visible element with exact text
-                                    const allVisible = Array.from(document.querySelectorAll('*')).filter(el =>
-                                        el.offsetParent !== null &&
-                                        el.children.length === 0 &&
-                                        el.textContent.trim() === targetValue
-                                    );
-                                    if (allVisible.length > 0) {
-                                        allVisible[0].click();
-                                        return 'text_match_selected';
-                                    }
-                                    return null;
-                                }""", career_fields["noticePeriod"])
-
-                                if option_clicked:
-                                    ui_updated.append("noticePeriod")
-                                else:
-                                    return {
-                                        "status": "error",
-                                        "message": f"Notice period dropdown opened but could not select '{notice_val}'",
-                                        "error_code": "BROWSER_ERROR",
-                                    }
-                            elif notice_set == "select_set":
-                                ui_updated.append("noticePeriod")
-                            else:
-                                return {
-                                    "status": "error",
-                                    "message": "Could not find notice period dropdown in Career Profile modal",
-                                    "error_code": "BROWSER_ERROR",
-                                }
-
-                            await asyncio.sleep(0.5)
-                        except Exception as e:
-                            return {
-                                "status": "error",
-                                "message": f"Failed to update noticePeriod: {type(e).__name__}: {e}",
-                                "error_code": "BROWSER_ERROR",
-                            }
-
-                    # --- Current CTC ---
-                    if "currentCtc" in career_fields:
-                        try:
-                            filled = await _fill_ctc_input(page, "currentCtc", str(career_fields["currentCtc"]), "current ctc")
-                            if filled:
-                                ui_updated.append("currentCtc")
-                            else:
-                                return {"status": "error", "message": "Could not find Current CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
-                        except Exception as e:
-                            return {"status": "error", "message": f"Failed to update currentCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-                    # --- Expected CTC ---
-                    if "expectedCtc" in career_fields:
-                        try:
-                            filled = await _fill_ctc_input(page, "expectedCtc", str(career_fields["expectedCtc"]), "expected ctc")
-                            if filled:
-                                ui_updated.append("expectedCtc")
-                            else:
-                                return {"status": "error", "message": "Could not find Expected CTC input in Career Profile modal", "error_code": "BROWSER_ERROR"}
-                        except Exception as e:
-                            return {"status": "error", "message": f"Failed to update expectedCtc: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-                    # Click save on the Career Profile modal
+                    # Click save on the Career Profile modal (shared save)
                     save_result = await _click_save_modal(page)
                     if not save_result:
                         return {"status": "error", "message": "Career Profile modal opened but Save button not found", "error_code": "NOT_FOUND"}
-
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(BROWSER_FORM_SAVE)
 
                 # Check for any remaining unsupported fields
                 all_browser_handled = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
@@ -1129,28 +1190,58 @@ async def naukri_profile(
     """
     # ── get ─────────────────────────────────────────────────────────────
     if action == "get":
-        return await _get_profile()
+        try:
+            return await _get_profile()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── update ──────────────────────────────────────────────────────────
     elif action == "update":
-        return await _update_profile(
-            fields=fields or {},
-            notice_period=notice_period,
-            expected_ctc=expected_ctc,
-            current_ctc=current_ctc,
-        )
+        try:
+            return await _update_profile(
+                fields=fields or {},
+                notice_period=notice_period,
+                expected_ctc=expected_ctc,
+                current_ctc=current_ctc,
+            )
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── audit ───────────────────────────────────────────────────────────
     elif action == "audit":
-        return await _audit_profile()
+        try:
+            return await _audit_profile()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── boost ───────────────────────────────────────────────────────────
     elif action == "boost":
-        return await _boost_visibility(randomize=randomize)
+        try:
+            return await _boost_visibility(randomize=randomize)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── dashboard ─────────────────────────────────────────────────────
     elif action == "dashboard":
-        return await _get_dashboard()
+        try:
+            return await _get_dashboard()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── targeting ───────────────────────────────────────────────────────
     elif action == "targeting":
@@ -1199,7 +1290,8 @@ async def naukri_profile(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"DFP targeting failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── unknown action ──────────────────────────────────────────────────
     else:

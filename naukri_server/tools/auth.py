@@ -7,7 +7,10 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
-from naukri_server.config import logger, ACTIVITY_LEVEL_API, NAUKRI_BASE
+from naukri_server.config import (
+    logger, ACTIVITY_LEVEL_API, NAUKRI_BASE,
+    BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD, BROWSER_PAGE_SETTLE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +20,7 @@ from naukri_server.config import logger, ACTIVITY_LEVEL_API, NAUKRI_BASE
 async def _login(page, method: str, email: Optional[str], password: Optional[str]) -> dict:
     """Handle login flow via Google SSO or email/password."""
     await page_goto(page, f"{NAUKRI_BASE}/nlogin/login")
-    await asyncio.sleep(2)
+    await asyncio.sleep(BROWSER_PAGE_LOAD)
 
     if "/nlogin" not in page.url:
         # Already logged in
@@ -50,7 +53,7 @@ async def _login(page, method: str, email: Optional[str], password: Optional[str
 
         # Wait up to 30s for Google SSO to complete
         for _ in range(30):
-            await asyncio.sleep(1)
+            await asyncio.sleep(BROWSER_PAGE_SETTLE)
             current_url = page.url
             if "/nlogin" not in current_url and "accounts.google" not in current_url:
                 await browser.token_manager.extract()
@@ -74,7 +77,7 @@ async def _login(page, method: str, email: Optional[str], password: Optional[str
         except Exception as e:
             return {"status": "error", "message": f"Login form error: {e}", "error_code": "BROWSER_ERROR"}
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(BROWSER_FORM_SAVE)
 
         otp_field = await page.query_selector("input#otp")
         if otp_field:
@@ -101,7 +104,7 @@ async def _verify_otp(page, otp: str) -> dict:
     try:
         await page_safe_fill(page, "input#otp", otp)
         await page.click("button[type='submit']")
-        await asyncio.sleep(3)
+        await asyncio.sleep(BROWSER_FORM_SAVE)
 
         if "/nlogin" not in page.url:
             await browser.token_manager.extract()

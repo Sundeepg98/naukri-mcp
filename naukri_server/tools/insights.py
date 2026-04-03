@@ -6,9 +6,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get
+from naukri_server.api import api_get, NaukriAPIError
 from naukri_server.cache import _load_cache, _cache_lock
-from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE
+from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE, logger
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.utils import TtlCache
 
@@ -369,7 +369,7 @@ async def _get_profile_prompts() -> dict:
             for _ in range(10):
                 if captured.get("data"):
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(BROWSER_DOM_SETTLE)
         finally:
             page.remove_listener("response", _on_response)
 
@@ -516,37 +516,52 @@ async def naukri_insights(
     if insight_type == "applications":
         try:
             return await _application_insights(days=days)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to analyze applications: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── salary ────────────────────────────────────────────────────────
     elif insight_type == "salary":
         try:
             return await _salary_position(designation=designation)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to analyze salary position: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── cached_answers ────────────────────────────────────────────────
     elif insight_type == "cached_answers":
         try:
             return await _cached_answers(action=action or "list", key=key, new_answer=new_answer)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to manage cached answers: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── match_analytics ───────────────────────────────────────────────
     elif insight_type == "match_analytics":
         from naukri_server.tools.tracking import _get_match_analytics
         try:
             return await _get_match_analytics(days=days)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Match analytics failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── match_quality ────────────────────────────────────────────────
     elif insight_type == "match_quality":
         try:
             return await _match_quality(days=days)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Match quality failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── skill_gap ───────────────────────────────────────────────────
     elif insight_type == "skill_gap":
@@ -557,8 +572,11 @@ async def naukri_insights(
                 sample_size=sample_size, include_assessments=include_assessments,
                 timeout_seconds=timeout_seconds,
             )
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Skill gap analysis failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── salary_benchmark ─────────────────────────────────────────────
     elif insight_type == "salary_benchmark":
@@ -571,22 +589,31 @@ async def naukri_insights(
                 sample_size=sample_size, freshness=freshness,
                 timeout_seconds=timeout_seconds,
             )
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Salary benchmark failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── taxonomy ──────────────────────────────────────────────────────
     elif insight_type == "taxonomy":
         try:
             return await _get_taxonomy()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Taxonomy fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── profile_prompts ──────────────────────────────────────────────
     elif insight_type == "profile_prompts":
         try:
             return await _get_profile_prompts()
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Profile prompts failed: {type(e).__name__}: {e}", "error_code": "BROWSER_ERROR"}
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     # ── unknown insight_type ──────────────────────────────────────────
     else:

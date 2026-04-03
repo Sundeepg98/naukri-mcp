@@ -13,6 +13,7 @@ from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
+    BROWSER_MODAL_APPEAR,
 )
 from naukri_server.tools.tracking import (
     _load_json, _save_json, _applications_lock, _saved_jobs_lock,
@@ -262,7 +263,7 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                 await asyncio.wait_for(response_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning("Browser fetch timed out after %ss for: %s", timeout, page_url)
-            await asyncio.sleep(2)
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)
         finally:
             page.remove_listener("response", on_response)
 
@@ -288,7 +289,7 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
         while current_page <= max_pages:
             url = page_url if current_page == 1 else f"{page_url}?pageNo={current_page}"
             await page_goto(page, url)
-            await asyncio.sleep(2)  # let server-rendered content settle
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)  # let server-rendered content settle
 
             # Detect login redirect
             current_url = page.url

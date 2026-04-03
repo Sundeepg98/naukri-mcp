@@ -6,7 +6,11 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
 from naukri_server.api import api_get, api_post, NaukriAPIError
-from naukri_server.config import NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API, PROFILE_API, WIDGET_HEADERS
+from naukri_server.config import (
+    NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API,
+    PROFILE_API, WIDGET_HEADERS,
+    BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE,
+)
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
 
@@ -118,7 +122,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get settings failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "update":
         updated_fields = []
@@ -138,7 +143,7 @@ async def naukri_settings(
             try:
                 async with browser.page_pool.acquire() as page:
                     await page_goto(page, SETTINGS_PAGE)
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(BROWSER_PAGE_LOAD)
 
                     if "/nlogin" in page.url:
                         return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
@@ -165,7 +170,7 @@ async def naukri_settings(
                         if not clicked:
                             return {"status": "error", "message": f"Radio button #{radio_id} not found on settings page", "error_code": "NOT_FOUND"}
 
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(BROWSER_MODAL_APPEAR)
 
                         # After clicking radio, find and click the SELECT button in that row
                         select_clicked = await page.evaluate("""(radioId) => {
@@ -181,7 +186,7 @@ async def naukri_settings(
                             return 'row_clicked';
                         }""", radio_id)
 
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(BROWSER_FORM_SAVE)
                     finally:
                         page.remove_listener("response", on_response)
 
@@ -267,7 +272,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Failed to update settings: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "blocked_companies":
         try:
@@ -290,7 +296,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Get blocked companies failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "check_email":
         try:
@@ -308,7 +315,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Check email verification failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "visibility":
         try:
@@ -368,7 +376,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Visibility fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "notification_prefs":
         try:
@@ -419,7 +428,8 @@ async def naukri_settings(
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "message": f"Notification prefs fetch failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            logger.exception("Unexpected error in %s", action)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
     elif action == "subscription":
         from naukri_server.tools.subscription import _get_subscription_status

@@ -10,6 +10,7 @@ from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
     AMBITIONBOX_BASE,
+    BROWSER_MODAL_APPEAR,
     CHROME_PROFILE,
     DASHBOARD_API,
     NAUKRI_BASE,
@@ -129,7 +130,7 @@ async def _check_ambitionbox() -> dict:
     try:
         async with browser.page_pool.acquire() as page:
             await page_goto(page, f"{AMBITIONBOX_BASE}/salaries/google-salaries", wait="networkidle")
-            await asyncio.sleep(2)
+            await asyncio.sleep(BROWSER_MODAL_APPEAR)
             next_data = await page.evaluate("""
                 () => {
                     const el = document.getElementById('__NEXT_DATA__');
