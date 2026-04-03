@@ -93,7 +93,7 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
             if detail is None or (isinstance(detail, dict) and detail.get("status") == "error"):
                 continue
 
-            fit = _score_job(detail, profile_result)
+            fit = _score_job(detail, profile_result, is_agent_eligible=detail.get("is_agent_eligible", False))
             fit_score = fit.get("overall_score", 0)
 
             if fit_score >= min_fit_score:
@@ -352,7 +352,7 @@ async def naukri_smart_apply(
         pass
 
     # Compute fit — use tags-or-skills fallback, pass enrichment data
-    fit = _score_job(job_result, profile_result)
+    fit = _score_job(job_result, profile_result, is_agent_eligible=job_result.get("is_agent_eligible", False))
 
     result = {
         "status": "success",

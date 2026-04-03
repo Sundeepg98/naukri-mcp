@@ -261,6 +261,21 @@ async def _get_company_slug(group_id: str) -> dict:
             }
 
 
+async def _batch_get_slugs(group_ids: list[str]) -> dict:
+    """Convert multiple Naukri group_ids to AmbitionBox slugs."""
+    results = {}
+    for gid in group_ids:
+        try:
+            result = await _get_company_slug(group_id=gid)
+            if result.get("status") == "success":
+                results[gid] = result.get("slug") or result.get("company_slug") or derive_slug(gid)
+            else:
+                results[gid] = None
+        except Exception:
+            results[gid] = None
+    return {"status": "success", "slugs": results, "count": len(results)}
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers (not MCP tools — used by the unified follow tool)
 # ---------------------------------------------------------------------------
@@ -339,13 +354,14 @@ async def naukri_company(
       - "search": Search companies by name/industry (requires keyword)
       - "jobs": Get job listings for a specific company (requires group_id)
       - "slug": Convert group_id to AmbitionBox company slug (requires group_id)
+      - "batch_slugs": Convert multiple group_ids to AmbitionBox slugs (requires group_ids as comma-separated string)
       - "research": Comprehensive company research — jobs, salary, reviews, interviews (requires keyword)
       - "follow_status": Check follow status for companies (requires group_id or group_ids)
       - "follow": Follow companies (requires group_id or group_ids)
       - "unfollow": Unfollow companies (requires group_id or group_ids)
 
     Args:
-        action: "search" | "jobs" | "slug" | "research" | "follow_status" | "follow" | "unfollow"
+        action: "search" | "jobs" | "slug" | "batch_slugs" | "research" | "follow_status" | "follow" | "unfollow"
         keyword: Company name or industry keyword (required for search, research)
         group_id: Company group ID from search results (required for jobs, slug; also works for follow actions)
         group_ids: List of company group IDs for batch follow actions
@@ -361,6 +377,7 @@ async def naukri_company(
         - search: {status, keyword, page, total, count, companies: [...]}
         - jobs: {status, group_id, page, total, count, jobs: [...]}
         - slug: {status, group_id, company_slug, company_name}
+        - batch_slugs: {status, slugs: {group_id: slug_or_null, ...}, count}
         - research: {status, company_name, slug, jobs, salary, reviews, interviews, errors?}
         - follow_status: {status, followed: [...ids...], not_followed: [...ids...]}
         - follow/unfollow: {status, action, followed/unfollowed: [...ids...], errors?}
@@ -399,6 +416,18 @@ async def naukri_company(
         except Exception as e:
             return {"status": "error", "message": f"Get company slug failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
+    # ── batch_slugs ────────────────────────────────────────────────────
+    elif action == "batch_slugs":
+        if not group_id:
+            return {"status": "error", "message": "group_id is required for action='batch_slugs' (comma-separated group IDs).", "error_code": "VALIDATION_ERROR"}
+        ids = [g.strip() for g in group_id.split(",") if g.strip()]
+        if not ids:
+            return {"status": "error", "message": "No valid group IDs provided.", "error_code": "VALIDATION_ERROR"}
+        try:
+            return await _batch_get_slugs(ids)
+        except Exception as e:
+            return {"status": "error", "message": f"Batch slug conversion failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
     # ── research ────────────────────────────────────────────────────────
     elif action == "research":
         if not keyword:
@@ -436,7 +465,7 @@ async def naukri_company(
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, research, follow_status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, batch_slugs, research, follow_status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------

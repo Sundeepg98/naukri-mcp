@@ -119,6 +119,7 @@ async def naukri_auto_hunt(
                 profile_expected_ctc=profile_expected_ctc,
                 experience_min=job.get("experience_min"),
                 experience_max=job.get("experience_max"),
+                is_agent_eligible=job.get("is_agent_eligible"),
             )
 
             if fit["overall_score"] >= min_fit_score:

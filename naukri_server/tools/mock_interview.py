@@ -10,6 +10,9 @@ from naukri_server.config import (
     MOCK_INTERVIEW_OTHER_TOPICS_API, MOCK_INTERVIEW_QUESTION_API,
 )
 
+_POLL_DELAY = 3            # Seconds between polling attempts
+_MAX_POLL_ATTEMPTS = 5     # Max polling iterations
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers (not MCP tools — used by the unified tool)
@@ -133,7 +136,7 @@ async def _start_interview(job_id: str) -> dict:
         }
 
     # Step 2: Fetch first question (poll up to 5 times)
-    for attempt in range(5):
+    for attempt in range(_MAX_POLL_ATTEMPTS):
         q_resp = await api_post(
             MOCK_INTERVIEW_QUESTION_API,
             body={"testId": test_id, "topicId": topic_id, "questionId": "", "answer": ""},
@@ -156,7 +159,7 @@ async def _start_interview(job_id: str) -> dict:
                 "company_details": company_info,
             }
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(_POLL_DELAY)
 
     return {
         "status": "generating",
@@ -256,7 +259,7 @@ async def _interview_prep(job_id: str) -> dict:
 
 async def _answer_question(test_id: str, topic_id: str, question_id: str, answer: str) -> dict:
     """Submit an answer and get the next question or completion status."""
-    for attempt in range(5):
+    for attempt in range(_MAX_POLL_ATTEMPTS):
         resp = await api_post(
             MOCK_INTERVIEW_QUESTION_API,
             body={
@@ -287,7 +290,7 @@ async def _answer_question(test_id: str, topic_id: str, question_id: str, answer
             # No more questions — complete
             return {"status": "complete", "message": "Mock interview complete! Use action='history' to see results."}
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(_POLL_DELAY)
 
     return {"status": "generating", "message": "Next question still generating. Retry in ~10 seconds."}
 

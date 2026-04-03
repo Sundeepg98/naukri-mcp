@@ -71,6 +71,10 @@ def _extract_phrases(text: str) -> set:
     return phrases
 
 
+_MIN_KEYWORD_LEN = 3       # Minimum characters for keyword gaps
+_MIN_EXP_OVERLAP = 3       # Minimum keyword overlap for experience emphasis
+
+
 async def _tailor_resume(
     job_id: str,
     timeout_seconds: int = 120,
@@ -181,7 +185,7 @@ async def _tailor_resume(
             emp_company = emp.get("organization", "") or ""
             emp_keywords = _extract_keywords(emp_desc)
             overlap = job_keywords & emp_keywords
-            if overlap and len(overlap) >= 3:
+            if overlap and len(overlap) >= _MIN_EXP_OVERLAP:
                 experience_emphasis.append({
                     "role": f"{emp_designation} at {emp_company}",
                     "relevant_keywords": sorted(list(overlap))[:10],
@@ -203,7 +207,7 @@ async def _tailor_resume(
         normalized_profile = {normalize_skill(k) for k in profile_keywords} | extended_keywords
         keyword_gaps = sorted([k for k in raw_gaps if normalize_skill(k) not in normalized_profile])
         # Filter to only meaningful gaps (3+ chars, appear significant)
-        keyword_gaps = [k for k in keyword_gaps if len(k) >= 3][:20]
+        keyword_gaps = [k for k in keyword_gaps if len(k) >= _MIN_KEYWORD_LEN][:20]
 
         # Also check for technical phrases missing
         profile_lower = profile_text.lower()

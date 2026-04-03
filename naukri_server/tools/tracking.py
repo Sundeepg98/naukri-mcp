@@ -780,6 +780,10 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
         if any(j.get("job_id") == job_id for j in saved):
             return {"status": "success", "action": "already_saved", "job_id": job_id}
 
+        # Cross-file warning: check if already applied
+        apps = _load_json(APPLICATIONS_FILE)
+        applied_match = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+
         saved.append({
             "job_id": job_id,
             "title": title,
@@ -793,7 +797,7 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
     if sync_to_naukri:
         synced_remote = await _push_save_to_naukri(job_id)
 
-    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote}
+    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote, "already_applied": bool(applied_match)}
 
 
 async def _sync_saved_jobs_from_naukri() -> dict:
