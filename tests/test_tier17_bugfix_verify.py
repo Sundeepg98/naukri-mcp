@@ -192,7 +192,7 @@ class TestSilentExceptionLogging:
 
     @pytest.mark.asyncio
     async def test_auto_hunt_logs_crossref_exception(self):
-        """When local tracking load raises, auto_hunt logs via logger.debug."""
+        """When local tracking load raises, auto_hunt logs via logger.warning."""
         from naukri_server.tools.auto_hunt import naukri_auto_hunt
 
         fake_jobs = [
@@ -217,10 +217,10 @@ class TestSilentExceptionLogging:
 
             result = await naukri_auto_hunt(keywords="python", timeout_seconds=10)
 
-        # logger.debug must have been called with the exception info
-        mock_logger.debug.assert_called()
-        call_args_str = str(mock_logger.debug.call_args)
-        assert "disk error" in call_args_str or "Scoring failed" in call_args_str
+        # logger.warning must have been called with the exception info
+        mock_logger.warning.assert_called()
+        call_args_str = str(mock_logger.warning.call_args)
+        assert "disk error" in call_args_str or "cross-ref" in call_args_str
 
     @pytest.mark.asyncio
     async def test_compare_logs_crossref_exception(self):

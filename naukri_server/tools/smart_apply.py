@@ -69,7 +69,12 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
                 return None
             async with sem:
                 try:
-                    return await naukri_get_job(job_id_or_url=job_id)
+                    return await asyncio.wait_for(
+                        naukri_get_job(job_id_or_url=job_id), timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    errors.append(f"job {job_id}: detail fetch timed out (30s)")
+                    return None
                 except Exception as e:
                     errors.append(f"job {job_id}: {e}")
                     return None

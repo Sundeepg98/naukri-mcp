@@ -92,7 +92,7 @@ async def naukri_auto_hunt(
                 local_applied_ids = {str(a.get("job_id")) for a in local_apps}
             jobs = [j for j in jobs if str(j.get("job_id")) not in local_applied_ids]
         except Exception as e:
-            logger.debug("Scoring failed for job cross-ref: %s", e)
+            logger.warning("Job cross-ref failed — duplicate detection may be incomplete: %s", e)
 
         if not jobs:
             return {"status": "success", "jobs_found": pre_filter_count,

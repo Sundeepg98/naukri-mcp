@@ -64,6 +64,7 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "company_id": job.get("companyId"),
             "is_exclusive": job.get("exclusive", False),
             "freshness_color": job.get("footerPlaceholderColor"),
+            "is_agent_eligible": job.get("agentEligible", False) or job.get("isAgentEligible", False),
         })
         # Structured salary detail from bulk fetch API — add raw fields if available
         if isinstance(salary, dict):

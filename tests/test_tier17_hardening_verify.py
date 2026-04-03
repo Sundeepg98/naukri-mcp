@@ -68,7 +68,10 @@ class TestBackoff502SingleRetry:
             result = await _api_request("GET", "/test-path")
 
         assert result == {"ok": True}
-        mock_sleep.assert_called_once_with(BACKOFF_BASE * (2 ** 0))  # 1.0
+        mock_sleep.assert_called_once()
+        actual_delay = mock_sleep.call_args[0][0]
+        # Jittered: BACKOFF_BASE * 2^0 * (0.5..1.5)
+        assert BACKOFF_BASE * 0.5 <= actual_delay <= BACKOFF_BASE * 1.5
 
 
 class TestBackoff503TwiceIncreasingDelays:
@@ -98,10 +101,12 @@ class TestBackoff503TwiceIncreasingDelays:
 
         assert result == {"result": "ok"}
         assert mock_sleep.call_count == 2
-        # First retry: _attempt=0 -> delay = BACKOFF_BASE * 2**0 = 1.0
-        assert mock_sleep.call_args_list[0][0][0] == BACKOFF_BASE * (2 ** 0)  # 1.0
-        # Second retry: _attempt=1 -> delay = BACKOFF_BASE * 2**1 = 2.0
-        assert mock_sleep.call_args_list[1][0][0] == BACKOFF_BASE * (2 ** 1)  # 2.0
+        # First retry: _attempt=0 -> delay = BACKOFF_BASE * 2^0 * jitter(0.5..1.5)
+        d0 = mock_sleep.call_args_list[0][0][0]
+        assert BACKOFF_BASE * 0.5 <= d0 <= BACKOFF_BASE * 1.5
+        # Second retry: _attempt=1 -> delay = BACKOFF_BASE * 2^1 * jitter(0.5..1.5)
+        d1 = mock_sleep.call_args_list[1][0][0]
+        assert BACKOFF_BASE * 2 * 0.5 <= d1 <= BACKOFF_BASE * 2 * 1.5
 
 
 class TestBackoff504ExhaustsRetries:

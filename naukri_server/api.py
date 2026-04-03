@@ -4,6 +4,7 @@ API helpers — aiohttp-based GET/POST/PUT/DELETE for Naukri REST endpoints.
 
 import asyncio
 import json
+import random
 from functools import wraps
 from urllib.parse import urlencode
 
@@ -199,9 +200,9 @@ async def _api_request(method: str, path: str, params: dict = None,
                 return await _api_request(method, path, params, body,
                                           extra_headers, _attempt=_attempt + 1)
 
-            # Transient server errors — exponential backoff retry
+            # Transient server errors — exponential backoff with jitter
             if resp.status in RETRIABLE_STATUSES and resp.status != 429 and _attempt < API_MAX_RETRIES:
-                delay = API_BACKOFF_BASE * (2 ** _attempt)
+                delay = API_BACKOFF_BASE * (2 ** _attempt) * (0.5 + random.random())
                 api_metrics.retries += 1
                 logger.info("Transient error %s, retrying in %.1fs (attempt %d)...", resp.status, delay, _attempt + 1)
                 await asyncio.sleep(delay)
@@ -212,7 +213,7 @@ async def _api_request(method: str, path: str, params: dict = None,
             _raise_api_error(resp.status, text)
     except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
         if _attempt < API_MAX_RETRIES:
-            delay = API_BACKOFF_BASE * (2 ** _attempt)
+            delay = API_BACKOFF_BASE * (2 ** _attempt) * (0.5 + random.random())
             api_metrics.retries += 1
             logger.info("Transport error (%s), retrying in %.1fs (attempt %d)...",
                         type(e).__name__, delay, _attempt + 1)

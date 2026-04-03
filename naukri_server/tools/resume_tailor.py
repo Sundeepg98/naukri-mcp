@@ -57,7 +57,15 @@ def _extract_phrases(text: str) -> set:
                               r'rest api|micro\s*services?|distributed systems?|'
                               r'big data|real time|event driven|'
                               r'problem solving|communication skills|'
-                              r'agile|scrum|kanban|sprint)',
+                              r'agile|scrum|kanban|sprint|'
+                              r'large language model|vector database|prompt engineering|'
+                              r'retrieval augmented generation|generative ai|gen ai|'
+                              r'agentic ai|llm ops|model context protocol|'
+                              r'system design|low level design|high level design|'
+                              r'design patterns?|clean architecture|domain driven|'
+                              r'serverless|infrastructure as code|site reliability|'
+                              r'api gateway|message queue|event sourcing|'
+                              r'graph ql|web socket|service mesh)',
                               clean.lower()):
         phrases.add(match.group(0))
     return phrases
