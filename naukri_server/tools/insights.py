@@ -69,6 +69,72 @@ async def _get_taxonomy() -> dict:
     return await _taxonomy_cache.get(_fetch)
 
 
+async def _conversion_funnel(days: int = 30) -> dict:
+    """Analyze the application-to-interview conversion funnel.
+
+    Counts total applications, breaks down by status, identifies which
+    companies respond most and which are "dead zones" (3+ applies, 0 responses).
+
+    Args:
+        days: Number of days to analyze (default 30)
+
+    Returns:
+        {status, days, total_applied, funnel, conversion_rate,
+         top_responsive_companies, dead_zones}
+    """
+    if days < 1:
+        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    # Filter by date
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    recent = [a for a in apps if a.get("applied_at", "") >= cutoff]
+
+    total = len(recent)
+    if total == 0:
+        return {
+            "status": "success",
+            "days": days,
+            "total_applied": 0,
+            "funnel": {},
+            "conversion_rate": 0,
+            "top_responsive_companies": [],
+            "dead_zones": [],
+        }
+
+    by_status = Counter(a.get("status", "unknown") for a in recent)
+
+    # Company response rates
+    by_company: dict[str, dict] = {}
+    for a in recent:
+        co = a.get("company", "Unknown")
+        if co not in by_company:
+            by_company[co] = {"applied": 0, "responded": 0}
+        by_company[co]["applied"] += 1
+        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
+            by_company[co]["responded"] += 1
+
+    # Sort by response rate
+    responsive = sorted(
+        [{"company": k, **v, "rate": round(v["responded"] / v["applied"] * 100)}
+         for k, v in by_company.items() if v["applied"] >= 2],
+        key=lambda x: -x["rate"]
+    )
+
+    interviews = by_status.get("interview", 0)
+
+    return {
+        "status": "success",
+        "days": days,
+        "total_applied": total,
+        "funnel": dict(by_status),
+        "conversion_rate": round(interviews / total * 100, 1) if total else 0,
+        "top_responsive_companies": responsive[:10],
+        "dead_zones": [c for c in responsive if c["rate"] == 0 and c["applied"] >= 3],
+    }
+
+
 async def _application_insights(days: int = 30) -> dict:
     """Analyze application history for patterns and insights."""
     if days < 1:
@@ -482,9 +548,10 @@ async def naukri_insights(
       - "salary_benchmark": Benchmark your salary against market for a given role
       - "taxonomy": Get Naukri's job taxonomy hierarchy (37 departments → 167 role categories → 1461 roles) with synonyms. Cached for 24h.
       - "profile_prompts": Fetch CCS widget state keys to identify pending profile completion actions (salary breakup, locations, etc.). Uses browser cookies.
+      - "conversion_funnel": Analyze application-to-interview conversion funnel — status breakdown, company response rates, and dead zones (companies with 3+ applies and 0 responses)
 
     Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts"
+        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts" | "conversion_funnel"
         action: For cached_answers only — "list" | "update" | "delete" (default "list")
         key: For cached_answers update/delete — the cache key
         new_answer: For cached_answers update — the new answer value
@@ -510,6 +577,7 @@ async def naukri_insights(
         - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
         - taxonomy: {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories: [{id, label, roles: [{id, label, synonyms}]}]}]}
         - profile_prompts: {status, source, pending_count, completed_count, pending_prompts: [{field, action, impact, reason}], completed_prompts, all_state_keys, cache_ttl_seconds, widget_sections_count}
+        - conversion_funnel: {status, days, total_applied, funnel, conversion_rate, top_responsive_companies: [{company, applied, responded, rate}], dead_zones: [{company, applied, responded, rate}]}
         - {status: "error", message} on failure
     """
     # ── applications ──────────────────────────────────────────────────
@@ -615,6 +683,16 @@ async def naukri_insights(
             logger.exception("Unexpected error in %s", insight_type)
             return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
+    # ── conversion_funnel ─────────────────────────────────────────────
+    elif insight_type == "conversion_funnel":
+        try:
+            return await _conversion_funnel(days=days)
+        except NaukriAPIError as e:
+            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        except Exception as e:
+            logger.exception("Unexpected error in %s", insight_type)
+            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+
     # ── unknown insight_type ──────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown insight_type '{insight_type}'. Use: applications, salary, cached_answers, match_analytics, match_quality, skill_gap, salary_benchmark, taxonomy, profile_prompts, conversion_funnel", "error_code": "VALIDATION_ERROR"}

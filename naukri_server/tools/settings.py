@@ -11,6 +11,7 @@ from naukri_server.config import (
     PROFILE_API, WIDGET_HEADERS,
     BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE,
 )
+from naukri_server.error_handler import handle_tool_action
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
 
@@ -73,7 +74,7 @@ async def naukri_settings(
         Varies by action. All include {status: "success"|"error", ...}
     """
     if action == "get":
-        try:
+        async def _get_settings():
             data = await api_get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
 
             sections = data if isinstance(data, list) else data.get("sections", data.get("settings", []))
@@ -119,11 +120,7 @@ async def naukri_settings(
                 "settings": settings,
                 **consent_fields,
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_get_settings, "settings.get")
 
     elif action == "update":
         updated_fields = []
@@ -208,7 +205,7 @@ async def naukri_settings(
                 }
 
         # --- Other settings: try API POST with full settings body ---
-        try:
+        async def _update_other_settings():
             body = {}
 
             if recommended_job_frequency is not None:
@@ -269,14 +266,10 @@ async def naukri_settings(
             if jss_result is not None:
                 result.update(jss_result)
             return result
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_update_other_settings, "settings.update")
 
     elif action == "blocked_companies":
-        try:
+        async def _blocked_companies():
             data = await api_get(BLOCKED_COMPANIES_API)
             companies_raw = data if isinstance(data, list) else data.get("blockedCompanies", data.get("companies", []))
 
@@ -293,14 +286,10 @@ async def naukri_settings(
                 "count": len(companies),
                 "companies": companies,
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_blocked_companies, "settings.blocked_companies")
 
     elif action == "check_email":
-        try:
+        async def _check_email():
             # The /mail-verification endpoint returns 405. Email/mobile verification
             # status is available in the profile API's user object instead.
             data = await api_get(PROFILE_API, params={"expand_level": "1"})
@@ -312,14 +301,10 @@ async def naukri_settings(
                 "email": user.get("email", user.get("username", "")),
                 "mobile": user.get("mobile", ""),
             }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_check_email, "settings.check_email")
 
     elif action == "visibility":
-        try:
+        async def _visibility():
             data = await api_get(PROFILE_API, params={"expand_level": "4"})
 
             # resdexVisibility lives at top-level, inside profile[0], or inside user
@@ -373,14 +358,10 @@ async def naukri_settings(
                     "visibility": {},
                     "api_top_keys": list(data.keys())[:20],
                 }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_visibility, "settings.visibility")
 
     elif action == "notification_prefs":
-        try:
+        async def _notification_prefs():
             data = await api_get(PROFILE_API, params={"expand_level": "4"})
 
             # communicationSettings can be at top level, inside profile[0], or inside user
@@ -425,11 +406,7 @@ async def naukri_settings(
                     "notification_prefs": {},
                     "api_top_keys": list(data.keys())[:20],
                 }
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(_notification_prefs, "settings.notification_prefs")
 
     elif action == "subscription":
         from naukri_server.tools.subscription import _get_subscription_status

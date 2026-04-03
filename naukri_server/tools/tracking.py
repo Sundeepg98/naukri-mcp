@@ -512,6 +512,97 @@ async def _application_follow_up(
     return result
 
 
+async def _draft_follow_up(job_id: str) -> dict:
+    """Generate a follow-up message draft for a stale application."""
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    if not app:
+        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
+
+    company = app.get("company", "the company")
+    title = app.get("title", "the position")
+    applied_at = app.get("applied_at", "")
+
+    # Parse date for message
+    try:
+        applied_date = datetime.fromisoformat(applied_at.replace("+00:00", "")).strftime("%B %d, %Y")
+    except Exception:
+        applied_date = "recently"
+
+    # Calculate days since applied
+    try:
+        delta = datetime.now(timezone.utc) - datetime.fromisoformat(applied_at)
+        days_ago = delta.days
+    except Exception:
+        days_ago = 0
+
+    draft = (
+        f"Hi,\n\n"
+        f"I applied for the {title} position at {company} on {applied_date} "
+        f"({days_ago} days ago). I remain very interested in this opportunity "
+        f"and would love to discuss how my experience aligns with the role.\n\n"
+        f"Would you be available for a brief conversation? I'm happy to work "
+        f"around your schedule.\n\n"
+        f"Thank you for your time.\n"
+        f"Best regards"
+    )
+
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "company": company,
+        "title": title,
+        "days_since_applied": days_ago,
+        "draft_message": draft,
+        "suggested_subject": f"Follow-up: {title} Application at {company}",
+    }
+
+
+async def _recruiter_history() -> dict:
+    """Aggregate per-recruiter communication history from applications + inbox."""
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    # Group by company
+    by_company: dict = {}
+    for a in apps:
+        co = a.get("company", "Unknown")
+        if co not in by_company:
+            by_company[co] = {
+                "company": co,
+                "applications": 0,
+                "statuses": [],
+                "first_applied": None,
+                "last_applied": None,
+                "has_response": False,
+            }
+        entry = by_company[co]
+        entry["applications"] += 1
+        entry["statuses"].append(a.get("status", "unknown"))
+
+        applied_at = a.get("applied_at", "")
+        if not entry["first_applied"] or applied_at < entry["first_applied"]:
+            entry["first_applied"] = applied_at
+        if not entry["last_applied"] or applied_at > entry["last_applied"]:
+            entry["last_applied"] = applied_at
+
+        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
+            entry["has_response"] = True
+
+    # Sort by most applications first
+    companies = sorted(by_company.values(), key=lambda x: -x["applications"])
+
+    return {
+        "status": "success",
+        "total_companies": len(companies),
+        "responsive_count": sum(1 for c in companies if c["has_response"]),
+        "unresponsive_count": sum(1 for c in companies if not c["has_response"]),
+        "companies": companies[:20],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Unified MCP tool for application tracking
 # ---------------------------------------------------------------------------
@@ -546,7 +637,7 @@ async def naukri_applications(
     set_reminder_days: Optional[int] = None,
     filter_info: Optional[int] = None,
 ) -> dict:
-    """Unified application tracking — list, detail, purge, stale detection, follow-up, apply, and batch apply.
+    """Unified application tracking — list, detail, purge, stale detection, follow-up, draft, recruiter CRM, apply, and batch apply.
 
     Actions:
       - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page/filter_info)
@@ -555,13 +646,17 @@ async def naukri_applications(
       - "stale": Detect stale applications needing follow-up (use days_threshold/min_stale_score/limit/page)
       - "follow_up": Cross-reference stale apps with inbox & reminders for prioritized action items
         (use days_threshold/min_stale_score/limit)
+      - "draft_follow_up": Generate a follow-up message draft for a stale application (requires job_id).
+        Returns a ready-to-send message with suggested subject line and days-since-applied context.
+      - "recruiter_history": Aggregate per-company communication history from tracked applications.
+        Groups by company, counts applications, tracks response status, and sorts by volume.
       - "apply": Apply to a single job (requires job_id; optional answers for screening questions).
         If set_reminder_days is provided and apply succeeds, a follow-up reminder is auto-created.
       - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters).
         If set_reminder_days is provided, reminders are auto-created for each successful application.
 
     Args:
-        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "apply" | "batch_apply"
+        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "draft_follow_up" | "recruiter_history" | "apply" | "batch_apply"
         job_id: Required for detail/apply — the Naukri job ID (e.g. "270226007446")
         status: (list) Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: (list) ISO date, include applications on/after this date (e.g. "2026-02-01")
@@ -598,6 +693,9 @@ async def naukri_applications(
         - stale: {status, total_applications, total, count, page, has_more, stale_applications: [...]}
         - follow_up: {status, summary: {total_stale, with_recruiter_contact, with_pending_reminder},
                       stale_applications: [...], action_items: [{priority, action, job_id, company, title}]}
+        - draft_follow_up: {status, job_id, company, title, days_since_applied, draft_message, suggested_subject}
+        - recruiter_history: {status, total_companies, responsive_count, unresponsive_count,
+                              companies: [{company, applications, statuses, first_applied, last_applied, has_response}]}
         - apply: {status: "applied"/"needs_input"/"already_applied"/"error", job_id, ...}
         - batch_apply: {status: "success"/"partial_success"/"error", searched, filtered, applied,
                         already_applied, needs_input, errors, pending_questions, results}
@@ -740,9 +838,19 @@ async def naukri_applications(
             logger.exception("Unexpected error in %s", action)
             return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
 
+    # ── draft_follow_up ─────────────────────────────────────────────────
+    elif action == "draft_follow_up":
+        if not job_id:
+            return {"status": "error", "message": "draft_follow_up requires job_id.", "error_code": "VALIDATION_ERROR"}
+        return await _draft_follow_up(job_id)
+
+    # ── recruiter_history ─────────────────────────────────────────────
+    elif action == "recruiter_history":
+        return await _recruiter_history()
+
     # ── unknown action ─────────────────────────────────────────────────
     else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply", "error_code": "VALIDATION_ERROR"}
+        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply, draft_follow_up, recruiter_history", "error_code": "VALIDATION_ERROR"}
 
 
 # ---------------------------------------------------------------------------

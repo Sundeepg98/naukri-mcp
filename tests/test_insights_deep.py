@@ -166,3 +166,88 @@ async def test_insights_salary_benchmark_requires_keywords():
     result = await naukri_insights(insight_type="salary_benchmark")
     assert result["status"] == "error"
     assert "requires keywords" in result["message"]
+
+
+# ===========================================================================
+# 6. _conversion_funnel
+# ===========================================================================
+
+@pytest.mark.asyncio
+@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
+@patch("naukri_server.tools.insights._load_json")
+async def test_conversion_funnel_mixed_statuses(mock_load):
+    """Conversion funnel with mixed statuses should compute correct counts and rate."""
+    now = datetime.now(timezone.utc).isoformat()
+    mock_load.return_value = [
+        {"applied_at": now, "status": "applied", "company": "Google"},
+        {"applied_at": now, "status": "viewed", "company": "Google"},
+        {"applied_at": now, "status": "interview", "company": "Meta"},
+        {"applied_at": now, "status": "applied", "company": "Meta"},
+        {"applied_at": now, "status": "applied", "company": "Netflix"},
+        {"applied_at": now, "status": "offered", "company": "Netflix"},
+    ]
+    from naukri_server.tools.insights import _conversion_funnel
+    result = await _conversion_funnel(days=30)
+
+    assert result["status"] == "success"
+    assert result["total_applied"] == 6
+    assert result["funnel"]["applied"] == 3
+    assert result["funnel"]["viewed"] == 1
+    assert result["funnel"]["interview"] == 1
+    assert result["funnel"]["offered"] == 1
+    # conversion_rate = interviews / total * 100 = 1/6 * 100 ≈ 16.7
+    assert result["conversion_rate"] == round(1 / 6 * 100, 1)
+    # Google: 2 applies, 1 responded (viewed) -> rate 50
+    # Meta:   2 applies, 1 responded (interview) -> rate 50
+    # Netflix: 2 applies, 1 responded (offered) -> rate 50
+    assert len(result["top_responsive_companies"]) == 3
+    for co in result["top_responsive_companies"]:
+        assert co["rate"] == 50
+
+
+@pytest.mark.asyncio
+@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
+@patch("naukri_server.tools.insights._load_json")
+async def test_conversion_funnel_dead_zones(mock_load):
+    """Dead zones: companies with 3+ applies and 0 responses."""
+    now = datetime.now(timezone.utc).isoformat()
+    mock_load.return_value = [
+        {"applied_at": now, "status": "applied", "company": "DeadCorp"},
+        {"applied_at": now, "status": "applied", "company": "DeadCorp"},
+        {"applied_at": now, "status": "applied", "company": "DeadCorp"},
+        {"applied_at": now, "status": "applied", "company": "DeadCorp"},
+        {"applied_at": now, "status": "interview", "company": "GoodCo"},
+        {"applied_at": now, "status": "applied", "company": "GoodCo"},
+    ]
+    from naukri_server.tools.insights import _conversion_funnel
+    result = await _conversion_funnel(days=30)
+
+    assert result["status"] == "success"
+    assert result["total_applied"] == 6
+    # DeadCorp: 4 applies, 0 responded, rate 0 -> dead zone
+    assert len(result["dead_zones"]) == 1
+    assert result["dead_zones"][0]["company"] == "DeadCorp"
+    assert result["dead_zones"][0]["applied"] == 4
+    assert result["dead_zones"][0]["rate"] == 0
+    # GoodCo has only 2 applies, so not in responsive list (threshold >= 2), but is there
+    # and is NOT a dead zone
+    good = [c for c in result["top_responsive_companies"] if c["company"] == "GoodCo"]
+    assert len(good) == 1
+    assert good[0]["rate"] == 50
+
+
+@pytest.mark.asyncio
+@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
+@patch("naukri_server.tools.insights._load_json")
+async def test_conversion_funnel_empty_applications(mock_load):
+    """Empty applications should return zeroed-out funnel."""
+    mock_load.return_value = []
+    from naukri_server.tools.insights import _conversion_funnel
+    result = await _conversion_funnel(days=30)
+
+    assert result["status"] == "success"
+    assert result["total_applied"] == 0
+    assert result["funnel"] == {}
+    assert result["conversion_rate"] == 0
+    assert result["top_responsive_companies"] == []
+    assert result["dead_zones"] == []

@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API, INBOX_REST_API
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -251,49 +252,25 @@ async def naukri_inbox(
     """
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        try:
-            return await _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page), "inbox.list")
 
     # ── read ───────────────────────────────────────────────────────────
     elif action == "read":
         if not message_id or not vcard_id or not unique_id:
             return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _read_message(message_id, vcard_id, unique_id)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _read_message(message_id, vcard_id, unique_id), "inbox.read")
 
     # ── mark_interested ────────────────────────────────────────────────
     elif action == "mark_interested":
         if not mail_id or not conversation_id:
             return {"status": "error", "message": "mark_interested requires mail_id and conversation_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _mark_interested(mail_id, conversation_id, interested)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _mark_interested(mail_id, conversation_id, interested), "inbox.mark_interested")
 
     # ── accept_nvite ──────────────────────────────────────────────────
     elif action == "accept_nvite":
         if not nvite_job_id:
             return {"status": "error", "message": "accept_nvite requires nvite_job_id.", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _accept_nvite(nvite_job_id, answers, title, company)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            logger.exception("Unexpected error in %s", action)
-            return {"status": "error", "message": f"Internal error: {type(e).__name__}: {e}", "error_code": "INTERNAL_ERROR"}
+        return await handle_tool_action(lambda: _accept_nvite(nvite_job_id, answers, title, company), "inbox.accept_nvite")
 
     # ── unknown action ─────────────────────────────────────────────────
     else:
