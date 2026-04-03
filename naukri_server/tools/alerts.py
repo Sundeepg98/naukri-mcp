@@ -148,12 +148,20 @@ async def naukri_job_alerts(
             if industry_type_id is not None:
                 body["industryTypeId"] = industry_type_id
 
-            await api_post(JOB_ALERT_API, body)
-            return {
+            response = await api_post(JOB_ALERT_API, body)
+            result = {
                 "status": "success",
                 "alert_name": name,
                 "message": f"Job alert '{name}' created for '{keywords}'.",
             }
+            # v1 API returns matched jobs inline — expose them
+            total_matched = response.get("totalRes") if isinstance(response, dict) else None
+            matched_jobs = response.get("list", []) if isinstance(response, dict) else []
+            if total_matched is not None:
+                result["total_matched"] = total_matched
+            if matched_jobs:
+                result["matched_jobs"] = matched_jobs[:5]
+            return result
         except NaukriAPIError as e:
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:

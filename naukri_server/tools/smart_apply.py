@@ -182,6 +182,18 @@ async def _apply_top_fits(
                 tracking_extra={"source": "apply_top_fits", "fit_score": job.get("fit_score")},
             )
             status = apply_result.get("status")
+
+            # Auto-retry needs_input if general answers were provided
+            if status == "needs_input" and answers:
+                apply_result = await _apply_single(
+                    job_id=jid,
+                    answers=answers,
+                    title=job.get("title"),
+                    company=job.get("company"),
+                    tracking_extra={"source": "apply_top_fits_retry", "fit_score": job.get("fit_score")},
+                )
+                status = apply_result.get("status")
+
             entry = {
                 "job_id": jid,
                 "title": job.get("title"),
