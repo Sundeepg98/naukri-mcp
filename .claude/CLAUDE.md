@@ -98,9 +98,15 @@ async def naukri_get_subscription_status() -> dict:
 Each parallel agent should ONLY modify its assigned files. Conflicts break merges.
 Check the implementation plan for file assignments before starting.
 
+## Abstraction Interfaces (`naukri_server/interfaces.py`)
+- `ApiClient` and `BrowserProvider` abstract classes for new tools
+- Concrete implementations (`NaukriApiClient`, `PlaywrightBrowserProvider`) wrap existing `api.py` / `browser.py`
+- Existing tools still use direct imports (migration is optional and incremental)
+- **New tools SHOULD use interfaces for testability** — depend on `api_client` / `browser_provider` singletons instead of importing `api_get` / `api_post` directly
+
 ## Key File Paths
 - Tools: `naukri_server/tools/*.py`
-- Infrastructure: `naukri_server/api.py`, `browser.py`, `config.py`, `utils.py`
+- Infrastructure: `naukri_server/api.py`, `browser.py`, `config.py`, `utils.py`, `interfaces.py`
 - Tests: `tests/test_*.py`
 - Data: `applications.json`, `saved_jobs.json`, `reminders.json`, `questions.json`
 - Config: `naukri_server/config.py` (API endpoints, timeouts, headers)

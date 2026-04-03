@@ -722,6 +722,22 @@ async def _recruiter_history() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Application registry — maps action to handler(kwargs) -> dict
+# ---------------------------------------------------------------------------
+
+_APPLICATION_REGISTRY: dict[str, callable] = {
+    "list": lambda **kw: _list_applications(status=kw.get("status"), date_from=kw.get("date_from"), date_to=kw.get("date_to"), limit=kw.get("limit", 50), page=kw.get("page", 1), filter_info=kw.get("filter_info")),
+    "detail": lambda **kw: _get_application_detail(kw["job_id"]),
+    "purge": lambda **kw: _purge_applications(kw["before_date"], kw.get("dry_run", True)),
+    "stale": lambda **kw: _get_stale_applications(days_threshold=kw.get("days_threshold", 14), min_stale_score=kw.get("min_stale_score", 40), limit=kw.get("limit", 50), page=kw.get("page", 1)),
+    "follow_up": lambda **kw: _application_follow_up(days_threshold=kw.get("days_threshold", 14), min_stale_score=kw.get("min_stale_score", 40), limit=kw.get("limit", 50)),
+    "draft_follow_up": lambda **kw: _draft_follow_up(kw["job_id"]),
+    "recruiter_history": lambda **kw: _recruiter_history(),
+    "interview_prep": lambda **kw: _interview_prep(kw["job_id"]),
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool for application tracking
 # ---------------------------------------------------------------------------
 
@@ -826,43 +842,16 @@ async def naukri_applications(
                         already_applied, needs_input, errors, pending_questions, results}
         - {status: "error", message} on failure
     """
-    # -- list ---------------------------------------------------------------
-    if action == "list":
-        return await handle_tool_action(
-            lambda: _list_applications(status=status, date_from=date_from, date_to=date_to, limit=limit, page=page, filter_info=filter_info),
-            "applications.list",
-        )
+    # ── Pre-validation ──────────────────────────────────────────────────
+    if action in ("detail", "draft_follow_up", "interview_prep", "apply") and not job_id:
+        return {"status": "error", "message": f"{action} requires job_id.", "error_code": "VALIDATION_ERROR"}
+    if action == "purge" and not before_date:
+        return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
+    if action == "batch_apply" and not keywords:
+        return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
 
-    # -- detail -------------------------------------------------------------
-    elif action == "detail":
-        if not job_id:
-            return {"status": "error", "message": "detail requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _get_application_detail(job_id), "applications.detail")
-
-    # -- purge --------------------------------------------------------------
-    elif action == "purge":
-        if not before_date:
-            return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _purge_applications(before_date=before_date, dry_run=dry_run), "applications.purge")
-
-    # -- stale --------------------------------------------------------------
-    elif action == "stale":
-        return await handle_tool_action(
-            lambda: _get_stale_applications(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit, page=page),
-            "applications.stale",
-        )
-
-    # -- follow_up ----------------------------------------------------------
-    elif action == "follow_up":
-        return await handle_tool_action(
-            lambda: _application_follow_up(days_threshold=days_threshold, min_stale_score=min_stale_score, limit=limit),
-            "applications.follow_up",
-        )
-
-    # -- apply --------------------------------------------------------------
-    elif action == "apply":
-        if not job_id:
-            return {"status": "error", "message": "apply requires job_id.", "error_code": "VALIDATION_ERROR"}
+    # ── Special cases with composite lock / pre-validation logic ─────
+    if action == "apply":
         from naukri_server.tools.apply import _apply_single
         from naukri_server.tools.jobs import _extract_job_id
         job_id = _extract_job_id(job_id)
@@ -897,10 +886,7 @@ async def naukri_applications(
 
         return await handle_tool_action(_do_apply, "applications.apply")
 
-    # -- batch_apply --------------------------------------------------------
-    elif action == "batch_apply":
-        if not keywords:
-            return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
+    if action == "batch_apply":
         from naukri_server.tools.apply import _batch_apply
 
         async def _do_batch_apply():
@@ -934,25 +920,22 @@ async def naukri_applications(
 
         return await handle_tool_action(_do_batch_apply, "applications.batch_apply")
 
-    # -- draft_follow_up ----------------------------------------------------
-    elif action == "draft_follow_up":
-        if not job_id:
-            return {"status": "error", "message": "draft_follow_up requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _draft_follow_up(job_id), "applications.draft_follow_up")
+    # ── Registry lookup for simple actions ────────────────────────────
+    handler = _APPLICATION_REGISTRY.get(action)
+    if handler:
+        kw = {
+            "status": status, "date_from": date_from, "date_to": date_to,
+            "limit": limit, "page": page, "filter_info": filter_info,
+            "job_id": job_id, "before_date": before_date, "dry_run": dry_run,
+            "days_threshold": days_threshold, "min_stale_score": min_stale_score,
+        }
+        return await handle_tool_action(lambda: handler(**kw), f"applications.{action}")
 
-    # -- recruiter_history --------------------------------------------------
-    elif action == "recruiter_history":
-        return await handle_tool_action(_recruiter_history, "applications.recruiter_history")
-
-    # -- interview_prep -----------------------------------------------------
-    elif action == "interview_prep":
-        if not job_id:
-            return {"status": "error", "message": "interview_prep requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _interview_prep(job_id), "applications.interview_prep")
-
-    # -- unknown action -----------------------------------------------------
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, purge, stale, follow_up, apply, batch_apply, draft_follow_up, recruiter_history, interview_prep", "error_code": "VALIDATION_ERROR"}
+    return {
+        "status": "error",
+        "message": f"Unknown action '{action}'. Use: {', '.join(list(_APPLICATION_REGISTRY) + ['apply', 'batch_apply'])}",
+        "error_code": "VALIDATION_ERROR",
+    }
 
 
 # ---------------------------------------------------------------------------

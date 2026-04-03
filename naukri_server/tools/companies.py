@@ -368,6 +368,29 @@ async def _follow_or_unfollow(group_ids: list[str], action: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Company registry — maps action to handler(kwargs) -> dict
+# ---------------------------------------------------------------------------
+
+def _make_research_handler(**kw):
+    from naukri_server.tools.research import _research_company
+    return _research_company(
+        keyword=kw["keyword"], include_jobs=kw.get("include_jobs", True),
+        include_reviews=kw.get("include_reviews", True),
+        include_interviews=kw.get("include_interviews", True),
+        jobs_limit=kw.get("jobs_limit", 5),
+        timeout_seconds=kw.get("timeout_seconds", 120),
+    )
+
+_COMPANY_REGISTRY: dict[str, callable] = {
+    "search": lambda **kw: _search_companies(keyword=kw["keyword"], page=kw.get("page", 1), limit=kw.get("limit", 20)),
+    "jobs": lambda **kw: _get_company_jobs(group_id=kw["group_id"], page=kw.get("page", 1), limit=kw.get("limit", 20)),
+    "slug": lambda **kw: _get_company_slug(group_id=kw["group_id"]),
+    "batch_slugs": lambda **kw: _batch_get_slugs([g.strip() for g in kw["group_id"].split(",") if g.strip()]),
+    "research": _make_research_handler,
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool — company discovery (search, jobs, slug)
 # ---------------------------------------------------------------------------
 
@@ -422,49 +445,18 @@ async def naukri_company(
         - follow/unfollow: {status, action, followed/unfollowed: [...ids...], errors?}
         - {status: "error", message} on failure
     """
-    # ── search ─────────────────────────────────────────────────────────
-    if action == "search":
-        if not keyword:
-            return {"status": "error", "message": "keyword is required for action='search'.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _search_companies(keyword=keyword, page=page, limit=limit), "company.search")
-
-    # ── jobs ───────────────────────────────────────────────────────────
-    elif action == "jobs":
-        if not group_id:
-            return {"status": "error", "message": "group_id is required for action='jobs'.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _get_company_jobs(group_id=group_id, page=page, limit=limit), "company.jobs")
-
-    # ── slug ───────────────────────────────────────────────────────────
-    elif action == "slug":
-        if not group_id:
-            return {"status": "error", "message": "group_id is required for action='slug'.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _get_company_slug(group_id=group_id), "company.slug")
-
-    # ── batch_slugs ────────────────────────────────────────────────────
-    elif action == "batch_slugs":
-        if not group_id:
-            return {"status": "error", "message": "group_id is required for action='batch_slugs' (comma-separated group IDs).", "error_code": "VALIDATION_ERROR"}
+    # ── Pre-validation ──────────────────────────────────────────────────
+    if action in ("search", "research") and not keyword:
+        return {"status": "error", "message": f"keyword is required for action='{action}'.", "error_code": "VALIDATION_ERROR"}
+    if action in ("jobs", "slug", "batch_slugs") and not group_id:
+        return {"status": "error", "message": f"group_id is required for action='{action}'.", "error_code": "VALIDATION_ERROR"}
+    if action == "batch_slugs":
         ids = [g.strip() for g in group_id.split(",") if g.strip()]
         if not ids:
             return {"status": "error", "message": "No valid group IDs provided.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _batch_get_slugs(ids), "company.batch_slugs")
 
-    # ── research ────────────────────────────────────────────────────────
-    elif action == "research":
-        if not keyword:
-            return {"status": "error", "message": "research requires keyword.", "error_code": "VALIDATION_ERROR"}
-        from naukri_server.tools.research import _research_company
-        return await handle_tool_action(
-            lambda: _research_company(
-                keyword=keyword, include_jobs=include_jobs,
-                include_reviews=include_reviews, include_interviews=include_interviews,
-                jobs_limit=jobs_limit, timeout_seconds=timeout_seconds,
-            ),
-            "company.research",
-        )
-
-    # ── follow_status / follow / unfollow ──────────────────────────────
-    elif action in ("follow_status", "follow", "unfollow"):
+    # ── Follow actions (special — multi-ID + sub-dispatch) ────────────
+    if action in ("follow_status", "follow", "unfollow"):
         ids = group_ids or ([group_id] if group_id else [])
         if not ids:
             return {"status": "error", "message": "group_id or group_ids is required for follow actions.", "error_code": "VALIDATION_ERROR"}
@@ -477,9 +469,22 @@ async def naukri_company(
         else:
             return await handle_tool_action(lambda: _follow_or_unfollow(ids, action), f"company.{action}")
 
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: search, jobs, slug, batch_slugs, research, follow_status, follow, unfollow", "error_code": "VALIDATION_ERROR"}
+    # ── Registry lookup ──────────────────────────────────────────────
+    handler = _COMPANY_REGISTRY.get(action)
+    if handler:
+        kw = {
+            "keyword": keyword, "group_id": group_id, "page": page, "limit": limit,
+            "include_jobs": include_jobs, "include_reviews": include_reviews,
+            "include_interviews": include_interviews, "jobs_limit": jobs_limit,
+            "timeout_seconds": timeout_seconds,
+        }
+        return await handle_tool_action(lambda: handler(**kw), f"company.{action}")
+
+    return {
+        "status": "error",
+        "message": f"Unknown action '{action}'. Use: {', '.join(list(_COMPANY_REGISTRY) + ['follow_status', 'follow', 'unfollow'])}",
+        "error_code": "VALIDATION_ERROR",
+    }
 
 
 # ---------------------------------------------------------------------------
