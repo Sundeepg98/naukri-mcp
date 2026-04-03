@@ -40,7 +40,7 @@ class TestProfileDashboard:
 # =====================================================================
 
 class TestJobsSimilar:
-    """Jobs dispatcher routes action='similar' to _get_similar_jobs in search module."""
+    """Jobs dispatcher routes action='similar' — REST-first, then fallback to search helper."""
 
     @pytest.mark.asyncio
     async def test_similar_requires_job_id(self):
@@ -51,15 +51,52 @@ class TestJobsSimilar:
         assert "job_id" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_similar_routes_to_helper(self):
+    async def test_similar_rest_returns_parsed_list(self):
+        """REST v2 similar jobs returns lightweight parsed result."""
         from naukri_server.tools.jobs import naukri_jobs
-        with patch("naukri_server.tools.search._get_similar_jobs", new_callable=AsyncMock) as mock:
-            mock.return_value = {"status": "success", "job_id": "12345", "source": "similar", "total": 5, "count": 5, "jobs": []}
+        fake_rest = {
+            "simJobDetails": {
+                "content": [],
+                "collaborative": [
+                    {
+                        "jobId": "99",
+                        "title": "Backend Dev",
+                        "companyName": "Corp",
+                        "salaryDetail": {"label": "10-15 LPA"},
+                        "placeholders": [{"type": "location", "label": "Bangalore"}],
+                        "experienceText": "2-5 Yrs",
+                        "tagsAndSkills": "Python, Django, REST",
+                        "jdURL": "/job/backend-dev-99",
+                    }
+                ],
+            },
+            "noOfJobs": 1,
+        }
+        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock, return_value=fake_rest):
+            result = await naukri_jobs(action="similar", job_id="12345", limit=10)
+            assert result["status"] == "success"
+            assert result["source"] == "rest_api"
+            assert result["count"] == 1
+            job = result["jobs"][0]
+            assert job["job_id"] == "99"
+            assert job["title"] == "Backend Dev"
+            assert job["company"] == "Corp"
+            assert job["salary"] == "10-15 LPA"
+            assert job["location"] == "Bangalore"
+            assert "Python" in job["tags"]
+
+    @pytest.mark.asyncio
+    async def test_similar_rest_failure_falls_back(self):
+        """When REST v2 fails, dispatcher falls back to search._get_similar_jobs."""
+        from naukri_server.tools.jobs import naukri_jobs
+        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock, side_effect=Exception("timeout")) as mock_rest, \
+             patch("naukri_server.tools.search._get_similar_jobs", new_callable=AsyncMock) as mock_fallback:
+            mock_fallback.return_value = {"status": "success", "job_id": "12345", "source": "similar", "total": 5, "count": 5, "jobs": []}
             result = await naukri_jobs(action="similar", job_id="12345", limit=10, page=1)
             assert result["status"] == "success"
-            assert result["job_id"] == "12345"
             assert result["source"] == "similar"
-            mock.assert_awaited_once_with(job_id="12345", limit=10, page=1)
+            mock_rest.assert_awaited_once()
+            mock_fallback.assert_awaited_once_with(job_id="12345", limit=10, page=1)
 
 
 # =====================================================================

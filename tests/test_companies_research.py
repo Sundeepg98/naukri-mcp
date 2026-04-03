@@ -133,6 +133,45 @@ class TestCompanyFollowEdgeCases:
             mock_helper.assert_awaited_once_with(["222"], "unfollow")
             assert result["status"] == "success"
 
+    @pytest.mark.asyncio
+    async def test_batch_follow_status_returns_split(self):
+        """Multiple group_ids should use batch POST and return followed/unfollowed split."""
+        from naukri_server.tools.companies import naukri_company
+        with patch("naukri_server.tools.companies._batch_follow_status", new_callable=AsyncMock) as mock_batch:
+            mock_batch.return_value = {
+                "status": "success",
+                "total": 3,
+                "followed_count": 2,
+                "unfollowed_count": 1,
+                "companies": [
+                    {"group_id": 100, "name": "Google", "follower_count": 50000, "is_followed": True, "logo": "g.png"},
+                    {"group_id": 200, "name": "Meta", "follower_count": 30000, "is_followed": True, "logo": "m.png"},
+                    {"group_id": 300, "name": "Apple", "follower_count": 40000, "is_followed": False, "logo": "a.png"},
+                ],
+            }
+            result = await naukri_company(action="follow_status", group_ids=["100", "200", "300"])
+            mock_batch.assert_awaited_once_with(["100", "200", "300"])
+            assert result["status"] == "success"
+            assert result["followed_count"] == 2
+            assert result["unfollowed_count"] == 1
+            assert result["total"] == 3
+            followed_ids = [c["group_id"] for c in result["companies"] if c["is_followed"]]
+            assert 100 in followed_ids
+            assert 200 in followed_ids
+
+    @pytest.mark.asyncio
+    async def test_single_follow_status_uses_existing_behavior(self):
+        """Single group_id should use the existing _get_follow_status helper, not batch."""
+        from naukri_server.tools.companies import naukri_company
+        with patch("naukri_server.tools.companies._get_follow_status", new_callable=AsyncMock) as mock_single, \
+             patch("naukri_server.tools.companies._batch_follow_status", new_callable=AsyncMock) as mock_batch:
+            mock_single.return_value = {"status": "success", "followed": ["111"], "not_followed": []}
+            result = await naukri_company(action="follow_status", group_id="111")
+            mock_single.assert_awaited_once_with(["111"])
+            mock_batch.assert_not_awaited()
+            assert result["status"] == "success"
+            assert result["followed"] == ["111"]
+
 
 # =====================================================================
 # 3. naukri_company_intel — validation beyond test_consolidation.py

@@ -5,7 +5,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto
-from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
+from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -437,6 +437,58 @@ async def _get_job_v1(job_id: str) -> dict:
     return {k: v for k, v in result.items() if v is not None}
 
 
+async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
+    """Fetch similar jobs via v2 REST API (no browser needed).
+
+    Uses /jobapi/v2/search/simjobs/{jobId} with lightweight parsing.
+
+    Args:
+        job_id: Naukri job ID
+        limit: Max similar jobs to return (default 10)
+
+    Returns:
+        {status, job_id, source, total, count, jobs: [...]}
+    """
+    data = await api_get(f"{SIMILAR_JOBS_API}{job_id}", params={
+        "noOfResults": str(limit),
+        "searchType": "sim",
+    })
+    sim = data.get("simJobDetails", {})
+    jobs_raw = sim.get("content", []) + sim.get("collaborative", [])
+    jobs = []
+    for j in jobs_raw:
+        placeholders = j.get("placeholders", [])
+        location = ""
+        for ph in placeholders:
+            if ph.get("type") == "location":
+                location = ph.get("label", "")
+                break
+        if not location and placeholders:
+            location = placeholders[0].get("label", "")
+
+        tags_raw = j.get("tagsAndSkills") or ""
+        tags = [s.strip() for s in tags_raw.split(",") if s.strip()][:5] if isinstance(tags_raw, str) else tags_raw[:5]
+
+        jobs.append({
+            "job_id": j.get("jobId"),
+            "title": j.get("title"),
+            "company": j.get("companyName"),
+            "salary": j.get("salaryDetail", {}).get("label", "Not Disclosed"),
+            "location": location,
+            "experience": j.get("experienceText", ""),
+            "tags": tags,
+            "url": j.get("jdURL", ""),
+        })
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "source": "rest_api",
+        "total": data.get("noOfJobs", len(jobs)),
+        "count": len(jobs[:limit]),
+        "jobs": jobs[:limit],
+    }
+
+
 @mcp.tool()
 async def naukri_jobs(
     action: str = "get",
@@ -483,6 +535,12 @@ async def naukri_jobs(
     elif action == "similar":
         if not job_id:
             return {"status": "error", "message": "similar requires job_id.", "error_code": "VALIDATION_ERROR"}
+        # REST-first: lightweight v2 API, no browser needed
+        try:
+            return await _get_similar_jobs_rest(job_id, limit)
+        except Exception:
+            pass
+        # Fallback: full parser via search module helper
         from naukri_server.tools.search import _get_similar_jobs
         try:
             return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)

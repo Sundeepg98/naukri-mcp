@@ -7,7 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.browser import browser, page_goto, page_intercept_json
-from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, BROWSER_MODAL_APPEAR, logger
+from naukri_server.config import NAUKRI_BASE, COMPANY_SEARCH_API, COMPANY_FOLLOW_STATUS_API, BATCH_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS, BROWSER_MODAL_APPEAR, logger
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
@@ -280,6 +280,43 @@ async def _batch_get_slugs(group_ids: list[str]) -> dict:
 # Internal helpers (not MCP tools — used by the unified follow tool)
 # ---------------------------------------------------------------------------
 
+async def _batch_follow_status(group_ids: list) -> dict:
+    """Check follow status for multiple companies in one POST call."""
+    data = await api_post(
+        BATCH_FOLLOW_STATUS_API,
+        body={"groups": [int(gid) for gid in group_ids]},
+    )
+
+    followed = data.get("followedGroups", [])
+    unfollowed = data.get("unfollowedGroups", [])
+
+    companies = []
+    for g in followed:
+        companies.append({
+            "group_id": g.get("id"),
+            "name": g.get("name"),
+            "follower_count": g.get("followerCount"),
+            "is_followed": True,
+            "logo": g.get("groupLogo"),
+        })
+    for g in unfollowed:
+        companies.append({
+            "group_id": g.get("id"),
+            "name": g.get("name"),
+            "follower_count": g.get("followerCount"),
+            "is_followed": False,
+            "logo": g.get("groupLogo"),
+        })
+
+    return {
+        "status": "success",
+        "total": len(companies),
+        "followed_count": len(followed),
+        "unfollowed_count": len(unfollowed),
+        "companies": companies,
+    }
+
+
 async def _get_follow_status(group_ids: list[str]) -> dict:
     """Check follow status for one or more companies via the API."""
     query = ",".join(group_ids)
@@ -379,7 +416,8 @@ async def naukri_company(
         - slug: {status, group_id, company_slug, company_name}
         - batch_slugs: {status, slugs: {group_id: slug_or_null, ...}, count}
         - research: {status, company_name, slug, jobs, salary, reviews, interviews, errors?}
-        - follow_status: {status, followed: [...ids...], not_followed: [...ids...]}
+        - follow_status (single): {status, followed: [...ids...], not_followed: [...ids...]}
+        - follow_status (batch): {status, total, followed_count, unfollowed_count, companies: [{group_id, name, follower_count, is_followed, logo}]}
         - follow/unfollow: {status, action, followed/unfollowed: [...ids...], errors?}
         - {status: "error", message} on failure
     """
@@ -450,7 +488,10 @@ async def naukri_company(
 
         if action == "follow_status":
             try:
-                return await _get_follow_status(ids)
+                if len(ids) > 1:
+                    return await _batch_follow_status(ids)
+                else:
+                    return await _get_follow_status(ids)
             except NaukriAPIError as e:
                 return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
             except Exception as e:

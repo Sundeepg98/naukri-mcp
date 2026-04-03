@@ -113,6 +113,7 @@ SIMILAR_JOBS_API = "/jobapi/v2/search/simjobs/"  # GET (append job_id)
 APPLY_WORKFLOW_API = "/cloudgateway-workflow/workflow-services/apply-workflow/v1/apply"  # POST
 REPORT_FRAUD_API = "/servicegateway-apply/fraud-detection/1.0/jobseeker/report"  # POST
 COMPANY_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/users/self/companygroups-follow-status"  # GET
+BATCH_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/users/self/companygroups-follow-status"  # POST {groups: [id1, id2, ...]} → {followedGroups, unfollowedGroups}
 
 # Profile editing & settings
 PROFILE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self"

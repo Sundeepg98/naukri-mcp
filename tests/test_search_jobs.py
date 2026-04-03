@@ -334,3 +334,52 @@ class TestJobDetailParsers:
         result = _parse_match_score(None)
         assert result["match_score"] is None
         assert result["match_details"] is None
+
+
+# =====================================================================
+# 8. _fetch_match_score REST helper
+# =====================================================================
+
+class TestFetchMatchScore:
+    """Tests for naukri_server.tools.jobs._fetch_match_score — REST matchscore endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_valid_data(self):
+        """Successful API call returns per-dimension match dict."""
+        from naukri_server.tools.jobs import _fetch_match_score
+
+        fake_response = {
+            "education": True,
+            "functionalArea": False,
+            "Keyskills": 0.85,
+            "workExperience": True,
+            "industry": True,
+            "location": False,
+            "earlyApplicant": True,
+            "skillMismatch": "Docker, AWS",
+        }
+
+        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = fake_response
+            result = await _fetch_match_score("123456")
+
+        mock_get.assert_awaited_once()
+        assert mock_get.call_args[0][0].endswith("123456/matchscore")
+        assert result["education"] is True
+        assert result["functional_area"] is False
+        assert result["key_skills"] == 0.85
+        assert result["work_experience"] is True
+        assert result["industry"] is True
+        assert result["location"] is False
+        assert result["early_applicant"] is True
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_none(self):
+        """API failure returns None gracefully — no exception propagated."""
+        from naukri_server.tools.jobs import _fetch_match_score
+
+        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = Exception("Network error")
+            result = await _fetch_match_score("999999")
+
+        assert result is None
