@@ -348,7 +348,11 @@ async def _get_profile_prompts() -> dict:
     The CCS endpoint requires browser cookies (not just JWT), so we POST
     from inside a Playwright page context using page.evaluate(fetch(...)).
     """
+    from naukri_server.browser import page_goto
     async with _get_browser().page_pool.acquire() as page:
+        # Ensure page is on naukri.com domain (required for same-origin fetch)
+        if not page.url or "naukri.com" not in page.url:
+            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/homepage")
         url = f"{NAUKRI_BASE}{CCS_PAGE_API}/{CCS_DASHBOARD_PAGE}"
         # Try full fetch first (returns all state keys), fall back to partial
         data = await page.evaluate("""
