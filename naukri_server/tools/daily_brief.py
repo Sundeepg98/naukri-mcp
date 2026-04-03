@@ -10,6 +10,15 @@ from naukri_server.config import logger
 from naukri_server.scoring import compute_fit_score, parse_skills
 
 
+async def _fetch_ab_applied_insights() -> dict:
+    """Fetch AmbitionBox salary insights for recently applied jobs. Soft-fails."""
+    try:
+        from naukri_server.tools.ambitionbox import ab_get_applied_jobs_insights
+        return await ab_get_applied_jobs_insights()
+    except Exception:
+        return {"status": "success", "count": 0, "insights": []}
+
+
 def _build_early_access_section(early_access: dict | None, errors: list) -> dict:
     """Build the early_access_roles section with new-role delta tracking."""
     from naukri_server.tools.early_access import _detect_new_roles
@@ -249,6 +258,7 @@ async def naukri_daily_brief() -> dict:
         _list_assessments(),                               # 15
         _match_quality(days=7),                              # 16
         _get_unified_notify(),                             # 17
+        _fetch_ab_applied_insights(),                      # 18
         return_exceptions=True,
     )
 
@@ -280,6 +290,7 @@ async def naukri_daily_brief() -> dict:
     assessments_result = _extract(15, "Assessments")
     match_quality = _extract(16, "Match quality")
     notify_summary = _extract(17, "Unified notify")
+    ab_insights = _extract(18, "AB applied insights")
 
     # Count pending assessments (those without a completed status)
     pending_count = 0
@@ -350,6 +361,7 @@ async def naukri_daily_brief() -> dict:
         },
         "match_quality": match_quality if match_quality else None,
         "competition_overview": _build_competition_section(apps),
+        "applied_salary_insights": ab_insights if ab_insights else None,
     }
 
     # Enrich top recommendations with fit scores
