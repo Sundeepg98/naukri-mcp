@@ -204,12 +204,19 @@ async def naukri_apply(
     # Check for duplicate application from local tracking
     async with _applications_lock:
         existing = _load_json(APPLICATIONS_FILE)
-        if any(str(a.get("job_id")) == str(job_id) for a in existing):
-            return {
-                "status": "already_applied",
-                "message": "You have already applied to this job (from local tracking).",
-                "job_id": job_id,
-            }
+        existing_app = next(
+            (a for a in existing if str(a.get("job_id")) == str(job_id)), None
+        )
+        if existing_app:
+            # Allow retry if previous attempt needs_input and answers are provided
+            if existing_app.get("status") == "needs_input" and answers:
+                pass  # Fall through to _apply_single for retry
+            else:
+                return {
+                    "status": "already_applied",
+                    "message": "You have already applied to this job (from local tracking).",
+                    "job_id": job_id,
+                }
 
     return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 

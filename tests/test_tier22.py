@@ -246,13 +246,15 @@ class TestUnifiedNotify:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
     async def test_status_preserved(self, mock_api):
-        """_get_unified_notify preserves the 'status' field from category data."""
+        """_get_unified_notify preserves the 'status' field as 'latest_status'."""
         mock_api.return_value = {
-            "appStatus": {"noti_count": 3, "status": "PENDING_REVIEW"},
+            "status": {
+                "appStatus": {"noti_count": 3, "status": "PENDING_REVIEW"},
+            },
         }
         from naukri_server.tools.notifications import _get_unified_notify
         result = await _get_unified_notify()
-        assert result["categories"]["appStatus"]["status"] == "PENDING_REVIEW"
+        assert result["categories"]["appStatus"]["latest_status"] == "PENDING_REVIEW"
 
 
 # =====================================================================

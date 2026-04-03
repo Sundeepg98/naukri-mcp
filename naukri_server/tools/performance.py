@@ -98,6 +98,12 @@ async def _get_recruiter_activity(
             "is_new": bool(act.get("isNew", 0)),
             "activity_map": act.get("activityMap"),
             "meta_job_id": None,
+            "domain_expertise": act.get("domainExpertise", ""),
+            "last_active_date": act.get("lastActiveDate", ""),
+            "is_international": bool(int(act.get("isInternational", 0) or 0)),
+            "follower_count": int(act.get("followerCount", 0) or 0),
+            "msg_sent": bool(int(act.get("isMsgSent", 0) or 0)),
+            "user_following": bool(int(act.get("userFollowing", 0) or 0)),
         })
         meta_str = act.get("metaData", "")
         if meta_str:

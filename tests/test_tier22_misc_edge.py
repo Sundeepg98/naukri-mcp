@@ -25,7 +25,7 @@ class TestUnifiedNotifyEdgeCases:
     """Edge-case tests for the count-field priority logic in _get_unified_notify."""
 
     # ------------------------------------------------------------------
-    # 1a. "latest" field is preserved when present in category data
+    # 1a. "noti_description" and "status" fields are preserved
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
@@ -33,7 +33,8 @@ class TestUnifiedNotifyEdgeCases:
         mock_api.return_value = {
             "recoJobs": {
                 "noti_count": 5,
-                "latest": {"title": "SDE at Google"},
+                "status": "Resume Viewed",
+                "noti_description": "SDE at Google",
             }
         }
         from naukri_server.tools.notifications import _get_unified_notify
@@ -41,7 +42,8 @@ class TestUnifiedNotifyEdgeCases:
         result = await _get_unified_notify()
 
         assert result["status"] == "success"
-        assert result["categories"]["recoJobs"]["latest"] == {"title": "SDE at Google"}
+        assert result["categories"]["recoJobs"]["latest_status"] == "Resume Viewed"
+        assert result["categories"]["recoJobs"]["latest_description"] == "SDE at Google"
 
     # ------------------------------------------------------------------
     # 1b. total_count used as fallback when noti_count is absent

@@ -134,6 +134,16 @@ RESUME_BUILDER_STATUS_API = "/cloudgateway-naukri360/jobseeker-order-management-
 
 # AmbitionBox (used by ambitionbox.py and health.py)
 AMBITIONBOX_BASE = "https://www.ambitionbox.com"
+AB_GATEWAY = f"{AMBITIONBOX_BASE}/servicegateway-ambitionbox"
+AB_SALARY_API = f"{AB_GATEWAY}/salaries-services/v0/company"
+AB_BENEFITS_API = f"{AB_GATEWAY}/benefits-services/v0/company"
+AB_REVIEW_DIST_API = f"{AB_GATEWAY}/review-services/v0/review/distribution"
+AB_REVIEW_FILTERS_API = f"{AB_GATEWAY}/review-services/v0/review/filters"
+AB_INTERVIEW_QS_API = f"{AB_GATEWAY}/interview-services/v0/company/top-questions"
+AB_COMPANY_COMPARE_API = f"{AB_GATEWAY}/company-services/v0/compare/company/top-comparsions"
+AB_COMPANY_LOCATIONS_API = f"{AB_GATEWAY}/company-services/v0/company"
+AB_INSIGHTS_APPLIED_API = f"{AB_GATEWAY}/insights-services/v0/insights/niAppliedJobs"
+AB_COOKIE_TTL = 1800  # 30 minutes
 
 # Conversion constants
 LAKHS_MULTIPLIER = 100_000  # 1 lakh = 100,000 — used for CTC conversion across alerts, jobs, parsing, insights

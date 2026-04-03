@@ -76,25 +76,46 @@ async def _mark_single_read(notification_id: str, date: str) -> dict:
 
 
 async def _get_unified_notify() -> dict:
-    """Fetch unified notification dashboard — all categories in one call."""
+    """Fetch unified notification dashboard — all categories in one call.
+
+    Returns 8 notification categories with counts, latest status, and display metadata.
+    Single call replaces multiple separate notification API calls.
+    """
     data = await api_get(RECOMMEND_NOTIFY_API)
+    status_obj = data.get("status", data)
+    order = data.get("order", [
+        "recoJobs", "appStatus", "criticalActions", "rmj",
+        "FF", "NL", "RR", "recruiterSearch",
+    ])
     categories = {}
-    for key in ("recoJobs", "appStatus", "criticalActions", "rmj", "FF", "NL", "RR", "recruiterSearch"):
-        cat_data = data.get(key, {})
-        if cat_data:
-            categories[key] = {
-                "count": cat_data.get("noti_count") or cat_data.get("total_count") or cat_data.get("count", 0),
-                "has_new": bool(cat_data.get("has_new") or cat_data.get("noti_count", 0) > 0),
-            }
-            if "status" in cat_data:
-                categories[key]["status"] = cat_data["status"]
-            if "latest" in cat_data:
-                categories[key]["latest"] = cat_data["latest"]
+    for key in order:
+        cat_data = status_obj.get(key, {})
+        if not cat_data or not isinstance(cat_data, dict):
+            continue
+        entry = {
+            "label": cat_data.get("label", key),
+            "type": cat_data.get("type", key),
+            "count": cat_data.get("noti_count") or cat_data.get("total_count") or cat_data.get("count", 0),
+            "total_count": cat_data.get("total_count"),
+            "noti_count": cat_data.get("noti_count"),
+            "show_on_gnb": cat_data.get("showOnGnb", True),
+            "has_new": bool(cat_data.get("noti_count", 0)),
+        }
+        if "status" in cat_data:
+            entry["latest_status"] = cat_data["status"]
+        if "noti_description" in cat_data:
+            entry["latest_description"] = cat_data["noti_description"]
+        if "freq" in cat_data:
+            entry["frequency_cap"] = cat_data["freq"]
+        categories[key] = entry
     return {
         "status": "success",
         "source": "unified_notify",
+        "new_count": data.get("newCount", 0),
+        "total_count": data.get("totalCount", 0),
         "categories": categories,
-        "total_types": len(categories),
+        "total_types": len([c for c in categories.values() if c.get("show_on_gnb")]),
+        "display_order": order,
     }
 
 
