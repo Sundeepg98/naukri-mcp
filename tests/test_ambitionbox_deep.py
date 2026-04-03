@@ -1,7 +1,8 @@
 """Deep unit tests for AmbitionBox company intel tools.
 
 Tests _fetch_salary, _fetch_reviews, _fetch_interviews, _extract_next_data,
-_scrape_salary_table fallback, and naukri_company_intel routing.
+_scrape_salary_table fallback, naukri_company_intel routing,
+_extract_company_id, _enrich_with_rest, and REST enrichment integration.
 
 Every test is PURE: no network, no browser, no file I/O.
 """
@@ -472,3 +473,314 @@ class TestCompanyIntelRouting:
         assert "salary" in result["message"]
         assert "reviews" in result["message"]
         assert "interviews" in result["message"]
+
+
+# =====================================================================
+# _extract_company_id tests
+# =====================================================================
+
+
+class TestExtractCompanyId:
+    """Tests for _extract_company_id helper."""
+
+    def test_from_metadata(self):
+        """Primary path: pageProps.metaData.companyId."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {"metaData": {"companyId": "41"}}
+        assert _extract_company_id(page_props) == "41"
+
+    def test_from_metadata_int(self):
+        """metaData.companyId as int gets stringified."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {"metaData": {"companyId": 42}}
+        assert _extract_company_id(page_props) == "42"
+
+    def test_from_company_data_fallback(self):
+        """Fallback: companyData.CompanyId."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {"companyData": {"CompanyId": 99, "CompanyName": "TCS"}}
+        assert _extract_company_id(page_props) == "99"
+
+    def test_from_company_header_data(self):
+        """Fallback: companyHeaderData.CompanyId."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {"companyHeaderData": {"CompanyId": 55}}
+        assert _extract_company_id(page_props) == "55"
+
+    def test_none_when_empty(self):
+        """Returns None for empty pageProps."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        assert _extract_company_id({}) is None
+        assert _extract_company_id(None) is None
+
+    def test_none_when_no_id_field(self):
+        """Returns None when containers exist but have no ID fields."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {"companyData": {"CompanyName": "Google"}}
+        assert _extract_company_id(page_props) is None
+
+    def test_metadata_takes_priority(self):
+        """metaData.companyId is preferred over companyData.CompanyId."""
+        from naukri_server.tools.ambitionbox import _extract_company_id
+
+        page_props = {
+            "metaData": {"companyId": "41"},
+            "companyData": {"CompanyId": 99},
+        }
+        assert _extract_company_id(page_props) == "41"
+
+
+# =====================================================================
+# _enrich_with_rest tests
+# =====================================================================
+
+
+class TestEnrichWithRest:
+    """Tests for _enrich_with_rest enrichment helper."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_company_id(self):
+        """No _ab_company_id means no REST calls, result unchanged."""
+        from naukri_server.tools.ambitionbox import _enrich_with_rest
+
+        result = {"status": "success", "company": "Google"}
+        enriched = await _enrich_with_rest(result)
+        assert enriched is result
+        assert "ab_rest" not in enriched
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.ab_get_competitors", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_benefits", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_work_culture", new_callable=AsyncMock)
+    async def test_enriches_with_rest_data(self, mock_culture, mock_benefits, mock_competitors):
+        """When _ab_company_id is present, REST data is merged under ab_rest."""
+        from naukri_server.tools.ambitionbox import _enrich_with_rest
+
+        mock_culture.return_value = {
+            "status": "success",
+            "reviews_count": 500,
+            "work_timing": {"labels": ["Flexible"], "values": [80]},
+        }
+        mock_benefits.return_value = {
+            "status": "success",
+            "total_benefits": 30,
+            "benefits": [{"name": "Health Insurance"}],
+        }
+        mock_competitors.return_value = {
+            "status": "success",
+            "count": 5,
+            "competitors": [{"CompanyName": "Microsoft"}],
+        }
+
+        result = {"status": "success", "company": "Google", "_ab_company_id": "41"}
+        enriched = await _enrich_with_rest(result)
+
+        assert "ab_rest" in enriched
+        assert "work_culture" in enriched["ab_rest"]
+        assert "benefits" in enriched["ab_rest"]
+        assert "competitors" in enriched["ab_rest"]
+        assert enriched["ab_rest"]["work_culture"]["reviews_count"] == 500
+        assert enriched["ab_rest"]["benefits"]["total_benefits"] == 30
+        assert enriched["ab_rest"]["competitors"]["count"] == 5
+
+        # Verify all three REST functions were called with the company ID
+        mock_culture.assert_awaited_once_with("41")
+        mock_benefits.assert_awaited_once_with("41")
+        mock_competitors.assert_awaited_once_with("41")
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.ab_get_competitors", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_benefits", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_work_culture", new_callable=AsyncMock)
+    async def test_partial_rest_failure(self, mock_culture, mock_benefits, mock_competitors):
+        """If one REST call fails, other successful ones are still included."""
+        from naukri_server.tools.ambitionbox import _enrich_with_rest
+
+        mock_culture.return_value = {
+            "status": "success",
+            "reviews_count": 100,
+            "work_timing": {"labels": [], "values": []},
+        }
+        mock_benefits.side_effect = RuntimeError("connection refused")
+        mock_competitors.return_value = {
+            "status": "success",
+            "count": 3,
+            "competitors": [],
+        }
+
+        result = {"status": "success", "company": "TCS", "_ab_company_id": "42"}
+        enriched = await _enrich_with_rest(result)
+
+        assert "ab_rest" in enriched
+        assert "work_culture" in enriched["ab_rest"]
+        assert "competitors" in enriched["ab_rest"]
+        assert "benefits" not in enriched["ab_rest"]
+        assert "_enrichment_errors" in enriched
+        assert any("benefits" in e for e in enriched["_enrichment_errors"])
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.ab_get_competitors", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_benefits", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.ab_get_work_culture", new_callable=AsyncMock)
+    async def test_all_rest_fail_no_ab_rest_key(self, mock_culture, mock_benefits, mock_competitors):
+        """If all REST calls fail, ab_rest key is not added."""
+        from naukri_server.tools.ambitionbox import _enrich_with_rest
+
+        mock_culture.side_effect = RuntimeError("fail")
+        mock_benefits.side_effect = RuntimeError("fail")
+        mock_competitors.side_effect = RuntimeError("fail")
+
+        result = {"status": "success", "company": "X", "_ab_company_id": "99"}
+        enriched = await _enrich_with_rest(result)
+
+        assert "ab_rest" not in enriched
+        assert "_enrichment_errors" in enriched
+        assert len(enriched["_enrichment_errors"]) == 3
+
+
+# =====================================================================
+# naukri_company_intel REST enrichment integration tests
+# =====================================================================
+
+
+class TestCompanyIntelEnrichment:
+    """Tests for naukri_company_intel calling _enrich_with_rest."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox._enrich_with_rest", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox._fetch_salary", new_callable=AsyncMock)
+    async def test_enrichment_called_on_success(self, mock_fetch, mock_enrich):
+        """On successful scrape, _enrich_with_rest is called."""
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+
+        fetch_result = {"status": "success", "company": "Google", "_ab_company_id": "41"}
+        mock_fetch.return_value = fetch_result
+        mock_enrich.return_value = {**fetch_result, "ab_rest": {"work_culture": {}}}
+
+        result = await naukri_company_intel(company="Google", intel_type="salary")
+
+        assert result["status"] == "success"
+        assert "ab_rest" in result
+        mock_enrich.assert_awaited_once_with(fetch_result)
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox._enrich_with_rest", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox._fetch_salary", new_callable=AsyncMock)
+    async def test_enrichment_skipped_on_error(self, mock_fetch, mock_enrich):
+        """On failed scrape, _enrich_with_rest is NOT called."""
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+
+        mock_fetch.return_value = {"status": "error", "message": "404", "error_code": "NOT_FOUND"}
+
+        result = await naukri_company_intel(company="nonexistent", intel_type="salary")
+
+        assert result["status"] == "error"
+        mock_enrich.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox._enrich_with_rest", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox._fetch_reviews", new_callable=AsyncMock)
+    async def test_enrichment_called_for_reviews(self, mock_fetch, mock_enrich):
+        """Reviews intel_type also triggers enrichment."""
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+
+        fetch_result = {"status": "success", "company": "TCS", "_ab_company_id": "42"}
+        mock_fetch.return_value = fetch_result
+        mock_enrich.return_value = fetch_result
+
+        result = await naukri_company_intel(company="TCS", intel_type="reviews", page=1)
+
+        mock_enrich.assert_awaited_once_with(fetch_result)
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox._enrich_with_rest", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox._fetch_interviews", new_callable=AsyncMock)
+    async def test_enrichment_called_for_interviews(self, mock_fetch, mock_enrich):
+        """Interviews intel_type also triggers enrichment."""
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+
+        fetch_result = {"status": "success", "company_name": "Infosys", "_ab_company_id": "41"}
+        mock_fetch.return_value = fetch_result
+        mock_enrich.return_value = fetch_result
+
+        result = await naukri_company_intel(company="Infosys", intel_type="interviews")
+
+        mock_enrich.assert_awaited_once_with(fetch_result)
+
+
+# =====================================================================
+# _fetch_* functions include _ab_company_id when available
+# =====================================================================
+
+
+class TestFetchFunctionsExtractCompanyId:
+    """Tests that _fetch_salary/reviews/interviews include _ab_company_id."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.browser")
+    async def test_fetch_salary_includes_company_id(self, mock_browser, mock_goto, mock_pool, mock_page):
+        """_fetch_salary includes _ab_company_id when metaData.companyId is in pageProps."""
+        mock_browser.page_pool = mock_pool
+        props_with_id = {**SALARY_PAGE_PROPS, "metaData": {"companyId": "41"}}
+        mock_page.evaluate.return_value = _next_data_wrapper(props_with_id)
+
+        from naukri_server.tools.ambitionbox import _fetch_salary
+
+        result = await _fetch_salary("google")
+
+        assert result["status"] == "success"
+        assert result["_ab_company_id"] == "41"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.browser")
+    async def test_fetch_salary_no_company_id_when_absent(self, mock_browser, mock_goto, mock_pool, mock_page):
+        """_fetch_salary omits _ab_company_id when not in pageProps."""
+        mock_browser.page_pool = mock_pool
+        mock_page.evaluate.return_value = _next_data_wrapper(SALARY_PAGE_PROPS)
+
+        from naukri_server.tools.ambitionbox import _fetch_salary
+
+        result = await _fetch_salary("google")
+
+        assert result["status"] == "success"
+        assert "_ab_company_id" not in result
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.browser")
+    async def test_fetch_reviews_includes_company_id(self, mock_browser, mock_goto, mock_pool, mock_page):
+        """_fetch_reviews includes _ab_company_id when available."""
+        mock_browser.page_pool = mock_pool
+        props_with_id = {**REVIEWS_PAGE_PROPS, "metaData": {"companyId": "55"}}
+        mock_page.evaluate.return_value = _next_data_wrapper(props_with_id)
+
+        from naukri_server.tools.ambitionbox import _fetch_reviews
+
+        result = await _fetch_reviews("google")
+
+        assert result["status"] == "success"
+        assert result["_ab_company_id"] == "55"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox.page_goto", new_callable=AsyncMock)
+    @patch("naukri_server.tools.ambitionbox.browser")
+    async def test_fetch_interviews_includes_company_id(self, mock_browser, mock_goto, mock_pool, mock_page):
+        """_fetch_interviews includes _ab_company_id when available."""
+        mock_browser.page_pool = mock_pool
+        props_with_id = {**INTERVIEWS_PAGE_PROPS, "metaData": {"companyId": "10"}}
+        mock_page.evaluate.return_value = _next_data_wrapper(props_with_id)
+
+        from naukri_server.tools.ambitionbox import _fetch_interviews
+
+        result = await _fetch_interviews("google")
+
+        assert result["status"] == "success"
+        assert result["_ab_company_id"] == "10"

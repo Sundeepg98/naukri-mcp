@@ -2,6 +2,10 @@
 
 Includes REST bridge for direct API calls to AmbitionBox service gateways
 using cookies extracted from the browser context.
+
+naukri_company_intel automatically enriches browser-scraped results with
+supplementary REST data (work_culture, benefits, competitors) when a
+numeric company ID can be extracted from the __NEXT_DATA__ pageProps.
 """
 
 import asyncio
@@ -26,6 +30,30 @@ logger = logging.getLogger(__name__)
 
 # Valid intel_type values for naukri_company_intel
 _VALID_INTEL_TYPES = ("salary", "reviews", "interviews")
+
+
+def _extract_company_id(page_props: dict) -> str | None:
+    """Extract the AmbitionBox numeric company ID from __NEXT_DATA__ pageProps.
+
+    The ID lives at pageProps.metaData.companyId (string like "41").
+    Also checks companyData.CompanyId and companyHeaderData.CompanyId as fallbacks.
+    """
+    if not page_props:
+        return None
+    # Primary: metaData.companyId
+    meta = page_props.get("metaData") or {}
+    cid = meta.get("companyId")
+    if cid:
+        return str(cid)
+    # Fallback: companyData / companyHeaderData / companyInfo
+    for key in ("companyData", "companyHeaderData", "companyInfo", "company"):
+        container = page_props.get(key)
+        if isinstance(container, dict):
+            for id_key in ("CompanyId", "companyId", "id"):
+                val = container.get(id_key)
+                if val is not None:
+                    return str(val)
+    return None
 
 
 def _ensure_slug(value: str) -> str:
@@ -401,6 +429,11 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 "salaries": salaries,
             }
 
+            # Include AB company ID for REST enrichment
+            ab_cid = _extract_company_id(page_props)
+            if ab_cid:
+                result["_ab_company_id"] = ab_cid
+
             if designation:
                 result["designation"] = designation
 
@@ -548,6 +581,11 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                 "reviews": reviews,
             }
 
+            # Include AB company ID for REST enrichment
+            ab_cid = _extract_company_id(page_props)
+            if ab_cid:
+                result["_ab_company_id"] = ab_cid
+
             if category_ratings:
                 result["category_ratings"] = category_ratings
 
@@ -677,6 +715,11 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
                 "interview_experiences": experiences,
             }
 
+            # Include AB company ID for REST enrichment
+            ab_cid = _extract_company_id(page_props)
+            if ab_cid:
+                result["_ab_company_id"] = ab_cid
+
             difficulty_data = overview.get("difficultyBreakdown") or overview.get("difficultyDistribution")
             if difficulty_data:
                 result["difficulty_breakdown"] = difficulty_data
@@ -685,6 +728,53 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
 
         except Exception as e:
             return {"status": "error", "message": f"Interview experiences failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# REST enrichment — supplements browser-scraped data with AB REST bridge
+# ---------------------------------------------------------------------------
+
+
+async def _enrich_with_rest(result: dict) -> dict:
+    """Try to enrich a browser-scraped result with supplementary AB REST data.
+
+    If the result contains an _ab_company_id (extracted from __NEXT_DATA__),
+    fetches work_culture, benefits, and competitors in parallel via the REST
+    bridge and merges them into the result under an 'ab_rest' key.
+
+    Failures are silently swallowed — enrichment is best-effort.
+    """
+    company_id = result.get("_ab_company_id")
+    if not company_id:
+        return result
+
+    rest_data = {}
+    rest_errors = []
+
+    try:
+        coros = [
+            ab_get_work_culture(company_id),
+            ab_get_benefits(company_id),
+            ab_get_competitors(company_id),
+        ]
+        labels = ["work_culture", "benefits", "competitors"]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+
+        for label, res in zip(labels, results):
+            if isinstance(res, Exception):
+                rest_errors.append(f"{label}: {type(res).__name__}: {res}")
+                logger.debug("REST enrichment %s failed: %s", label, res)
+            elif isinstance(res, dict) and res.get("status") == "success":
+                rest_data[label] = {k: v for k, v in res.items() if k != "status"}
+    except Exception as e:
+        logger.debug("REST enrichment failed entirely: %s", e)
+
+    if rest_data:
+        result["ab_rest"] = rest_data
+    if rest_errors:
+        result.setdefault("_enrichment_errors", []).extend(rest_errors)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +795,10 @@ async def naukri_company_intel(
     company intelligence to fetch (salary, reviews, interviews), not a CRUD operation.
     All dispatches are read-only scrapes from AmbitionBox.
 
+    Tries AB REST bridge for supplementary data (work culture, benefits,
+    competitors) when a numeric company ID can be extracted from the page.
+    REST enrichment is best-effort — failures are silent.
+
     Note: AmbitionBox data is scraped, may break if site structure changes.
 
     Replaces separate salary/reviews/interviews tools. Accepts a company slug OR name.
@@ -716,9 +810,9 @@ async def naukri_company_intel(
         page: Page number for reviews/interviews pagination (default 1)
 
     Returns:
-        - salary:     {status, company, avg_salary, salaries: [...], ...}
-        - reviews:    {status, company, overall_rating, reviews: [...], ...}
-        - interviews: {status, company_name, interview_experiences: [...], ...}
+        - salary:     {status, company, avg_salary, salaries: [...], ab_rest?: {...}, ...}
+        - reviews:    {status, company, overall_rating, reviews: [...], ab_rest?: {...}, ...}
+        - interviews: {status, company_name, interview_experiences: [...], ab_rest?: {...}, ...}
         - {status: "error", message} on failure
     """
     if intel_type not in _VALID_INTEL_TYPES:
@@ -729,18 +823,25 @@ async def naukri_company_intel(
         }
 
     slug = _ensure_slug(company)
+    result = None
 
     # ── salary ─────────────────────────────────────────────────────────
     if intel_type == "salary":
-        return await _fetch_salary(company_slug=slug, designation=designation)
+        result = await _fetch_salary(company_slug=slug, designation=designation)
 
     # ── reviews ────────────────────────────────────────────────────────
     elif intel_type == "reviews":
-        return await _fetch_reviews(company_slug=slug, page=page)
+        result = await _fetch_reviews(company_slug=slug, page=page)
 
     # ── interviews ─────────────────────────────────────────────────────
     elif intel_type == "interviews":
-        return await _fetch_interviews(company_slug=slug, page=page)
+        result = await _fetch_interviews(company_slug=slug, page=page)
+
+    # ── enrich with REST data if the scrape succeeded ─────────────────
+    if isinstance(result, dict) and result.get("status") == "success":
+        result = await _enrich_with_rest(result)
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════
