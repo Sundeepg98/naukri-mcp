@@ -261,3 +261,63 @@ class TestGetAuthState:
         with patch.object(auth_bridge, "_AUTH_STATE_FILE", f):
             with pytest.raises(ValueError, match="old"):
                 auth_bridge.get_auth_state()
+
+
+# =====================================================================
+# Auth Bridge — additional tests (recovered from tier25_infra.py)
+# =====================================================================
+
+class TestGetAuthHeaders:
+    """Auth headers generation."""
+
+    def test_returns_headers_with_token(self):
+        import time
+        from naukri_server import auth_bridge
+        fake_state = {"token": "my-jwt", "cookies": "a=1; b=2", "exported_at": time.time()}
+        with patch.object(auth_bridge, "get_auth_state", return_value=fake_state):
+            headers = auth_bridge.get_auth_headers()
+        assert headers["Authorization"] == "Bearer my-jwt"
+        assert headers["cookie"] == "a=1; b=2"
+
+
+class TestGetCdpEndpoint:
+    """CDP endpoint URL resolution."""
+
+    def test_uses_port_from_state(self):
+        import time
+        from naukri_server import auth_bridge
+        fake_state = {"token": "t", "cookies": "", "exported_at": time.time(), "cdp_port": 9999}
+        with patch.object(auth_bridge, "get_auth_state", return_value=fake_state):
+            endpoint = auth_bridge.get_cdp_endpoint()
+        assert "9999" in endpoint
+
+    def test_falls_back_to_config(self):
+        from naukri_server import auth_bridge
+        with patch.object(auth_bridge, "get_auth_state", side_effect=FileNotFoundError):
+            endpoint = auth_bridge.get_cdp_endpoint()
+        assert "localhost" in endpoint
+
+
+class TestExtractTokenFromCdp:
+    """Token extraction from CDP context."""
+
+    @pytest.mark.asyncio
+    async def test_extracts_token_and_cookies(self):
+        from naukri_server.auth_bridge import extract_token_from_cdp
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[
+            {"name": "nauk_at", "value": "cdp-jwt"},
+            {"name": "session", "value": "sess123"},
+        ])
+        token, cookies = await extract_token_from_cdp(ctx)
+        assert token == "cdp-jwt"
+        assert "nauk_at=cdp-jwt" in cookies
+        assert "session=sess123" in cookies
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_token(self):
+        from naukri_server.auth_bridge import extract_token_from_cdp
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "other", "value": "val"}])
+        with pytest.raises(ValueError, match="nauk_at"):
+            await extract_token_from_cdp(ctx)

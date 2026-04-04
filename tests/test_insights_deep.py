@@ -359,3 +359,164 @@ class TestInsightsConsolidation:
             result = await naukri_insights(insight_type="applications", days=7)
             mock_helper.assert_awaited_once_with(days=7)
             assert result["status"] == "success"
+
+
+# =====================================================================
+# Taxonomy lookup (recovered from tier22.py, tier22_misc_edge.py)
+# =====================================================================
+
+def _make_cache_miss():
+    """Return a mock TtlCache that always calls the fetch function (cache miss)."""
+    async def _call(fn):
+        return await fn()
+    mock_cache = MagicMock()
+    mock_cache.get = AsyncMock(side_effect=_call)
+    return mock_cache
+
+
+class TestTaxonomyLookup:
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_hierarchy_parsing(self, mock_api):
+        mock_api.return_value = [
+            {"id": 1, "label": "IT & Software", "synonyms": [],
+             "child": [{"id": 11, "label": "Software Development",
+                        "child": [{"id": 111, "label": "Backend Developer", "synonyms": ["server-side dev"]},
+                                  {"id": 112, "label": "Frontend Developer", "synonyms": []}]}]},
+            {"id": 2, "label": "Data Science", "synonyms": ["ML"],
+             "child": [{"id": 21, "label": "Machine Learning",
+                        "child": [{"id": 211, "label": "ML Engineer", "synonyms": ["AI engineer"]},
+                                  {"id": 212, "label": "Data Scientist", "synonyms": []}]}]},
+        ]
+        with patch("naukri_server.tools.insights._taxonomy_cache", _make_cache_miss()):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        assert result["total_departments"] == 2
+        assert len(result["departments"][0]["role_categories"][0]["roles"]) == 2
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_synonym_extraction(self, mock_api):
+        mock_api.return_value = [
+            {"id": 1, "label": "Engineering", "synonyms": [],
+             "child": [{"id": 11, "label": "Software",
+                        "child": [{"id": 111, "label": "Developer", "synonyms": ["dev", "developer"]}]}]},
+        ]
+        with patch("naukri_server.tools.insights._taxonomy_cache", _make_cache_miss()):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        role = result["departments"][0]["role_categories"][0]["roles"][0]
+        assert "dev" in role["synonyms"]
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_total_role_count(self, mock_api):
+        mock_api.return_value = [
+            {"id": 1, "label": "Dept A", "synonyms": [],
+             "child": [{"id": 11, "label": "Cat A1",
+                        "child": [{"id": i, "label": f"Role {i}", "synonyms": []} for i in range(111, 114)]}]},
+            {"id": 2, "label": "Dept B", "synonyms": [],
+             "child": [{"id": 21, "label": "Cat B1",
+                        "child": [{"id": i, "label": f"Role {i}", "synonyms": []} for i in range(211, 213)]}]},
+        ]
+        with patch("naukri_server.tools.insights._taxonomy_cache", _make_cache_miss()):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        assert result["total_roles"] == 5
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_empty_response(self, mock_api):
+        mock_api.return_value = {}
+        with patch("naukri_server.tools.insights._taxonomy_cache", _make_cache_miss()):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        assert result["departments"] == []
+        assert result["total_roles"] == 0
+
+
+class TestTaxonomyEdgeCases:
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_taxonomy_cache_hit(self, mock_api):
+        cached_result = {"status": "success", "total_departments": 37, "total_roles": 1461, "departments": []}
+        mock_cache = MagicMock()
+        mock_cache.get = AsyncMock(return_value=cached_result)
+        with patch("naukri_server.tools.insights._taxonomy_cache", mock_cache):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        assert result == cached_result
+        mock_api.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
+    async def test_taxonomy_data_wrapper(self, mock_api):
+        """Response wrapped in 'data' key still parses."""
+        mock_api.return_value = {
+            "data": [{"id": 1, "label": "IT", "synonyms": [],
+                      "child": [{"id": 11, "label": "Dev",
+                                 "child": [{"id": 111, "label": "SDE", "synonyms": []}]}]}]
+        }
+        with patch("naukri_server.tools.insights._taxonomy_cache", _make_cache_miss()):
+            from naukri_server.tools.insights import _get_taxonomy
+            result = await _get_taxonomy()
+        assert result["total_departments"] == 1
+        assert result["total_roles"] == 1
+
+
+# =====================================================================
+# Profile prompts (recovered from tier25.py)
+# =====================================================================
+
+class TestProfilePrompts:
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_dispatches(self, mock_prompts):
+        mock_prompts.return_value = {"status": "success", "pending_count": 2}
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
+        assert result["pending_count"] == 2
+        mock_prompts.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_pending_states(self, mock_prompts):
+        mock_prompts.return_value = {
+            "status": "success", "source": "ccs_widget",
+            "pending_count": 4, "completed_count": 1,
+            "pending_prompts": [
+                {"field": "salary_breakup", "action": "Add detailed salary breakup", "impact": "high", "reason": "test"},
+            ],
+            "completed_prompts": [{"field": "profile_data", "status": "done"}],
+            "all_state_keys": {}, "cache_ttl_seconds": 27429, "widget_sections_count": 3,
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
+        assert result["pending_count"] == 4
+        assert result["completed_count"] == 1
+        assert result["cache_ttl_seconds"] == 27429
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_all_completed(self, mock_prompts):
+        mock_prompts.return_value = {
+            "status": "success", "pending_count": 0, "completed_count": 5,
+            "pending_prompts": [], "completed_prompts": [{"field": "f", "status": "done"}] * 5,
+            "all_state_keys": {}, "cache_ttl_seconds": 10000, "widget_sections_count": 0,
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
+        assert result["pending_count"] == 0
+        assert result["completed_count"] == 5
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
+    async def test_profile_prompts_ccs_error(self, mock_prompts):
+        mock_prompts.return_value = {
+            "status": "error", "message": "CCS fetch failed: empty response",
+            "error_code": "BROWSER_ERROR",
+        }
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="profile_prompts")
+        assert result["status"] == "error"
+        assert result["error_code"] == "BROWSER_ERROR"
