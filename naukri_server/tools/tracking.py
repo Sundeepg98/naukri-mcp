@@ -23,6 +23,10 @@ from naukri_server.validation import validate_limit, validate_page
 _applications_lock = asyncio.Lock()
 _tracking_composite_lock = asyncio.Lock()
 
+# Gateway instance for structured data access (proof of concept)
+from naukri_server.gateways import JsonFileApplicationGateway
+_app_gateway = JsonFileApplicationGateway(APPLICATIONS_FILE, _applications_lock)
+
 
 def _load_json(path: Path) -> list:
     return load_json_with_backup(path, logger)
@@ -110,11 +114,22 @@ async def _list_applications(
 
     pagination, page_items = paginate(filtered, page, limit)
 
+    # Enrich with computed properties from Application entity
+    from naukri_server.models import Application
+    enriched = []
+    for app_dict in page_items:
+        app = Application.from_dict(app_dict)
+        enriched_dict = app_dict.copy()
+        enriched_dict["is_stale"] = app.is_stale
+        enriched_dict["days_since_applied"] = app.days_since_applied
+        enriched_dict["has_recruiter_interest"] = app.has_recruiter_interest
+        enriched.append(enriched_dict)
+
     return {
         "status": "success",
         **pagination,
         "summary": {"total_all_statuses": len(apps), "by_status": by_status},
-        "applications": page_items,
+        "applications": enriched,
     }
 
 
@@ -238,6 +253,15 @@ async def _get_application_detail(job_id: str) -> dict:
     result["apply_source"] = data.get("applySource") or data.get("source")
     result["resume_used"] = data.get("resumeUsed") or data.get("resumeName")
     result["cover_letter_used"] = data.get("coverLetterUsed") or data.get("hasCoverLetter")
+
+    # --- Local tracking data via gateway (proof of concept) ---
+    local_app = await _app_gateway.get_application(job_id)
+    if local_app:
+        result["local_tracking"] = {
+            "applied_at": local_app.get("applied_at"),
+            "source": local_app.get("source"),
+            "fit_score": local_app.get("fit_score"),
+        }
 
     # --- Strip None values to keep response clean ---
     result = {k: v for k, v in result.items() if v is not None}

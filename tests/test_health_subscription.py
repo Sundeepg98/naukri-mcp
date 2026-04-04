@@ -98,13 +98,14 @@ class TestHealthCheck:
         assert len(result["checks"]) == 5
 
     @pytest.mark.asyncio
-    async def test_include_browser_adds_two_extra_checks(self):
-        """include_browser=True should add browser_alive and ambitionbox checks (7 total)."""
+    async def test_include_browser_adds_three_extra_checks(self):
+        """include_browser=True should add browser_alive, ambitionbox, and browser_interface checks (8 total)."""
         from naukri_server.tools.health import naukri_health_check
 
         ok = {"name": "check", "status": "ok", "message": "ok", "elapsed_ms": 5}
         browser_ok = {"name": "browser_alive", "status": "ok", "message": "Browser working", "elapsed_ms": 50}
         ambition_ok = {"name": "ambitionbox", "status": "ok", "message": "AmbitionBox working", "elapsed_ms": 100}
+        iface_ok = {"name": "browser_interface", "status": "ok", "message": "Browser provider interface available"}
 
         with patch("naukri_server.tools.health._check_login", new_callable=AsyncMock, return_value=ok), \
              patch("naukri_server.tools.health._check_profile_api", new_callable=AsyncMock, return_value=ok), \
@@ -113,17 +114,19 @@ class TestHealthCheck:
              patch("naukri_server.tools.health._check_dashboard_api", new_callable=AsyncMock, return_value=ok), \
              patch("naukri_server.tools.health._check_browser_alive", new_callable=AsyncMock, return_value=browser_ok), \
              patch("naukri_server.tools.health._check_ambitionbox", new_callable=AsyncMock, return_value=ambition_ok), \
+             patch("naukri_server.tools.health._check_browser_interface", new_callable=AsyncMock, return_value=iface_ok), \
              patch("naukri_server.tools.health.browser") as mock_browser, \
              patch("naukri_server.tools.health.os.path.isdir", return_value=True):
 
             mock_browser.page_pool = None
             result = await naukri_health_check(include_browser=True)
 
-        assert len(result["checks"]) == 7
+        assert len(result["checks"]) == 8
         check_names = [c["name"] for c in result["checks"]]
         assert "browser_alive" in check_names
         assert "ambitionbox" in check_names
-        assert result["summary"]["ok"] == 7
+        assert "browser_interface" in check_names
+        assert result["summary"]["ok"] == 8
 
     @pytest.mark.asyncio
     async def test_gather_exception_becomes_fail(self):

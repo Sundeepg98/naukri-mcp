@@ -573,7 +573,7 @@ class TestCheckAmbitionbox:
 class TestNaukriHealthCheckOrchestrator:
     """Tests for the main naukri_health_check tool — orchestration and summary logic."""
 
-    def _patch_all_checks(self, api_results=None, browser_result=None, ambitionbox_result=None):
+    def _patch_all_checks(self, api_results=None, browser_result=None, ambitionbox_result=None, browser_iface_result=None):
         """Helper that returns a context manager patching all check functions."""
         ok = {"name": "check", "status": "ok", "message": "ok", "elapsed_ms": 5}
         if api_results is None:
@@ -582,6 +582,8 @@ class TestNaukriHealthCheckOrchestrator:
             browser_result = {"name": "browser_alive", "status": "ok", "message": "ok", "elapsed_ms": 10}
         if ambitionbox_result is None:
             ambitionbox_result = {"name": "ambitionbox", "status": "ok", "message": "ok", "elapsed_ms": 20}
+        if browser_iface_result is None:
+            browser_iface_result = {"name": "browser_interface", "status": "ok", "message": "Browser provider interface available"}
 
         names = ["_check_login", "_check_profile_api", "_check_search_api",
                  "_check_recommendations_api", "_check_dashboard_api"]
@@ -603,6 +605,11 @@ class TestNaukriHealthCheckOrchestrator:
                                    new_callable=AsyncMock, return_value=ambitionbox_result)
                 p_ambition.start()
                 self_inner._patches.append(p_ambition)
+
+                p_iface = patch("naukri_server.tools.health._check_browser_interface",
+                                new_callable=AsyncMock, return_value=browser_iface_result)
+                p_iface.start()
+                self_inner._patches.append(p_iface)
 
                 p_brow = patch("naukri_server.tools.health.browser")
                 mock_browser = p_brow.start()
@@ -642,17 +649,18 @@ class TestNaukriHealthCheckOrchestrator:
 
     @pytest.mark.asyncio
     async def test_all_pass_with_browser(self):
-        """All 7 checks pass (5 API + 2 browser) — summary should show 7 ok."""
+        """All 8 checks pass (5 API + 3 browser) — summary should show 8 ok."""
         from naukri_server.tools.health import naukri_health_check
 
         with self._patch_all_checks():
             result = await naukri_health_check(include_browser=True)
 
-        assert result["summary"]["ok"] == 7
-        assert len(result["checks"]) == 7
+        assert result["summary"]["ok"] == 8
+        assert len(result["checks"]) == 8
         check_names = [c["name"] for c in result["checks"]]
         assert "browser_alive" in check_names
         assert "ambitionbox" in check_names
+        assert "browser_interface" in check_names
 
     @pytest.mark.asyncio
     async def test_partial_failures(self):
@@ -721,7 +729,7 @@ class TestNaukriHealthCheckOrchestrator:
             result = await naukri_health_check(include_browser=True)
 
         assert result["summary"]["fail"] == 1
-        assert result["summary"]["ok"] == 6  # 5 API + 1 ambitionbox
+        assert result["summary"]["ok"] == 7  # 5 API + 1 ambitionbox + 1 browser_interface
 
     @pytest.mark.asyncio
     async def test_chrome_profile_missing_adds_warning(self):

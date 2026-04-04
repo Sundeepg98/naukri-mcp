@@ -5,6 +5,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.models import Job
 from naukri_server.scoring import compute_fit_score, parse_skills
 from naukri_server.validation import validate_limit
 
@@ -104,6 +105,16 @@ async def naukri_auto_hunt(
         profile_location = profile_result.get("current_location")
         profile_expected_ctc = profile_result.get("expected_ctc")
 
+        # Parse profile experience to float for Job.matches_experience
+        import re
+        _p_exp_nums = re.findall(r'(\d+)', str(profile_exp or ""))
+        profile_exp_years = (
+            float(_p_exp_nums[0]) + float(_p_exp_nums[1]) / 12.0
+            if len(_p_exp_nums) >= 2
+            else float(_p_exp_nums[0]) if _p_exp_nums
+            else 0.0
+        )
+
         # Score each job
         ranked = []
         for job in jobs:
@@ -123,6 +134,8 @@ async def naukri_auto_hunt(
             )
 
             if fit["overall_score"] >= min_fit_score:
+                # Use Job entity for computed properties
+                job_entity = Job.from_api_dict(job)
                 ranked.append({
                     "job_id": job.get("job_id"),
                     "title": job.get("title"),
@@ -132,6 +145,8 @@ async def naukri_auto_hunt(
                     "work_mode": job.get("work_mode"),
                     "experience": job.get("experience"),
                     "is_applied": job.get("is_applied"),
+                    "salary_disclosed": job_entity.salary_disclosed,
+                    "experience_match": job_entity.matches_experience(profile_exp_years),
                     "fit_score": fit["overall_score"],
                     "matched_skills": fit["skill_match"]["matched"],
                     "missing_skills": fit["skill_match"]["missing"],

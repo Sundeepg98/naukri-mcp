@@ -6,7 +6,7 @@ import time
 
 from naukri_server import mcp
 from naukri_server.api import api_metrics
-from naukri_server.interfaces import api_client
+from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
@@ -154,6 +154,17 @@ async def _check_ambitionbox() -> dict:
         return {"name": "ambitionbox", "status": "fail", "message": f"{type(e).__name__}: {e}", "elapsed_ms": elapsed}
 
 
+async def _check_browser_interface() -> dict:
+    """Verify browser_provider abstraction works."""
+    try:
+        # Quick test of the interface — confirm it's importable and the singleton exists
+        if browser_provider is not None:
+            return {"name": "browser_interface", "status": "ok", "message": "Browser provider interface available"}
+        return {"name": "browser_interface", "status": "warn", "message": "browser_provider is None"}
+    except Exception as e:
+        return {"name": "browser_interface", "status": "warn", "message": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Main health check tool
 # ---------------------------------------------------------------------------
@@ -200,6 +211,9 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
 
         ambitionbox_result = await _check_ambitionbox()
         checks.append(ambitionbox_result)
+
+        browser_iface_result = await _check_browser_interface()
+        checks.append(browser_iface_result)
 
     total_ms = int((time.monotonic() - t_start) * 1000)
 

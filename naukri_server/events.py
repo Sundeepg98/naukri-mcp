@@ -108,3 +108,17 @@ class EventBus:
 
 # Global event bus singleton
 event_bus = EventBus()
+
+
+# Default subscribers — log significant events
+async def _log_status_change(event: ApplicationStatusChanged):
+    logger.info("Status changed: %s at %s: %s → %s",
+                event.job_id, event.company, event.old_status, event.new_status)
+
+
+async def _log_application_submitted(event: ApplicationSubmitted):
+    logger.info("Applied: %s at %s (fit: %s)", event.job_id, event.company, event.fit_score)
+
+
+event_bus.subscribe(ApplicationStatusChanged, _log_status_change)
+event_bus.subscribe(ApplicationSubmitted, _log_application_submitted)
