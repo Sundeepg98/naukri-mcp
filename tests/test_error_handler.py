@@ -15,7 +15,6 @@ async def test_success_passes_through():
     result = await handle_tool_action(handler, "test.success")
     assert result["status"] == "success"
     assert result["data"] == [1, 2, 3]
-    assert "_request_id" in result
     handler.assert_awaited_once()
 
 

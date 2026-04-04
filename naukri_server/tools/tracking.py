@@ -23,9 +23,6 @@ from naukri_server.validation import validate_limit, validate_page
 _applications_lock = asyncio.Lock()
 _tracking_composite_lock = asyncio.Lock()
 
-# Gateway instance for structured data access (proof of concept)
-from naukri_server.gateways import JsonFileApplicationGateway
-_app_gateway = JsonFileApplicationGateway(APPLICATIONS_FILE, _applications_lock)
 
 
 def _load_json(path: Path) -> list:
@@ -254,8 +251,10 @@ async def _get_application_detail(job_id: str) -> dict:
     result["resume_used"] = data.get("resumeUsed") or data.get("resumeName")
     result["cover_letter_used"] = data.get("coverLetterUsed") or data.get("hasCoverLetter")
 
-    # --- Local tracking data via gateway (proof of concept) ---
-    local_app = await _app_gateway.get_application(job_id)
+    # --- Local tracking data ---
+    async with _applications_lock:
+        _local_apps = _load_json(APPLICATIONS_FILE)
+    local_app = next((a for a in _local_apps if str(a.get("job_id")) == str(job_id)), None)
     if local_app:
         result["local_tracking"] = {
             "applied_at": local_app.get("applied_at"),

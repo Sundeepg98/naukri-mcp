@@ -7,7 +7,6 @@ from naukri_server import mcp
 from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.scoring import compute_fit_score, parse_skills
-from naukri_server.use_cases import AssessFitCommand
 
 
 
@@ -332,18 +331,15 @@ async def naukri_smart_apply(
     if not job_id:
         return {"status": "error", "message": "job_id is required for single-job assessment", "error_code": "VALIDATION_ERROR"}
 
-    # Validate and structure input via use-case command
-    cmd = AssessFitCommand(job_id=job_id, min_fit_score=min_fit_score)
-
     async def _single_assess():
         from naukri_server.tools.jobs import naukri_get_job
         from naukri_server.tools.jobs import _fetch_match_score
         from naukri_server.tools.profile import get_cached_profile
         from naukri_server.tools.apply import _apply_single
 
-        # Parallel fetch job + profile (use cmd for validated params)
+        # Parallel fetch job + profile
         job_result, profile_result = await asyncio.gather(
-            naukri_get_job(job_id_or_url=cmd.job_id),
+            naukri_get_job(job_id_or_url=job_id),
             get_cached_profile(),
             return_exceptions=True,
         )
@@ -381,10 +377,10 @@ async def naukri_smart_apply(
             "naukri_match": naukri_match,
         }
 
-        # Auto-apply if requested and fit (use cmd for validated threshold)
-        if apply_if_fit and fit["overall_score"] >= cmd.min_fit_score:
+        # Auto-apply if requested and fit
+        if apply_if_fit and fit["overall_score"] >= min_fit_score:
             apply_result = await _apply_single(
-                job_id=cmd.job_id, answers=answers,
+                job_id=job_id, answers=answers,
                 title=job_result.get("title"), company=job_result.get("company"),
                 tracking_extra={"source": "smart_apply", "fit_score": fit["overall_score"]},
             )

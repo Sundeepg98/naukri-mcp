@@ -1,4 +1,4 @@
-"""Tests for infrastructure wiring — AssessFitCommand, ApplicationGateway, browser_provider.
+"""Tests for infrastructure wiring — ApplicationGateway, browser_provider.
 
 Every test is PURE: no network, no browser, no file I/O.
 """
@@ -10,97 +10,35 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 
 # =====================================================================
-# 1. AssessFitCommand used in smart_apply single-job path
+# 1. Local tracking data in _get_application_detail
 # =====================================================================
 
 
-class TestAssessFitCommandInSmartApply:
-    """AssessFitCommand validates and structures input in the single-job path."""
-
-    @pytest.mark.asyncio
-    async def test_assess_fit_command_used_for_single_job(self):
-        """Single-job assessment should use AssessFitCommand to structure params."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-
-        job_result = {
-            "status": "success",
-            "job_id": "J42",
-            "title": "Backend Dev",
-            "company": "TestCo",
-            "salary": "10-15 LPA",
-            "experience": "2-4 Yrs",
-            "location": "Bangalore",
-            "work_mode": "Remote",
-            "tags": ["Node.js", "TypeScript"],
-        }
-        profile_result = {
-            "status": "success",
-            "key_skills": ["Node.js", "TypeScript", "Express.js"],
-            "total_experience": 3,
-            "current_location": "Bangalore",
-            "expected_ctc": "12 LPA",
-        }
-
-        with patch("naukri_server.tools.jobs.naukri_get_job",
-                    new_callable=AsyncMock, return_value=job_result) as mock_get_job, \
-             patch("naukri_server.tools.profile.get_cached_profile",
-                    new_callable=AsyncMock, return_value=profile_result), \
-             patch("naukri_server.tools.jobs._fetch_match_score",
-                    new_callable=AsyncMock, return_value=None):
-
-            result = await naukri_smart_apply(job_id="J42", min_fit_score=50)
-
-        assert result["status"] == "success"
-        assert "fit_assessment" in result
-        # Verify the job was fetched with the cmd.job_id (same value, structured via command)
-        mock_get_job.assert_called_once_with(job_id_or_url="J42")
-
-    @pytest.mark.asyncio
-    async def test_assess_fit_command_preserves_min_fit_score(self):
-        """AssessFitCommand should preserve the min_fit_score for auto-apply threshold."""
-        from naukri_server.use_cases import AssessFitCommand
-
-        cmd = AssessFitCommand(job_id="J99", min_fit_score=75)
-        assert cmd.job_id == "J99"
-        assert cmd.min_fit_score == 75
-
-    @pytest.mark.asyncio
-    async def test_assess_fit_command_default_min_score(self):
-        """AssessFitCommand should default min_fit_score to 60."""
-        from naukri_server.use_cases import AssessFitCommand
-
-        cmd = AssessFitCommand(job_id="J1")
-        assert cmd.min_fit_score == 60
-
-
-# =====================================================================
-# 2. _app_gateway.get_application returns correct app in _get_application_detail
-# =====================================================================
-
-
-class TestAppGatewayInTracking:
-    """_app_gateway is wired into _get_application_detail for local tracking data."""
+class TestLocalTrackingInDetail:
+    """_get_application_detail merges local tracking data when available."""
 
     @pytest.mark.asyncio
     async def test_get_application_detail_includes_local_tracking(self):
-        """When gateway finds a local app, result should include local_tracking."""
+        """When local JSON has a matching app, result should include local_tracking."""
         from naukri_server.tools.tracking import _get_application_detail
 
         api_response = {
             "jobDetails": {"jobTitle": "SDE", "company": "Acme"},
             "status": [],
         }
-        local_app = {
-            "job_id": "J100",
-            "applied_at": "2026-03-15T10:00:00Z",
-            "source": "smart_apply",
-            "fit_score": 82,
-        }
+        local_apps = [
+            {
+                "job_id": "J100",
+                "applied_at": "2026-03-15T10:00:00Z",
+                "source": "smart_apply",
+                "fit_score": 82,
+            }
+        ]
 
         with patch("naukri_server.tools.tracking.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
-             patch("naukri_server.tools.tracking._app_gateway.get_application",
-                    new_callable=AsyncMock, return_value=local_app):
+             patch("naukri_server.tools.tracking._load_json",
+                    return_value=local_apps):
 
             result = await _get_application_detail("J100")
 
@@ -112,7 +50,7 @@ class TestAppGatewayInTracking:
 
     @pytest.mark.asyncio
     async def test_get_application_detail_no_local_tracking_when_missing(self):
-        """When gateway returns None, result should NOT include local_tracking."""
+        """When local JSON has no matching app, result should NOT include local_tracking."""
         from naukri_server.tools.tracking import _get_application_detail
 
         api_response = {
@@ -122,8 +60,8 @@ class TestAppGatewayInTracking:
 
         with patch("naukri_server.tools.tracking.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
-             patch("naukri_server.tools.tracking._app_gateway.get_application",
-                    new_callable=AsyncMock, return_value=None):
+             patch("naukri_server.tools.tracking._load_json",
+                    return_value=[]):
 
             result = await _get_application_detail("J999")
 
