@@ -7,6 +7,7 @@ I/O-bound functions (API calls, browser automation) remain in the tool modules.
 import re
 
 from naukri_server.config import LAKHS_MULTIPLIER
+from naukri_server.domain.job import ParsedSalary
 
 __all__ = [
     "extract_job_id",
@@ -89,16 +90,18 @@ def extract_placeholder(placeholders: list, ptype: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def parse_salary_data(job: dict) -> dict:
-    """Extract salary info from job data."""
-    salary = job.get("salaryDetail", {})
-    sal_label = salary.get("label", "")
-    sal_min = salary.get("minimumSalary", 0)
-    sal_max = salary.get("maximumSalary", 0)
-    salary_str = sal_label if sal_label else (
-        f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
-    )
+    """Extract salary info from job data.
+
+    Thin wrapper around ParsedSalary.from_api() — keeps the same return shape
+    so callers (parse_job_detail, tests) don't need changes.
+    """
+    salary_detail = job.get("salaryDetail", {})
+    parsed = ParsedSalary.from_api(salary_detail)
+    # Pass through raw values from the API dict for backward compatibility
+    sal_min = salary_detail.get("minimumSalary", 0) if isinstance(salary_detail, dict) else 0
+    sal_max = salary_detail.get("maximumSalary", 0) if isinstance(salary_detail, dict) else 0
     return {
-        "salary": salary_str,
+        "salary": parsed.label,
         "salary_min": sal_min,
         "salary_max": sal_max,
     }

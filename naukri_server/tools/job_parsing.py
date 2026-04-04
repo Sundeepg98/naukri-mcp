@@ -2,7 +2,8 @@
 
 import logging
 
-from naukri_server.config import NAUKRI_BASE, LAKHS_MULTIPLIER
+from naukri_server.config import NAUKRI_BASE
+from naukri_server.domain.job import ParsedSalary
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +13,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
     logger.info("Parsing %d job details (limit %d)", len(job_details), limit)
     jobs = []
     for job in job_details[:limit]:
-        salary = job.get("salaryDetail", {})
-        sal_min = salary.get("minimumSalary", 0)
-        sal_max = salary.get("maximumSalary", 0)
-        sal_label = salary.get("label", "")
-        salary_str = sal_label if sal_label else (
-            f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
-        )
+        salary_detail = job.get("salaryDetail", {})
+        parsed_salary = ParsedSalary.from_api(salary_detail)
 
         placeholders = job.get("placeholders", [])
         loc_label = None
@@ -33,9 +29,9 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "job_id": job.get("jobId"),
             "title": job.get("title"),
             "company": job.get("companyName"),
-            "salary": salary_str,
-            "salary_min_lakhs": round(sal_min / LAKHS_MULTIPLIER, 1) if sal_min else None,
-            "salary_max_lakhs": round(sal_max / LAKHS_MULTIPLIER, 1) if sal_max else None,
+            "salary": parsed_salary.label,
+            "salary_min_lakhs": parsed_salary.min_lakhs,
+            "salary_max_lakhs": parsed_salary.max_lakhs,
             "location": loc_label,
             "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} Yrs",
             "experience_min": job.get("minimumExperience"),
@@ -72,8 +68,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "is_agent_eligible": job.get("agentEligible", False) or job.get("isAgentEligible", False),
         })
         # Structured salary detail from bulk fetch API — add raw fields if available
-        if isinstance(salary, dict):
-            jobs[-1]["salary_min_raw"] = salary.get("minimumSalary")
-            jobs[-1]["salary_max_raw"] = salary.get("maximumSalary")
-            jobs[-1]["salary_hidden"] = salary.get("hideSalary", False)
+        if isinstance(salary_detail, dict):
+            jobs[-1]["salary_min_raw"] = salary_detail.get("minimumSalary")
+            jobs[-1]["salary_max_raw"] = salary_detail.get("maximumSalary")
+            jobs[-1]["salary_hidden"] = salary_detail.get("hideSalary", False)
     return jobs
