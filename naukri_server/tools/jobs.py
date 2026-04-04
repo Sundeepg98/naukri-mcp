@@ -348,7 +348,7 @@ async def naukri_jobs(
     job_ids: Optional[list[str]] = None,
     timeout_seconds: int = 120,
 ) -> dict:
-    """Unified job operations — fetch details, find similar, compare, or report fraud.
+    """[Deprecated — use naukri_get_job, naukri_similar_jobs, naukri_compare_jobs, naukri_report_fraud, naukri_job_detail_v1, naukri_bulk_fetch_jobs instead] Unified job operations.
 
     Actions:
         get: Fetch full job details (REST-first, browser fallback). Accepts job_id or full URL.
@@ -413,3 +413,104 @@ async def naukri_jobs(
         "message": f"Unknown action '{action}'. Use: {', '.join(_JOBS_REGISTRY)}",
         "error_code": "VALIDATION_ERROR",
     }
+
+
+# ============================================================================
+# Single-purpose job tools (preferred over consolidated naukri_jobs)
+# ============================================================================
+
+
+@mcp.tool(name="naukri_get_job")
+async def _tool_get_job(job_id: str) -> dict:
+    """Fetch full job details -- description, skills, salary, match score, apply status.
+
+    Args:
+        job_id: Naukri job ID or full job URL
+
+    Returns:
+        {status, title, company, salary, experience, location, skills, match_score, is_applied, can_apply, url, ...}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _get_job(job_id_or_url=job_id), "jobs.get")
+
+
+@mcp.tool(name="naukri_similar_jobs")
+async def _tool_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
+    """Find jobs similar to a given job posting.
+
+    Args:
+        job_id: Naukri job ID to find similar jobs for
+        limit: Max similar jobs to return (default 10)
+        page: Page number (default 1)
+
+    Returns:
+        {status, job_id, source, total, count, jobs: [...]}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _do_similar(job_id=job_id, limit=limit, page=page), "jobs.similar")
+
+
+@mcp.tool(name="naukri_compare_jobs")
+async def _tool_compare_jobs(job_ids: list[str], timeout_seconds: int = 120) -> dict:
+    """Compare 2-5 jobs side-by-side with fit scores.
+
+    Args:
+        job_ids: List of 2-5 job IDs to compare
+        timeout_seconds: Max seconds before timeout (default 120)
+
+    Returns:
+        {status, count, jobs, common_skills, all_skills, best_match_job_id, average_fit_score}
+    """
+    if not job_ids:
+        return {"status": "error", "message": "job_ids is required (list of 2-5 IDs)", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _do_compare(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare")
+
+
+@mcp.tool(name="naukri_report_fraud")
+async def _tool_report_fraud(job_id: str, reason: str = "") -> dict:
+    """Report a fraudulent or suspicious job listing.
+
+    Args:
+        job_id: The job ID to report
+        reason: Description of why this job seems fraudulent
+
+    Returns:
+        {status, job_id, message}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    if not reason:
+        return {"status": "error", "message": "reason is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud")
+
+
+@mcp.tool(name="naukri_job_detail_v1")
+async def _tool_job_detail_v1(job_id: str) -> dict:
+    """Get V1 job detail -- walk-in info, contact details, jd views/applies, closing date.
+
+    Args:
+        job_id: Naukri job ID
+
+    Returns:
+        {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1")
+
+
+@mcp.tool(name="naukri_bulk_fetch_jobs")
+async def _tool_bulk_fetch_jobs(job_ids: list[str]) -> dict:
+    """Bulk fetch multiple job details in one API call (up to 20).
+
+    Args:
+        job_ids: List of 1-20 job IDs to fetch
+
+    Returns:
+        {status, count, jobs: [...]}
+    """
+    if not job_ids:
+        return {"status": "error", "message": "job_ids is required (list of 1-20 IDs)", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk")
