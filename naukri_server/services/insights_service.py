@@ -24,6 +24,7 @@ from naukri_server.config import (
     MATCH_ANALYTICS_API, logger,
 )
 from naukri_server.scoring import normalize_skill, parse_skills
+from naukri_server.domain.application import StatusTransition
 
 __all__ = [
     "conversion_funnel",
@@ -427,24 +428,14 @@ async def detect_status_changes(days_back: int = 30) -> dict:
     positive = []
     neutral = []
 
-    POSITIVE_TRANSITIONS = {
-        ("applied", "viewed"), ("applied", "viewed_by_recruiter"),
-        ("applied", "interview"), ("applied", "shortlisted"),
-        ("viewed", "interview"), ("viewed", "shortlisted"),
-        ("viewed_by_recruiter", "interview"), ("viewed_by_recruiter", "shortlisted"),
-        ("interview", "offered"), ("interview", "hired"),
-        ("shortlisted", "offered"), ("shortlisted", "hired"),
-        ("shortlisted", "interview"),
-    }
-
     for change in changes:
         old = (change.get("old_status") or "").lower()
         new = (change.get("new_status") or "").lower()
-        if (old, new) in POSITIVE_TRANSITIONS:
-            change["transition_type"] = "positive"
+        transition = StatusTransition(old_status=old, new_status=new)
+        change["transition_type"] = transition.transition_type
+        if transition.is_positive:
             positive.append(change)
         else:
-            change["transition_type"] = "neutral"
             neutral.append(change)
 
     return {

@@ -8,6 +8,10 @@ from naukri_server.interfaces import api_client
 from naukri_server.models import paginate
 from naukri_server.config import logger, APPLICATION_STATUS_API
 from naukri_server.validation import validate_limit, validate_page
+from naukri_server.domain.application import (
+    StalenessReport,
+    compute_follow_up_priority as _domain_follow_up_priority,
+)
 
 __all__ = [
     "record_application",
@@ -272,48 +276,12 @@ async def purge_applications(before_date: str, dry_run: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 
 def compute_follow_up_priority(app: dict) -> int:
-    """Score how worthwhile it is to follow up on this application (0-100)."""
-    priority = 50
+    """Score how worthwhile it is to follow up on this application (0-100).
 
-    job_activity = app.get("job_activity", 0)
-    if isinstance(job_activity, (int, float)) and job_activity > 0:
-        priority += 20
-
-    ars = app.get("ars_score")
-    if isinstance(ars, (int, float)):
-        if ars >= 70:
-            priority += 15
-        elif ars >= 50:
-            priority += 10
-        elif ars >= 30:
-            priority += 5
-
-    rating = app.get("company_rating")
-    if isinstance(rating, dict):
-        rating = rating.get("AggregateRating")
-    if rating:
-        try:
-            r = float(rating)
-            if r >= 4.0:
-                priority += 10
-            elif r >= 3.5:
-                priority += 5
-        except (ValueError, TypeError):
-            pass
-
-    try:
-        applied = datetime.fromisoformat(
-            app.get("applied_at", "").replace("+00:00", "+00:00")
-        )
-        days = (datetime.now(timezone.utc) - applied).days
-        if days > 60:
-            priority -= 20
-        elif days > 45:
-            priority -= 10
-    except Exception:
-        pass
-
-    return max(0, min(100, priority))
+    Delegates to domain.application.compute_follow_up_priority for the
+    5-factor scoring model (activity, ARS, rating, recency, base=50).
+    """
+    return _domain_follow_up_priority(app)
 
 
 # ---------------------------------------------------------------------------
@@ -485,64 +453,13 @@ async def get_stale_applications(
     if not apps:
         return {"status": "success", "total_applications": total_applications, "total": 0, "count": 0, "page": page, "has_more": False, "stale_applications": []}
 
-    now = datetime.now(timezone.utc)
     stale_apps = []
 
     for app in apps:
-        days_since_apply = int(app.get("days_since_applied", 0))
+        report = StalenessReport.compute(app, days_threshold)
 
-        stale_score = 0
-        reasons = []
-
-        is_open = app.get("is_open")
-        if is_open is False:
-            stale_score += 100
-            reasons.append("Job closed")
-
-        view_count = app.get("view_count")
-        has_been_viewed = view_count and view_count > 0
-        if days_since_apply > days_threshold and not has_been_viewed:
-            stale_score += 60
-            reasons.append(f"Applied {days_since_apply}d ago, never viewed")
-        elif days_since_apply > days_threshold * 2:
-            stale_score += 30
-            reasons.append(f"Applied {days_since_apply}d ago")
-
-        job_activity = app.get("job_activity")
-        if job_activity is not None and job_activity == 0:
-            stale_score += 30
-            reasons.append("Zero recruiter activity on posting")
-
-        ars_score = app.get("ars_score")
-        if ars_score is not None and ars_score < 30:
-            stale_score += 20
-            reasons.append(f"Low match score ({ars_score}%)")
-
-        job_activity_date = app.get("job_activity_date")
-        if job_activity_date:
-            try:
-                if "T" in str(job_activity_date):
-                    act_dt = datetime.fromisoformat(str(job_activity_date).replace("Z", "+00:00"))
-                else:
-                    act_dt = datetime.strptime(str(job_activity_date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                days_since_activity = (now - act_dt).days
-                if days_since_activity > 14:
-                    stale_score += 25
-                    reasons.append(f"Recruiter inactive for {days_since_activity}d")
-            except (ValueError, TypeError):
-                pass
-
-        if stale_score < min_stale_score:
+        if report.score < min_stale_score:
             continue
-
-        if stale_score >= 100:
-            recommendation = "Move on — job is closed or very stale"
-        elif stale_score >= 60:
-            recommendation = "Follow up or move on"
-        elif stale_score >= 40:
-            recommendation = "Consider following up"
-        else:
-            recommendation = "Still active — wait"
 
         follow_up_priority = compute_follow_up_priority(app)
 
@@ -550,15 +467,15 @@ async def get_stale_applications(
             "job_id": app.get("job_id"),
             "title": app.get("title"),
             "company": app.get("company"),
-            "stale_score": min(stale_score, 100),
+            "stale_score": report.score,
             "follow_up_priority": follow_up_priority,
-            "reasons": reasons,
-            "recommendation": recommendation,
+            "reasons": report.reasons,
+            "recommendation": report.recommendation,
             "applied_date": (app.get("applied_at") or "")[:10],
-            "is_open": is_open,
-            "view_count": view_count,
-            "job_activity": job_activity,
-            "ars_score": ars_score,
+            "is_open": app.get("is_open"),
+            "view_count": app.get("view_count"),
+            "job_activity": app.get("job_activity"),
+            "ars_score": app.get("ars_score"),
         })
 
     stale_apps.sort(key=lambda x: x["follow_up_priority"], reverse=True)
