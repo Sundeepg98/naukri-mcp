@@ -4,7 +4,6 @@ Every test is PURE: no network, no browser, no file I/O.
 Recovered from deleted tier24_compare.py.
 """
 
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -40,20 +39,16 @@ def _make_profile(key_skills=None, total_experience=3,
     }
 
 
-_EMPTY_LOCK = asyncio.Lock()
-
-
 # ---------------------------------------------------------------------------
 # 1. Compare 2 jobs with profile available
 # ---------------------------------------------------------------------------
 
 class TestCompareJobs:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_compare_two_jobs_success(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_compare_two_jobs_success(self, mock_get_job, mock_profile, mock_applied_ids):
         mock_get_job.side_effect = [
             _make_job_detail("J1", tags=["Python", "Django"]),
             _make_job_detail("J2", tags=["Python", "Go"], company="BetaCorp"),
@@ -66,11 +61,10 @@ class TestCompareJobs:
         assert any("python" in s.lower() for s in result["common_skills"])
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_fit_scores_computed(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_fit_scores_computed(self, mock_get_job, mock_profile, mock_applied_ids):
         mock_get_job.side_effect = [
             _make_job_detail("J1", tags=["Python", "Django"]),
             _make_job_detail("J2", tags=["Java", "Spring"]),
@@ -86,11 +80,10 @@ class TestCompareJobs:
         assert "best_match_job_id" in result
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_one_job_fails_others_succeed(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_one_job_fails_others_succeed(self, mock_get_job, mock_profile, mock_applied_ids):
         mock_get_job.side_effect = [Exception("timeout"), _make_job_detail("J2")]
         mock_profile.return_value = _make_profile()
         from naukri_server.tools.compare import _compare_jobs
@@ -100,11 +93,10 @@ class TestCompareJobs:
         assert any("J1" in e for e in result["errors"])
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_all_jobs_fail(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_all_jobs_fail(self, mock_get_job, mock_profile, mock_applied_ids):
         mock_get_job.side_effect = [Exception("timeout"), Exception("not found")]
         mock_profile.return_value = _make_profile()
         from naukri_server.tools.compare import _compare_jobs
@@ -112,11 +104,10 @@ class TestCompareJobs:
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_profile_fetch_failure_graceful(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_profile_fetch_failure_graceful(self, mock_get_job, mock_profile, mock_applied_ids):
         """Profile failure = no fit_score keys, but jobs still returned."""
         mock_get_job.side_effect = [_make_job_detail("J1"), _make_job_detail("J2")]
         mock_profile.return_value = {"status": "error", "message": "auth failed"}
@@ -146,11 +137,10 @@ class TestCompareJobsValidation:
 
 class TestSkillSetComputation:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking._load_json", return_value=[])
-    @patch("naukri_server.tools.tracking._applications_lock", new_callable=lambda: lambda: _EMPTY_LOCK)
+    @patch("naukri_server.database.get_applied_job_ids", new_callable=AsyncMock, return_value=set())
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
-    async def test_common_and_all_skills(self, mock_get_job, mock_profile, mock_lock, mock_load):
+    async def test_common_and_all_skills(self, mock_get_job, mock_profile, mock_applied_ids):
         mock_get_job.side_effect = [
             _make_job_detail("J1", tags=["Python", "Django", "PostgreSQL"]),
             _make_job_detail("J2", tags=["Python", "FastAPI", "PostgreSQL"]),

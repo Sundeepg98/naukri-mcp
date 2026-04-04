@@ -1,10 +1,7 @@
 """Application tracking tools."""
 
 import asyncio
-import json
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
@@ -12,25 +9,13 @@ from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import paginate, validate_action_params
-from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API,
     BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
-    APPLICATIONS_FILE,
 )
 from naukri_server.validation import validate_limit, validate_page
 
-_applications_lock = asyncio.Lock()
 _tracking_composite_lock = asyncio.Lock()
-
-
-
-def _load_json(path: Path) -> list:
-    return load_json_with_backup(path, logger)
-
-
-def _save_json(path: Path, data: list):
-    save_json_atomic(path, data, logger)
 
 
 async def record_application(job_id: str, title: str = None, company: str = None,
