@@ -16,8 +16,9 @@ from unittest.mock import AsyncMock, patch
 
 class TestApplicationDetailEnrichment:
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_total_applicants_extracted(self, mock_api):
+    async def test_total_applicants_extracted(self, mock_api, _mock_db):
         mock_api.return_value = {
             "totalApplicants": 884,
             "jobDetails": {"jobTitle": "SDE", "company": "X"},
@@ -29,8 +30,9 @@ class TestApplicationDetailEnrichment:
         assert result["total_applicants"] == 884
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_star_rating_extracted(self, mock_api):
+    async def test_star_rating_extracted(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "Acme"},
             "starRating": 4, "status": [],
@@ -40,8 +42,9 @@ class TestApplicationDetailEnrichment:
         assert result["star_rating"] == 4
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_apply_flow_type_extracted(self, mock_api):
+    async def test_apply_flow_type_extracted(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "Acme"},
             "applyFlowType": "agentApply", "status": [],
@@ -51,8 +54,9 @@ class TestApplicationDetailEnrichment:
         assert result["apply_flow_type"] == "agentApply"
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_job_activity_fields_extracted(self, mock_api):
+    async def test_job_activity_fields_extracted(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobActivity": 12, "jobActivityDate": "2026-02-28",
             "jobDetails": {"jobTitle": "Dev", "company": "Y"}, "status": [],
@@ -63,8 +67,9 @@ class TestApplicationDetailEnrichment:
         assert result["job_activity_date"] == "2026-02-28"
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_is_crawled_extracted(self, mock_api):
+    async def test_is_crawled_extracted(self, mock_api, _mock_db):
         mock_api.return_value = {
             "isCrawled": True,
             "jobDetails": {"jobTitle": "Eng", "company": "Z"}, "status": [],
@@ -74,8 +79,9 @@ class TestApplicationDetailEnrichment:
         assert result["is_crawled"] is True
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_none_fields_stripped_from_result(self, mock_api):
+    async def test_none_fields_stripped_from_result(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "S"}, "status": [],
         }
@@ -87,8 +93,9 @@ class TestApplicationDetailEnrichment:
             assert absent_key not in result
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_total_applicants_missing_graceful(self, mock_api):
+    async def test_total_applicants_missing_graceful(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "T"}, "status": [],
         }
@@ -104,8 +111,9 @@ class TestApplicationDetailEnrichment:
 
 class TestCompanyRatingParsing:
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_company_rating_from_companyRating(self, mock_api):
+    async def test_company_rating_from_companyRating(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "TechCorp"},
             "companyRating": {"Rating": 4.2, "ReviewsCount": 500}, "status": [],
@@ -116,8 +124,9 @@ class TestCompanyRatingParsing:
         assert result["company_rating"]["reviews"] == 500
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_company_rating_missing(self, mock_api):
+    async def test_company_rating_missing(self, mock_api, _mock_db):
         mock_api.return_value = {
             "jobDetails": {"jobTitle": "SDE", "company": "TechCorp"}, "status": [],
         }
@@ -126,8 +135,9 @@ class TestCompanyRatingParsing:
         assert "company_rating" not in result
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_company_rating_from_ambitionbox_data(self, mock_api):
+    async def test_company_rating_from_ambitionbox_data(self, mock_api, _mock_db):
         """Falls through to ambitionBoxData when companyRating is absent."""
         mock_api.return_value = {
             "ambitionBoxData": {"Rating": 3.8, "ReviewsCount": 200},
@@ -139,8 +149,9 @@ class TestCompanyRatingParsing:
         assert result["company_rating"]["reviews"] == 200
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None)
     @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
-    async def test_company_rating_lowercase_keys(self, mock_api):
+    async def test_company_rating_lowercase_keys(self, mock_api, _mock_db):
         mock_api.return_value = {
             "companyRating": {"rating": 4.1, "reviewsCount": 350},
             "jobDetails": {"jobTitle": "SDE", "company": "R"}, "status": [],

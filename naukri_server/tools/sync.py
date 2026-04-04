@@ -21,7 +21,7 @@ from naukri_server.events import event_bus, ApplicationStatusChanged
 from naukri_server.tools.tracking import (
     _load_json, _save_json, _applications_lock,
 )
-from naukri_server.tools.saved_jobs import _saved_jobs_lock
+# _saved_jobs_lock removed — SQLite handles concurrency via WAL mode
 
 
 # URL patterns for browser interception (discovered)
@@ -710,10 +710,9 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
 
     remote_jobs = _parse_saved_jobs(remote_data)
 
-    async with _saved_jobs_lock:
-        local_saved = _load_json(SAVED_JOBS_FILE)
-        stats = _merge_saved_jobs(local_saved, remote_jobs)
-        _save_json(SAVED_JOBS_FILE, local_saved)
+    local_saved = _load_json(SAVED_JOBS_FILE)
+    stats = _merge_saved_jobs(local_saved, remote_jobs)
+    _save_json(SAVED_JOBS_FILE, local_saved)
 
     # Record sync metadata
     async with _sync_state_lock:

@@ -19,26 +19,24 @@ class TestLocalTrackingInDetail:
 
     @pytest.mark.asyncio
     async def test_get_application_detail_includes_local_tracking(self):
-        """When local JSON has a matching app, result should include local_tracking."""
+        """When database has a matching app, result should include local_tracking."""
         from naukri_server.tools.tracking import _get_application_detail
 
         api_response = {
             "jobDetails": {"jobTitle": "SDE", "company": "Acme"},
             "status": [],
         }
-        local_apps = [
-            {
-                "job_id": "J100",
-                "applied_at": "2026-03-15T10:00:00Z",
-                "source": "smart_apply",
-                "fit_score": 82,
-            }
-        ]
+        local_app = {
+            "job_id": "J100",
+            "applied_at": "2026-03-15T10:00:00Z",
+            "source": "smart_apply",
+            "fit_score": 82,
+        }
 
         with patch("naukri_server.tools.tracking.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
-             patch("naukri_server.tools.tracking._load_json",
-                    return_value=local_apps):
+             patch("naukri_server.database.get_application",
+                    new_callable=AsyncMock, return_value=local_app):
 
             result = await _get_application_detail("J100")
 
@@ -50,7 +48,7 @@ class TestLocalTrackingInDetail:
 
     @pytest.mark.asyncio
     async def test_get_application_detail_no_local_tracking_when_missing(self):
-        """When local JSON has no matching app, result should NOT include local_tracking."""
+        """When database has no matching app, result should NOT include local_tracking."""
         from naukri_server.tools.tracking import _get_application_detail
 
         api_response = {
@@ -60,8 +58,8 @@ class TestLocalTrackingInDetail:
 
         with patch("naukri_server.tools.tracking.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
-             patch("naukri_server.tools.tracking._load_json",
-                    return_value=[]):
+             patch("naukri_server.database.get_application",
+                    new_callable=AsyncMock, return_value=None):
 
             result = await _get_application_detail("J999")
 

@@ -205,6 +205,224 @@ async def count_applications_by_status():
         await db.close()
 
 
+# ---------------------------------------------------------------------------
+# Saved jobs CRUD
+# ---------------------------------------------------------------------------
+
+async def list_saved_jobs(limit=50, offset=0):
+    """Query saved jobs ordered by saved_at DESC."""
+    db = await get_db()
+    try:
+        count_cursor = await db.execute("SELECT COUNT(*) FROM saved_jobs")
+        total = (await count_cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            "SELECT * FROM saved_jobs ORDER BY saved_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows], total
+    finally:
+        await db.close()
+
+
+async def get_saved_job(job_id: str):
+    """Get a single saved job by job_id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM saved_jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_saved_job(sj: dict):
+    """Insert or update a saved job."""
+    db = await get_db()
+    try:
+        await db.execute("""
+            INSERT INTO saved_jobs (job_id, title, company, notes, saved_at, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                title=excluded.title, company=excluded.company,
+                notes=excluded.notes, saved_at=excluded.saved_at, source=excluded.source
+        """, (
+            sj.get("job_id"), sj.get("title"), sj.get("company"),
+            sj.get("notes"), sj.get("saved_at"), sj.get("source", "manual"),
+        ))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_saved_job(job_id: str) -> bool:
+    """Delete a saved job. Returns True if deleted, False if not found."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM saved_jobs WHERE job_id = ?", (job_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def count_saved_jobs() -> int:
+    """Count total saved jobs."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM saved_jobs")
+        return (await cursor.fetchone())[0]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Reminders CRUD
+# ---------------------------------------------------------------------------
+
+async def list_reminders():
+    """Get all reminders."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM reminders ORDER BY remind_at ASC")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def get_reminder(job_id: str):
+    """Get a single reminder by job_id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM reminders WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_reminder(rem: dict):
+    """Insert or update a reminder."""
+    db = await get_db()
+    try:
+        await db.execute("""
+            INSERT INTO reminders (job_id, title, company, remind_at, note, created_at, is_due)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                title=excluded.title, company=excluded.company,
+                remind_at=excluded.remind_at, note=excluded.note, is_due=excluded.is_due
+        """, (
+            rem.get("job_id"), rem.get("title"), rem.get("company"),
+            rem.get("remind_at"), rem.get("note"), rem.get("created_at"),
+            rem.get("is_due", 0),
+        ))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_reminder(job_id: str) -> bool:
+    """Delete a reminder. Returns True if deleted, False if not found."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM reminders WHERE job_id = ?", (job_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Interview rounds CRUD
+# ---------------------------------------------------------------------------
+
+async def add_interview_round(rd: dict) -> int:
+    """Insert an interview round. Returns the new row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            INSERT INTO interview_rounds (job_id, round_type, date, notes, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            rd.get("job_id"), rd.get("round_type"), rd.get("date"),
+            rd.get("notes"), rd.get("status", "scheduled"), rd.get("created_at"),
+        ))
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_interview_rounds(job_id: str = None):
+    """List interview rounds, optionally filtered by job_id."""
+    db = await get_db()
+    try:
+        if job_id:
+            cursor = await db.execute(
+                "SELECT * FROM interview_rounds WHERE job_id = ? ORDER BY date ASC",
+                (job_id,),
+            )
+        else:
+            cursor = await db.execute("SELECT * FROM interview_rounds ORDER BY date ASC")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Stale applications query
+# ---------------------------------------------------------------------------
+
+async def get_stale_applications_raw(days_threshold: int = 14):
+    """Get applications older than days_threshold with their computed days_since_applied.
+
+    Returns raw rows — caller does stale scoring logic.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT *, julianday('now') - julianday(applied_at) as days_since_applied
+            FROM applications
+            WHERE applied_at IS NOT NULL
+              AND julianday('now') - julianday(applied_at) >= ?
+            ORDER BY applied_at ASC
+        """, (days_threshold,))
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Recruiter history (GROUP BY company)
+# ---------------------------------------------------------------------------
+
+async def get_recruiter_history():
+    """Aggregate applications by company with min/max applied_at and response detection."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT
+                company,
+                COUNT(*) as applications,
+                MIN(applied_at) as first_applied,
+                MAX(applied_at) as last_applied,
+                GROUP_CONCAT(status) as statuses
+            FROM applications
+            WHERE company IS NOT NULL
+            GROUP BY company
+            ORDER BY COUNT(*) DESC
+            LIMIT 20
+        """)
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
 async def migrate_json_to_sqlite():
     """One-time migration: import existing JSON files into SQLite."""
     from naukri_server.utils import load_json_with_backup

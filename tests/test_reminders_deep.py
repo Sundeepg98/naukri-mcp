@@ -1,8 +1,8 @@
 """Deep tests for naukri_server/tools/reminders.py.
 
 Every test is PURE — no network, no browser, no file I/O.
-We patch _load_reminders / _save_reminders at the source module so that
-asyncio.Lock is still exercised without any disk access.
+We patch database functions (get_reminder, upsert_reminder, list_reminders)
+at naukri_server.database since production code uses lazy imports.
 """
 
 import asyncio
@@ -122,27 +122,27 @@ class TestSetValidation:
         """days=0 must return VALIDATION_ERROR from _set_reminder."""
         from naukri_server.tools.reminders import _set_reminder
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
-             patch("naukri_server.tools.reminders._save_reminders") as mock_save:
+        with patch("naukri_server.database.get_reminder", new_callable=AsyncMock, return_value=None) as mock_get, \
+             patch("naukri_server.database.upsert_reminder", new_callable=AsyncMock) as mock_upsert:
             result = await _set_reminder(job_id="J002", days=0)
 
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "365" in result["message"]
-        mock_save.assert_not_called()
+        mock_upsert.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_days_greater_than_365_returns_validation_error(self):
         """days=366 must return VALIDATION_ERROR from _set_reminder."""
         from naukri_server.tools.reminders import _set_reminder
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
-             patch("naukri_server.tools.reminders._save_reminders") as mock_save:
+        with patch("naukri_server.database.get_reminder", new_callable=AsyncMock, return_value=None) as mock_get, \
+             patch("naukri_server.database.upsert_reminder", new_callable=AsyncMock) as mock_upsert:
             result = await _set_reminder(job_id="J003", days=366)
 
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        mock_save.assert_not_called()
+        mock_upsert.assert_not_awaited()
 
 
 # =====================================================================
@@ -154,16 +154,16 @@ class TestSetReminder:
 
     @pytest.mark.asyncio
     async def test_creates_new_reminder(self):
-        """A job_id not already in reminders should be appended as a new entry."""
+        """A job_id not already in reminders should be inserted as a new entry."""
         from naukri_server.tools.reminders import _set_reminder
 
         captured = {}
 
-        def fake_save(data):
+        async def fake_upsert(data):
             captured["data"] = data
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=[]), \
-             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+        with patch("naukri_server.database.get_reminder", new_callable=AsyncMock, return_value=None), \
+             patch("naukri_server.database.upsert_reminder", new_callable=AsyncMock, side_effect=fake_upsert):
             result = await _set_reminder(
                 job_id="J010",
                 days=14,
@@ -177,9 +177,7 @@ class TestSetReminder:
         assert "14 days" in result["message"]
         assert "set" in result["message"]
 
-        saved = captured["data"]
-        assert len(saved) == 1
-        entry = saved[0]
+        entry = captured["data"]
         assert entry["job_id"] == "J010"
         assert entry["title"] == "Backend Dev"
         assert entry["company"] == "StartupCo"
@@ -193,23 +191,21 @@ class TestSetReminder:
         from naukri_server.tools.reminders import _set_reminder
 
         existing_remind_at = _iso(-1)  # already overdue
-        existing = [
-            {
-                "job_id": "J020",
-                "title": "Old Title",
-                "company": "OldCo",
-                "remind_at": existing_remind_at,
-                "note": "Old note",
-                "created_at": _iso(-10),
-            }
-        ]
+        existing_reminder = {
+            "job_id": "J020",
+            "title": "Old Title",
+            "company": "OldCo",
+            "remind_at": existing_remind_at,
+            "note": "Old note",
+            "created_at": _iso(-10),
+        }
         captured = {}
 
-        def fake_save(data):
+        async def fake_upsert(data):
             captured["data"] = data
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=existing), \
-             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+        with patch("naukri_server.database.get_reminder", new_callable=AsyncMock, return_value=dict(existing_reminder)), \
+             patch("naukri_server.database.upsert_reminder", new_callable=AsyncMock, side_effect=fake_upsert):
             result = await _set_reminder(
                 job_id="J020",
                 days=5,
@@ -221,9 +217,7 @@ class TestSetReminder:
         assert result["status"] == "success"
         assert "updated" in result["message"]
 
-        saved = captured["data"]
-        assert len(saved) == 1  # no duplication
-        entry = saved[0]
+        entry = captured["data"]
         assert entry["job_id"] == "J020"
         assert entry["title"] == "New Title"
         assert entry["company"] == "NewCo"
@@ -236,27 +230,25 @@ class TestSetReminder:
         """When note=None is passed on update, the existing note must be preserved."""
         from naukri_server.tools.reminders import _set_reminder
 
-        existing = [
-            {
-                "job_id": "J021",
-                "title": "Dev",
-                "company": "Corp",
-                "remind_at": _iso(-2),
-                "note": "Original note",
-                "created_at": _iso(-5),
-            }
-        ]
+        existing_reminder = {
+            "job_id": "J021",
+            "title": "Dev",
+            "company": "Corp",
+            "remind_at": _iso(-2),
+            "note": "Original note",
+            "created_at": _iso(-5),
+        }
         captured = {}
 
-        def fake_save(data):
+        async def fake_upsert(data):
             captured["data"] = data
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=existing), \
-             patch("naukri_server.tools.reminders._save_reminders", side_effect=fake_save):
+        with patch("naukri_server.database.get_reminder", new_callable=AsyncMock, return_value=dict(existing_reminder)), \
+             patch("naukri_server.database.upsert_reminder", new_callable=AsyncMock, side_effect=fake_upsert):
             result = await _set_reminder(job_id="J021", days=3, note=None)
 
         # note=None means "keep existing note"
-        entry = captured["data"][0]
+        entry = captured["data"]
         assert entry["note"] == "Original note"
 
 
@@ -283,7 +275,7 @@ class TestListReminders:
             }
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         assert result["status"] == "success"
@@ -308,7 +300,7 @@ class TestListReminders:
             }
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         r = result["reminders"][0]
@@ -327,7 +319,7 @@ class TestListReminders:
              "note": None, "created_at": _iso(-1)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=False, include_app_status=False)
 
         job_ids = [r["job_id"] for r in result["reminders"]]
@@ -347,7 +339,7 @@ class TestListReminders:
              "note": None, "created_at": _iso(-5)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         assert result["reminders"][0]["job_id"] == "J301"  # due first
@@ -367,7 +359,7 @@ class TestListReminders:
              "note": None, "created_at": _iso(-1)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         assert result["due_count"] == 2
@@ -385,7 +377,7 @@ class TestListReminders:
              "note": None, "created_at": _iso(-1)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         job_ids = [r["job_id"] for r in result["reminders"]]
@@ -405,7 +397,7 @@ class TestListReminders:
              "note": None, "created_at": _iso(-1)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders):
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders):
             result = await _list_reminders(include_past=True, include_app_status=False)
 
         job_ids = [r["job_id"] for r in result["reminders"]]
@@ -436,7 +428,7 @@ class TestListRemindersAppStatus:
             "ars_score": 78,
         }
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders), \
              patch(
                  "naukri_server.tools.tracking._get_application_detail",
                  new_callable=AsyncMock,
@@ -461,7 +453,7 @@ class TestListRemindersAppStatus:
         ]
         detail_result = {"status": "error", "message": "Not found"}
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders), \
              patch(
                  "naukri_server.tools.tracking._get_application_detail",
                  new_callable=AsyncMock,
@@ -482,7 +474,7 @@ class TestListRemindersAppStatus:
              "note": None, "created_at": _iso(-1)},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=reminders), \
              patch(
                  "naukri_server.tools.tracking._get_application_detail",
                  new_callable=AsyncMock,
@@ -618,7 +610,7 @@ class TestRemindersAppStatus:
         async def mock_get_detail(jid):
             return {"j1": fake_detail_j1, "j2": fake_detail_j2}[jid]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=fake_reminders), \
              patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
             result = await _list_reminders(include_app_status=True)
 
@@ -650,7 +642,7 @@ class TestRemindersAppStatus:
             {"job_id": "j1", "title": "Dev", "company": "Acme", "remind_at": future, "note": None, "created_at": "2026-01-01T00:00:00+00:00"},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=fake_reminders), \
              patch("naukri_server.tools.tracking._get_application_detail", new_callable=AsyncMock) as mock_detail:
             result = await _list_reminders(include_app_status=False)
 
@@ -678,7 +670,7 @@ class TestRemindersAppStatus:
                 raise ConnectionError("API down")
             return {"status": "success", "current_status": "Applied", "view_count": 1, "ars_score": 50}
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=fake_reminders), \
              patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
             result = await _list_reminders(include_app_status=True)
 
@@ -706,7 +698,7 @@ class TestRemindersAppStatus:
         async def mock_get_detail(jid):
             return {"status": "error", "message": "Not found"}
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=fake_reminders), \
              patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
             result = await _list_reminders(include_app_status=True)
 
@@ -725,7 +717,7 @@ class TestRemindersAppStatus:
             {"title": "No ID", "company": "Co2", "remind_at": future, "note": None, "created_at": "2026-01-02T00:00:00+00:00"},
         ]
 
-        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+        with patch("naukri_server.database.list_reminders", new_callable=AsyncMock, return_value=fake_reminders), \
              patch("naukri_server.tools.tracking._get_application_detail", new_callable=AsyncMock) as mock_detail:
             result = await _list_reminders(include_app_status=True)
 

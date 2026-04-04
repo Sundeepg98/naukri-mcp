@@ -138,7 +138,7 @@ class TestAutoReminder:
         from naukri_server.tools.tracking import naukri_applications
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
+             patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123", "company": "TestCo"}
             mock_reminder.return_value = {"status": "success"}
@@ -153,7 +153,7 @@ class TestAutoReminder:
         """Apply without set_reminder_days should NOT call _set_reminder."""
         from naukri_server.tools.tracking import naukri_applications
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
+             patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123"}
             result = await naukri_applications(action="apply", job_id="123")
@@ -165,7 +165,7 @@ class TestAutoReminder:
         """Failed apply should NOT set reminder even if set_reminder_days provided."""
         from naukri_server.tools.tracking import naukri_applications
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
+             patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "error", "message": "Failed"}
             result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
@@ -179,7 +179,7 @@ class TestAutoReminder:
         from naukri_server.tools.tracking import naukri_applications
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
+             patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123", "company": "TestCo"}
             mock_reminder.side_effect = Exception("Reminder DB error")

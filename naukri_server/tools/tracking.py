@@ -16,7 +16,7 @@ from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API,
     BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE, INTERVIEW_ROUNDS_FILE,
+    APPLICATIONS_FILE,
 )
 from naukri_server.validation import validate_limit, validate_page
 
@@ -252,9 +252,8 @@ async def _get_application_detail(job_id: str) -> dict:
     result["cover_letter_used"] = data.get("coverLetterUsed") or data.get("hasCoverLetter")
 
     # --- Local tracking data ---
-    async with _applications_lock:
-        _local_apps = _load_json(APPLICATIONS_FILE)
-    local_app = next((a for a in _local_apps if str(a.get("job_id")) == str(job_id)), None)
+    from naukri_server.database import get_application
+    local_app = await get_application(str(job_id))
     if local_app:
         result["local_tracking"] = {
             "applied_at": local_app.get("applied_at"),
@@ -375,9 +374,8 @@ async def _interview_prep(job_id: str) -> dict:
     import asyncio
 
     # Get application details
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    from naukri_server.database import get_application
+    app = await get_application(str(job_id))
     if not app:
         return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
 
@@ -422,10 +420,8 @@ async def _interview_prep(job_id: str) -> dict:
 
 async def _draft_follow_up(job_id: str) -> dict:
     """Generate a follow-up message draft for a stale application."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-
-    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    from naukri_server.database import get_application
+    app = await get_application(str(job_id))
     if not app:
         return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
 
@@ -470,44 +466,30 @@ async def _draft_follow_up(job_id: str) -> dict:
 
 async def _recruiter_history() -> dict:
     """Aggregate per-recruiter communication history from applications + inbox."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
+    from naukri_server.database import get_recruiter_history
 
-    # Group by company
-    by_company: dict = {}
-    for a in apps:
-        co = a.get("company", "Unknown")
-        if co not in by_company:
-            by_company[co] = {
-                "company": co,
-                "applications": 0,
-                "statuses": [],
-                "first_applied": None,
-                "last_applied": None,
-                "has_response": False,
-            }
-        entry = by_company[co]
-        entry["applications"] += 1
-        entry["statuses"].append(a.get("status", "unknown"))
+    rows = await get_recruiter_history()
 
-        applied_at = a.get("applied_at", "")
-        if not entry["first_applied"] or applied_at < entry["first_applied"]:
-            entry["first_applied"] = applied_at
-        if not entry["last_applied"] or applied_at > entry["last_applied"]:
-            entry["last_applied"] = applied_at
-
-        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
-            entry["has_response"] = True
-
-    # Sort by most applications first
-    companies = sorted(by_company.values(), key=lambda x: -x["applications"])
+    _response_statuses = {"interview", "viewed", "shortlisted", "offered"}
+    companies = []
+    for row in rows:
+        statuses_list = (row.get("statuses") or "").split(",")
+        has_response = bool(_response_statuses & set(statuses_list))
+        companies.append({
+            "company": row.get("company", "Unknown"),
+            "applications": row.get("applications", 0),
+            "statuses": statuses_list,
+            "first_applied": row.get("first_applied"),
+            "last_applied": row.get("last_applied"),
+            "has_response": has_response,
+        })
 
     return {
         "status": "success",
         "total_companies": len(companies),
         "responsive_count": sum(1 for c in companies if c["has_response"]),
         "unresponsive_count": sum(1 for c in companies if not c["has_response"]),
-        "companies": companies[:20],
+        "companies": companies,
     }
 
 
@@ -518,34 +500,21 @@ async def _get_stale_applications(
     page: int = 1,
 ) -> dict:
     """Detect stale job applications that need follow-up or should be abandoned."""
-    from datetime import datetime, timezone
+    from naukri_server.database import get_stale_applications_raw, list_applications
 
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
+    apps = await get_stale_applications_raw(days_threshold)
+
+    # Get total application count for summary
+    _, total_applications = await list_applications(limit=1, offset=0)
 
     if not apps:
-        return {"status": "success", "total_applications": 0, "total": 0, "count": 0, "page": page, "has_more": False, "stale_applications": []}
+        return {"status": "success", "total_applications": total_applications, "total": 0, "count": 0, "page": page, "has_more": False, "stale_applications": []}
 
     now = datetime.now(timezone.utc)
     stale_apps = []
 
     for app in apps:
-        applied_at = app.get("applied_at") or app.get("appliedDate") or ""
-        if not applied_at:
-            continue
-
-        # Parse applied date
-        try:
-            if "T" in applied_at:
-                applied_dt = datetime.fromisoformat(applied_at.replace("Z", "+00:00"))
-            else:
-                applied_dt = datetime.strptime(applied_at[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            continue
-
-        days_since_apply = (now - applied_dt).days
-        if days_since_apply < days_threshold:
-            continue  # Too fresh to be stale
+        days_since_apply = int(app.get("days_since_applied", 0))
 
         # Compute stale score
         stale_score = 0
@@ -612,7 +581,7 @@ async def _get_stale_applications(
             "follow_up_priority": follow_up_priority,
             "reasons": reasons,
             "recommendation": recommendation,
-            "applied_date": applied_at[:10],
+            "applied_date": (app.get("applied_at") or "")[:10],
             "is_open": is_open,
             "view_count": view_count,
             "job_activity": job_activity,
@@ -626,7 +595,7 @@ async def _get_stale_applications(
 
     return {
         "status": "success",
-        "total_applications": len(apps),
+        "total_applications": total_applications,
         **pagination,
         "stale_applications": page_items,
     }
@@ -764,7 +733,8 @@ async def _add_interview_round(job_id: str, round_type: str, date: str = "",
     if status not in _VALID_ROUND_STATUSES:
         return {"status": "error", "message": f"Invalid status '{status}'. Use: {', '.join(sorted(_VALID_ROUND_STATUSES))}", "error_code": "VALIDATION_ERROR"}
 
-    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
+    from naukri_server.database import add_interview_round as db_add_round, list_interview_rounds as db_list_rounds
+
     round_entry = {
         "job_id": job_id,
         "round_type": round_type,
@@ -773,23 +743,22 @@ async def _add_interview_round(job_id: str, round_type: str, date: str = "",
         "status": status,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    rounds.append(round_entry)
-    _save_json(INTERVIEW_ROUNDS_FILE, rounds)
+    await db_add_round(round_entry)
+    job_rounds = await db_list_rounds(job_id)
 
     return {
         "status": "success",
         "action": "round_added",
         "job_id": job_id,
         "round_type": round_type,
-        "total_rounds": len([r for r in rounds if r.get("job_id") == job_id]),
+        "total_rounds": len(job_rounds),
     }
 
 
 async def _list_interview_rounds(job_id: str = None) -> dict:
     """List interview rounds, optionally filtered by job_id."""
-    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
-    if job_id:
-        rounds = [r for r in rounds if str(r.get("job_id")) == str(job_id)]
+    from naukri_server.database import list_interview_rounds as db_list_rounds
+    rounds = await db_list_rounds(job_id)
 
     # Group by job
     by_job = {}
@@ -809,13 +778,12 @@ async def _list_interview_rounds(job_id: str = None) -> dict:
 
 async def _compare_offers(job_ids: list) -> dict:
     """Compare multiple job offers side by side."""
-    apps = _load_json(APPLICATIONS_FILE)
-    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
+    from naukri_server.database import get_application, list_interview_rounds as db_list_rounds
 
     offers = []
     for jid in job_ids:
-        app = next((a for a in apps if str(a.get("job_id")) == str(jid)), None)
-        job_rounds = [r for r in rounds if str(r.get("job_id")) == str(jid)]
+        app = await get_application(str(jid))
+        job_rounds = await db_list_rounds(str(jid))
 
         offer = {
             "job_id": jid,
@@ -866,14 +834,14 @@ async def _do_apply(**kw) -> dict:
 
     job_id = _extract_job_id(kw["job_id"])
     # Check for duplicate application from local tracking
-    async with _applications_lock:
-        existing = _load_json(APPLICATIONS_FILE)
-        if any(str(a.get("job_id")) == str(job_id) for a in existing):
-            return {
-                "status": "already_applied",
-                "message": "You have already applied to this job (from local tracking).",
-                "job_id": job_id,
-            }
+    from naukri_server.database import get_application
+    existing = await get_application(str(job_id))
+    if existing:
+        return {
+            "status": "already_applied",
+            "message": "You have already applied to this job (from local tracking).",
+            "job_id": job_id,
+        }
 
     async with _tracking_composite_lock:
         saga = SagaExecutor("apply_workflow")
@@ -1165,7 +1133,6 @@ async def naukri_applications(
 # but are imported by other modules via "from tracking import ..."
 # ---------------------------------------------------------------------------
 from naukri_server.tools.saved_jobs import (  # noqa: E402, F401
-    _saved_jobs_lock,
     _list_saved_jobs,
     _save_job,
     _unsave_job,

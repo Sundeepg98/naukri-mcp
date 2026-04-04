@@ -112,7 +112,8 @@ class TestEmptyResponses:
     @pytest.mark.asyncio
     async def test_saved_jobs_list_empty(self):
         from naukri_server.tools.tracking import naukri_saved_jobs
-        with patch("naukri_server.tools.saved_jobs._load_json", return_value=[]):
+        with patch("naukri_server.database.list_saved_jobs", new_callable=AsyncMock,
+                    return_value=([], 0)):
             result = await naukri_saved_jobs(action="list")
             assert result["status"] == "success"
             assert result["total"] == 0

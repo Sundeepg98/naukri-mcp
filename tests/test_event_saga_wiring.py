@@ -199,7 +199,7 @@ class TestApplySagaSteps:
         apply_result = {"status": "applied", "job_id": "999"}
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
         ):
@@ -219,7 +219,7 @@ class TestApplySagaSteps:
             pass
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
             patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock, side_effect=mock_set_reminder),
@@ -239,7 +239,7 @@ class TestApplySagaSteps:
         apply_result = {"status": "applied", "job_id": "999"}
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
         ):

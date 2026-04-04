@@ -5,19 +5,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.config import logger, REMINDERS_FILE
+from naukri_server.config import logger
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import validate_action_params
-from naukri_server.utils import load_json_with_backup, save_json_atomic
-_reminders_lock = asyncio.Lock()
-
-
-def _load_reminders() -> list:
-    return load_json_with_backup(REMINDERS_FILE, logger)
-
-
-def _save_reminders(data: list):
-    save_json_atomic(REMINDERS_FILE, data, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +22,8 @@ async def _set_reminder(
     company: Optional[str] = None,
 ) -> dict:
     """Set a follow-up reminder for a job application."""
+    from naukri_server.database import get_reminder, upsert_reminder
+
     logger.info("Setting reminder for job %s in %d days", job_id, days)
     if days < 1 or days > 365:
         return {"status": "error", "message": "days must be between 1 and 365", "error_code": "VALIDATION_ERROR"}
@@ -39,37 +31,33 @@ async def _set_reminder(
     now = datetime.now(timezone.utc)
     remind_at = (now + timedelta(days=days)).isoformat()
 
-    async with _reminders_lock:
-        reminders = _load_reminders()
-
-        # Check for existing reminder on same job
-        existing = next((r for r in reminders if r.get("job_id") == job_id), None)
-        if existing:
-            existing["remind_at"] = remind_at
-            existing["note"] = note or existing.get("note")
-            existing["updated_at"] = now.isoformat()
-            if title:
-                existing["title"] = title
-            if company:
-                existing["company"] = company
-            _save_reminders(reminders)
-            return {
-                "status": "success",
-                "job_id": job_id,
-                "remind_at": remind_at,
-                "note": note,
-                "message": f"Reminder updated — due in {days} days.",
-            }
-
-        reminders.append({
+    # Check for existing reminder on same job
+    existing = await get_reminder(job_id)
+    if existing:
+        existing["remind_at"] = remind_at
+        existing["note"] = note or existing.get("note")
+        existing["updated_at"] = now.isoformat()
+        if title:
+            existing["title"] = title
+        if company:
+            existing["company"] = company
+        await upsert_reminder(existing)
+        return {
+            "status": "success",
             "job_id": job_id,
-            "title": title,
-            "company": company,
             "remind_at": remind_at,
             "note": note,
-            "created_at": now.isoformat(),
-        })
-        _save_reminders(reminders)
+            "message": f"Reminder updated — due in {days} days.",
+        }
+
+    await upsert_reminder({
+        "job_id": job_id,
+        "title": title,
+        "company": company,
+        "remind_at": remind_at,
+        "note": note,
+        "created_at": now.isoformat(),
+    })
 
     return {
         "status": "success",
@@ -87,9 +75,10 @@ async def _list_reminders(include_past: bool = True, include_app_status: bool = 
         include_past: Include already-due reminders (default True).
         include_app_status: Batch-fetch live application status for each reminder (default False).
     """
+    from naukri_server.database import list_reminders as db_list_reminders
+
     logger.info("Listing reminders (include_past=%s, include_app_status=%s)", include_past, include_app_status)
-    async with _reminders_lock:
-        reminders = _load_reminders()
+    reminders = await db_list_reminders()
 
     now = datetime.now(timezone.utc)
     result_list = []
