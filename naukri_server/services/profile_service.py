@@ -1,6 +1,7 @@
 """Profile service — business logic for profile fetch, caching, dashboard, and audit."""
 
 from naukri_server.api import NaukriAPIError
+from naukri_server.domain.profile import ProfileParser, _safe_get
 from naukri_server.domain.profile_completeness import CompletionReport
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
@@ -60,43 +61,22 @@ async def _get_profile() -> dict:
         profile = data.get("profile", [{}])[0]
         additional = data.get("profileAdditional", {})
 
-        skills = []
-        for s in data.get("itskills", []):
-            exp_time = s.get("experienceTime", {})
-            skills.append({
-                "skill": s.get("skill"),
-                "experience_years": exp_time.get("year", 0),
-                "experience_months": exp_time.get("month", 0),
-            })
+        skills = ProfileParser.extract_skills(data)
 
-        employment = []
-        for emp in data.get("employments", []):
-            employment.append({
-                "designation": emp.get("designation"),
-                "organization": emp.get("organization"),
-                "description": emp.get("description"),
-                "start_date": emp.get("startDate"),
-                "end_date": emp.get("endDate") or "Present",
-            })
+        employment = ProfileParser.extract_employment(data)
 
-        education = []
-        for edu in data.get("educations", []):
-            education.append({
-                "degree": edu.get("course", {}).get("value"),
-                "specialization": edu.get("specialisation", {}).get("value"),
-                "institute": edu.get("institute"),
-                "year": edu.get("yearOfCompletion"),
-            })
+        education = ProfileParser.extract_education(data)
 
         exp = profile.get("experience", {})
 
+        ctc = ProfileParser.extract_ctc(profile)
         result = {
             "status": "success",
             "name": profile.get("name"),
-            "resume_headline": profile.get("resumeHeadline"),
-            "current_ctc": profile.get("absoluteCtc"),
-            "expected_ctc": profile.get("absoluteExpectedCtc"),
-            "notice_period": profile.get("noticePeriod", {}).get("value"),
+            "resume_headline": ProfileParser.extract_resume_headline(profile),
+            "current_ctc": ctc["current_ctc"],
+            "expected_ctc": ctc["expected_ctc"],
+            "notice_period": ProfileParser.extract_notice_period(profile),
             "total_experience": f"{exp.get('year', 0)} years {exp.get('month', 0)} months",
             "current_location": profile.get("city", {}).get("value"),
             "gender": {"M": "Male", "F": "Female"}.get(profile.get("gender"), profile.get("gender")),
@@ -113,42 +93,14 @@ async def _get_profile() -> dict:
         }
 
         # --- Communication settings (notification preferences) ---
-        comm_settings = data.get("communicationSettings") or data.get("communicationPreferences") or profile.get("communicationSettings")
-        if comm_settings and isinstance(comm_settings, dict):
-            result["communication_settings"] = {
-                "email_notifications": comm_settings.get("emailNotifications") or comm_settings.get("emailAlerts"),
-                "sms_notifications": comm_settings.get("smsNotifications") or comm_settings.get("smsAlerts"),
-                "push_notifications": comm_settings.get("pushNotifications"),
-                "job_alerts": comm_settings.get("jobAlerts") or comm_settings.get("jobAlert"),
-                "recruiter_messages": comm_settings.get("recruiterMessages") or comm_settings.get("recruiterMail"),
-                "promotional": comm_settings.get("promotional") or comm_settings.get("marketingMail"),
-                "whatsapp_notifications": comm_settings.get("whatsappNotifications") or comm_settings.get("whatsappAlerts"),
-            }
-            # Strip None values
-            result["communication_settings"] = {k: v for k, v in result["communication_settings"].items() if v is not None}
-            if not result["communication_settings"]:
-                del result["communication_settings"]
+        comm_parsed = ProfileParser.extract_communication_settings(data, profile)
+        if comm_parsed:
+            result["communication_settings"] = comm_parsed
 
         # --- Resdex visibility (profile visibility flags) ---
-        resdex = data.get("resdexVisibility") or data.get("profileVisibility") or additional.get("resdexVisibility") or profile.get("resdexVisibility")
-        if resdex and isinstance(resdex, dict):
-            result["resdex_visibility"] = {
-                "show_profile": resdex.get("showProfile") or resdex.get("profileVisible"),
-                "show_current_employer": resdex.get("showCurrentEmployer") or resdex.get("currentEmployerVisible"),
-                "show_email": resdex.get("showEmail") or resdex.get("emailVisible"),
-                "show_phone": resdex.get("showPhone") or resdex.get("mobileVisible"),
-                "show_resume": resdex.get("showResume") or resdex.get("resumeVisible"),
-                "hide_from_companies": resdex.get("hideFromCompanies") or resdex.get("blockedCompanies"),
-                "search_visible": resdex.get("searchVisible") or resdex.get("isSearchable"),
-                "active_job_seeker": resdex.get("activeJobSeeker") or resdex.get("isActivelySearching"),
-            }
-            # Strip None values
-            result["resdex_visibility"] = {k: v for k, v in result["resdex_visibility"].items() if v is not None}
-            if not result["resdex_visibility"]:
-                del result["resdex_visibility"]
-        elif resdex and isinstance(resdex, str):
-            # Sometimes returned as a simple string like "visible" / "hidden"
-            result["resdex_visibility"] = resdex
+        resdex_parsed = ProfileParser.extract_resdex_visibility(data, additional, profile)
+        if resdex_parsed is not None:
+            result["resdex_visibility"] = resdex_parsed
 
         # --- lookupData (resume score, login times, subscription flags) ---
         lookup = data.get("lookupData", {})
@@ -294,84 +246,78 @@ async def _get_dashboard() -> dict:
         }
 
         # --- Application stats ---
-        result["applied_count"] = db.get("appliedCount") or db.get("totalApplied")
+        result["applied_count"] = _safe_get(db, "appliedCount", "totalApplied")
         result["applied_today"] = db.get("appliedToday")
         result["applied_this_week"] = db.get("appliedThisWeek")
 
         # --- Profile completeness and score ---
-        result["profile_completion"] = db.get("profileCompletion") or db.get("completeness") or db.get("profileCompleteness")
-        result["profile_score"] = db.get("profileScore") or db.get("profileRank")
+        result["profile_completion"] = ProfileParser.extract_dashboard_profile_completeness(db)
+        result["profile_score"] = _safe_get(db, "profileScore", "profileRank")
         result["profile_quality"] = db.get("profileQuality")
         result["profile_strength"] = db.get("profileStrength")
 
         # --- Saved jobs ---
-        result["saved_jobs_count"] = db.get("savedJobsCount") or db.get("totalSavedJobs")
+        result["saved_jobs_count"] = _safe_get(db, "savedJobsCount", "totalSavedJobs")
 
         # --- Resume details ---
-        resume = db.get("resumeDetails") or db.get("resume") or {}
-        if isinstance(resume, dict):
-            result["resume_name"] = resume.get("name") or resume.get("resumeName") or db.get("resumeName")
-            result["resume_last_updated"] = resume.get("lastUpdated") or resume.get("modifiedDate") or db.get("resumeLastUpdated")
-            result["resume_headline"] = resume.get("resumeHeadline") or db.get("resumeHeadline")
-            result["resume_id"] = resume.get("resumeId") or resume.get("id")
-        else:
-            result["resume_name"] = db.get("resumeName")
-            result["resume_last_updated"] = db.get("resumeLastUpdated")
-            result["resume_headline"] = db.get("resumeHeadline")
-            result["resume_id"] = None
+        resume_details = ProfileParser.extract_dashboard_resume(db)
+        result["resume_name"] = resume_details["resume_name"]
+        result["resume_last_updated"] = resume_details["resume_last_updated"]
+        result["resume_headline"] = resume_details["resume_headline"]
+        result["resume_id"] = resume_details["resume_id"]
 
         # --- User identity ---
-        result["profile_title"] = db.get("profileTitle") or db.get("title")
-        result["profile_image_url"] = db.get("profileImageUrl") or db.get("imageUrl") or db.get("photoUrl")
-        result["name"] = db.get("name") or db.get("fullName")
-        result["email"] = db.get("email") or db.get("emailId")
-        result["phone"] = db.get("phone") or db.get("mobileNo")
-        result["user_id"] = db.get("userId") or db.get("resId")
+        result["profile_title"] = _safe_get(db, "profileTitle", "title")
+        result["profile_image_url"] = _safe_get(db, "profileImageUrl", "imageUrl", "photoUrl")
+        result["name"] = _safe_get(db, "name", "fullName")
+        result["email"] = _safe_get(db, "email", "emailId")
+        result["phone"] = _safe_get(db, "phone", "mobileNo")
+        result["user_id"] = _safe_get(db, "userId", "resId")
 
         # --- Current employment context ---
-        result["designation"] = db.get("designation") or db.get("currentDesignation")
-        result["company"] = db.get("company") or db.get("currentCompany")
-        result["location"] = db.get("location") or db.get("city")
+        result["designation"] = _safe_get(db, "designation", "currentDesignation")
+        result["company"] = _safe_get(db, "company", "currentCompany")
+        result["location"] = _safe_get(db, "location", "city")
         result["notice_period"] = db.get("noticePeriod")
-        result["preferred_locations"] = db.get("preferredLocations") or db.get("locationPref")
+        result["preferred_locations"] = _safe_get(db, "preferredLocations", "locationPref")
 
         # --- Mail / messaging ---
-        result["total_unread_mail"] = db.get("totalUnreadMail") or db.get("unreadMailCount")
+        result["total_unread_mail"] = _safe_get(db, "totalUnreadMail", "unreadMailCount")
         result["unread_direct_mail"] = db.get("unreadDirectMail")
         result["unread_forwarded_mail"] = db.get("unreadForwardedMail")
 
         # --- Search and recruiter analytics ---
-        result["search_impressions"] = db.get("searchImpressions") or db.get("searchAppearances") or db.get("searchCount")
-        result["recruiter_actions_count"] = db.get("recruiterActionsCount") or db.get("totalRecruiterActions")
-        result["profile_views_trend"] = db.get("profileViewsTrend") or db.get("viewsTrend")
+        result["search_impressions"] = ProfileParser.extract_dashboard_search_impressions(db)
+        result["recruiter_actions_count"] = _safe_get(db, "recruiterActionsCount", "totalRecruiterActions")
+        result["profile_views_trend"] = _safe_get(db, "profileViewsTrend", "viewsTrend")
         result["profile_views_last_week"] = db.get("profileViewsLastWeek")
         result["profile_views_last_month"] = db.get("profileViewsLastMonth")
 
         # --- Verification flags ---
-        result["is_profile_verified"] = db.get("isProfileVerified") or db.get("profileVerified")
-        result["is_email_verified"] = db.get("isEmailVerified") or db.get("emailVerified")
-        result["is_phone_verified"] = db.get("isPhoneVerified") or db.get("mobileVerified")
+        result["is_profile_verified"] = _safe_get(db, "isProfileVerified", "profileVerified")
+        result["is_email_verified"] = _safe_get(db, "isEmailVerified", "emailVerified")
+        result["is_phone_verified"] = _safe_get(db, "isPhoneVerified", "mobileVerified")
 
         # --- Subscription ---
-        result["subscription_type"] = db.get("subscriptionType") or db.get("productName")
-        result["subscription_expiry"] = db.get("subscriptionExpiry") or db.get("subscriptionEndDate")
-        result["is_premium"] = db.get("isPremium") or db.get("premiumUser")
+        result["subscription_type"] = _safe_get(db, "subscriptionType", "productName")
+        result["subscription_expiry"] = _safe_get(db, "subscriptionExpiry", "subscriptionEndDate")
+        result["is_premium"] = _safe_get(db, "isPremium", "premiumUser")
 
         # --- Job alerts ---
-        result["job_alerts_count"] = db.get("jobAlertsCount") or db.get("totalJobAlerts")
+        result["job_alerts_count"] = _safe_get(db, "jobAlertsCount", "totalJobAlerts")
 
         # --- Invite breakdown ---
-        result["pending_invites"] = db.get("pendingNvite") or db.get("pendingInvites")
-        result["accepted_invites"] = db.get("acceptedNvite") or db.get("acceptedInvites")
-        result["declined_invites"] = db.get("declinedNvite") or db.get("declinedInvites")
+        result["pending_invites"] = _safe_get(db, "pendingNvite", "pendingInvites")
+        result["accepted_invites"] = _safe_get(db, "acceptedNvite", "acceptedInvites")
+        result["declined_invites"] = _safe_get(db, "declinedNvite", "declinedInvites")
 
         # --- Resdex / visibility ---
-        result["resdex_visible"] = db.get("resdexVisible") or db.get("showProfile")
-        result["active_status"] = db.get("activeStatus") or db.get("activityStatus")
-        result["last_active"] = db.get("lastActive") or db.get("lastLoginDate")
+        result["resdex_visible"] = _safe_get(db, "resdexVisible", "showProfile")
+        result["active_status"] = _safe_get(db, "activeStatus", "activityStatus")
+        result["last_active"] = _safe_get(db, "lastActive", "lastLoginDate")
 
         # --- Recommendations ---
-        result["recommended_jobs_count"] = db.get("recommendedJobsCount") or db.get("totalRecommendedJobs")
+        result["recommended_jobs_count"] = _safe_get(db, "recommendedJobsCount", "totalRecommendedJobs")
 
         # --- Assessments ---
         assessments_raw = db.get("assessments", [])
