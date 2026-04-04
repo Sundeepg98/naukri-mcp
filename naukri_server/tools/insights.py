@@ -230,7 +230,9 @@ async def naukri_insights(
     location: Optional[str] = None,
     freshness: Optional[int] = None,
 ) -> dict:
-    """Unified intelligence layer — application insights, salary analysis, cached answers.
+    """[Deprecated — use individual insight tools instead: naukri_application_insights, naukri_salary_position, etc.]
+
+    Unified intelligence layer — application insights, salary analysis, cached answers.
 
     Note: Uses 'insight_type' instead of 'action' because each value selects a different
     analytical lens (applications, salary, skill_gap, taxonomy, etc.) rather than a CRUD
@@ -318,3 +320,247 @@ async def naukri_insights(
     if _unused and isinstance(result, dict):
         result["unused_params"] = _unused
     return result
+
+
+# ---------------------------------------------------------------------------
+# Individual insight tools (preferred over the deprecated consolidated tool)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_application_insights(days: int = 30) -> dict:
+    """Analyze your application history — status breakdown, top companies, response rates.
+
+    Use this to understand application velocity, which companies you've applied to most,
+    and how your applications are progressing through different statuses.
+
+    Args:
+        days: Analyze applications from last N days (default 30)
+
+    Returns:
+        {status, period_days, total_applications, status_breakdown, velocity, top_companies, insights}
+    """
+    return await handle_tool_action(
+        lambda: _application_insights(days=days),
+        "insights.applications",
+    )
+
+
+@mcp.tool()
+async def naukri_salary_position(designation: Optional[str] = None) -> dict:
+    """Analyze salary positioning across your applied jobs.
+
+    Compares salary ranges from jobs you've applied to, showing min/max/median
+    and distribution. Useful for understanding your market value positioning.
+
+    Args:
+        designation: Filter by job title keyword (optional)
+
+    Returns:
+        {status, total_with_salary, salary_range, distribution, insights}
+    """
+    return await handle_tool_action(
+        lambda: _salary_position(designation=designation),
+        "insights.salary",
+    )
+
+
+@mcp.tool()
+async def naukri_cached_answers(
+    action: str = "list",
+    key: Optional[str] = None,
+    new_answer: Optional[str] = None,
+) -> dict:
+    """Manage cached screening question answers — list, update, or delete.
+
+    When you apply to jobs, screening question answers are cached for reuse.
+    Use this to review what's cached and correct any wrong answers before they're reused.
+
+    Args:
+        action: "list" | "update" | "delete" (default "list")
+        key: Cache key for update/delete operations
+        new_answer: New answer value for update action
+
+    Returns:
+        list: {status, total_cached, answers: [{key, question, answer, type, cached_at}]}
+        update: {status, key, new_answer, message}
+        delete: {status, key, message}
+    """
+    return await handle_tool_action(
+        lambda: _cached_answers(action=action, key=key, new_answer=new_answer),
+        "insights.cached_answers",
+    )
+
+
+@mcp.tool()
+async def naukri_match_analytics(days: int = 30) -> dict:
+    """Analyze match-score distribution across recent applications.
+
+    Shows how well your profile matched the jobs you applied to, with per-field
+    breakdowns (skills, experience, location, etc.) to identify weak areas.
+
+    Args:
+        days: Analyze applications from last N days (default 30)
+
+    Returns:
+        {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}
+    """
+    return await handle_tool_action(
+        lambda: _make_match_analytics_handler(days=days),
+        "insights.match_analytics",
+    )
+
+
+@mcp.tool()
+async def naukri_match_quality(days: int = 30) -> dict:
+    """Aggregate apply-match quality — how well recent applications matched your profile.
+
+    Higher-level summary than match_analytics, focused on overall quality trends
+    rather than per-field breakdowns.
+
+    Args:
+        days: Analyze applications from last N days (default 30)
+
+    Returns:
+        {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown}
+    """
+    return await handle_tool_action(
+        lambda: _match_quality(days=days),
+        "insights.match_quality",
+    )
+
+
+@mcp.tool()
+async def naukri_skill_gap(
+    keywords: Optional[str] = None,
+    use_recommendations: bool = True,
+    sample_size: int = 20,
+    include_assessments: bool = True,
+    timeout_seconds: int = 120,
+) -> dict:
+    """Analyze skill gaps between your profile and market demand.
+
+    Searches jobs matching your profile or keywords, extracts required skills,
+    and compares against your profile skills to find gaps and strengths.
+
+    Args:
+        keywords: Search keywords (required if use_recommendations is False)
+        use_recommendations: Use personalized recommendations (default True)
+        sample_size: Number of jobs to analyze (default 20, max 50)
+        include_assessments: Boost passed-skill frequency from assessments (default True)
+        timeout_seconds: Max seconds before timeout (default 120)
+
+    Returns:
+        {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
+    """
+    return await handle_tool_action(
+        lambda: _make_skill_gap_handler(
+            keywords=keywords, use_recommendations=use_recommendations,
+            sample_size=sample_size, include_assessments=include_assessments,
+            timeout_seconds=timeout_seconds,
+        ),
+        "insights.skill_gap",
+    )
+
+
+@mcp.tool()
+async def naukri_salary_benchmark(
+    keywords: str = "",
+    location: Optional[str] = None,
+    sample_size: int = 20,
+    freshness: Optional[int] = None,
+    timeout_seconds: int = 120,
+) -> dict:
+    """Benchmark your salary against market rates for a given role.
+
+    Searches live job postings, extracts salary data, and compares against
+    your current salary to show positioning (percentile, above/below market).
+
+    Args:
+        keywords: Search keywords for the role (required)
+        location: City to filter (e.g., "Bangalore"). None = all India.
+        sample_size: Number of jobs to analyze (default 20, max 50)
+        freshness: Posted within N days (default None = no filter)
+        timeout_seconds: Max seconds before timeout (default 120)
+
+    Returns:
+        {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
+    """
+    if not keywords:
+        return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _make_salary_benchmark_handler(
+            keywords=keywords, location=location, sample_size=sample_size,
+            freshness=freshness, timeout_seconds=timeout_seconds,
+        ),
+        "insights.salary_benchmark",
+    )
+
+
+@mcp.tool()
+async def naukri_taxonomy() -> dict:
+    """Get Naukri's job taxonomy hierarchy — 37 departments, 167 role categories, 1461 roles.
+
+    Use this to discover valid role IDs, department IDs, and synonyms when constructing
+    search queries or understanding how Naukri classifies jobs. Cached for 24h.
+
+    Returns:
+        {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories}]}
+    """
+    return await handle_tool_action(
+        lambda: _get_taxonomy(),
+        "insights.taxonomy",
+    )
+
+
+@mcp.tool()
+async def naukri_profile_prompts() -> dict:
+    """Fetch pending profile completion actions from Naukri's CCS widget.
+
+    Identifies what profile sections need attention (salary breakup, preferred locations,
+    resume headline, etc.) and their impact on profile visibility. Uses browser cookies.
+
+    Returns:
+        {status, source, pending_count, completed_count, pending_prompts, completed_prompts, all_state_keys}
+    """
+    return await handle_tool_action(
+        lambda: _get_profile_prompts(),
+        "insights.profile_prompts",
+    )
+
+
+@mcp.tool()
+async def naukri_conversion_funnel(days: int = 30) -> dict:
+    """Analyze application-to-interview conversion funnel.
+
+    Shows status breakdown, company response rates, and dead zones (companies
+    with 3+ applications and 0 responses) to optimize where you apply next.
+
+    Args:
+        days: Analyze applications from last N days (default 30)
+
+    Returns:
+        {status, days, total_applied, funnel, conversion_rate, top_responsive_companies, dead_zones}
+    """
+    return await handle_tool_action(
+        lambda: _conversion_funnel(days=days),
+        "insights.conversion_funnel",
+    )
+
+
+@mcp.tool()
+async def naukri_status_changes(days: int = 30) -> dict:
+    """Detect application status changes by syncing with Naukri.
+
+    Compares local application records against Naukri's server data to find
+    status transitions (applied->viewed, viewed->shortlisted, etc.).
+
+    Args:
+        days: Sync window in days (default 30)
+
+    Returns:
+        {status, total_changes, positive_changes, positive, neutral, sync_method, last_sync}
+    """
+    return await handle_tool_action(
+        lambda: _detect_status_changes(days_back=days),
+        "insights.status_changes",
+    )
