@@ -80,7 +80,7 @@ class TestLoadJsonWithBackup:
         logger = MagicMock()
         result = load_json_with_backup(p, logger)
         assert result == []
-        logger.error.assert_called_once()
+        logger.critical.assert_called_once()
 
     def test_missing_file(self, tmp_path):
         p = tmp_path / "nonexistent.json"
@@ -95,7 +95,7 @@ class TestLoadJsonWithBackup:
         logger = MagicMock()
         result = load_json_with_backup(p, logger)
         assert result == []
-        logger.error.assert_called_once()
+        logger.critical.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

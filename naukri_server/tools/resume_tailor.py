@@ -94,6 +94,8 @@ async def _tailor_resume(
            skills_to_add, skills_to_reorder, experience_emphasis, keyword_gaps}}
         - {status: "error", message}
     """
+    logger.info("Tailoring resume for job %s", job_id)
+
     async def _do_work() -> dict:
         from naukri_server.tools.jobs import naukri_get_job
         from naukri_server.tools.profile import get_cached_profile
@@ -107,10 +109,12 @@ async def _tailor_resume(
 
         if isinstance(job_result, Exception) or job_result.get("status") == "error":
             msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
+            logger.error("Resume tailor failed to fetch job %s: %s", job_id, msg)
             return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
 
         if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
             msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
+            logger.error("Resume tailor failed to fetch profile: %s", msg)
             return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
         # Extract job data

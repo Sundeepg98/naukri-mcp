@@ -41,7 +41,7 @@ def load_json_with_backup(path: Path, logger) -> list:
                     return json.loads(backup.read_text(encoding="utf-8"))
                 except Exception:
                     pass
-            logger.error("Both primary and backup corrupted for %s", path.name)
+            logger.critical("BOTH primary and backup corrupted for %s — returning empty list", path.name)
             return []
     return []
 

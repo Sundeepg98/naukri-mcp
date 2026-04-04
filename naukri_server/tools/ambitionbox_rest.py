@@ -99,6 +99,7 @@ async def _ab_rest_get(url: str, params: dict = None) -> dict:
 
 async def ab_get_benefits(company_id: str) -> dict:
     """Fetch 30 benefit categories for a company via REST."""
+    logger.info("AB REST: fetching benefits for company %s", company_id)
     url = f"{AB_BENEFITS_API}/{company_id}/benefits-stats"
     data = await _ab_rest_get(url)
     benefits_data = data.get("data", {})
@@ -111,6 +112,7 @@ async def ab_get_benefits(company_id: str) -> dict:
 
 async def ab_get_work_culture(company_id: str) -> dict:
     """Fetch work culture distribution (timing, travel, work days, shifts)."""
+    logger.info("AB REST: fetching work culture for company %s", company_id)
     url = f"{AB_REVIEW_DIST_API}/{company_id}"
     data = await _ab_rest_get(url)
     dist = data.get("data", {})
@@ -139,6 +141,7 @@ async def ab_get_work_culture(company_id: str) -> dict:
 
 async def ab_get_interview_questions(company_id: str, designation_id: str = None, limit: int = 7) -> dict:
     """Fetch actual interview questions by company and role."""
+    logger.info("AB REST: fetching interview questions for company %s", company_id)
     params = {"companyId": company_id, "limit": str(limit)}
     if designation_id:
         params["designation"] = designation_id
@@ -154,6 +157,7 @@ async def ab_get_interview_questions(company_id: str, designation_id: str = None
 
 async def ab_get_competitors(company_id: str) -> dict:
     """Fetch top 41 competitors with ratings and review counts."""
+    logger.info("AB REST: fetching competitors for company %s", company_id)
     url = f"{AB_COMPANY_COMPARE_API}/{company_id}"
     data = await _ab_rest_get(url)
     competitors = data if isinstance(data, list) else data.get("data", [])
@@ -166,6 +170,7 @@ async def ab_get_competitors(company_id: str) -> dict:
 
 async def ab_get_locations(company_id: str) -> dict:
     """Fetch all office locations for a company."""
+    logger.info("AB REST: fetching locations for company %s", company_id)
     url = f"{AB_COMPANY_LOCATIONS_API}/{company_id}/sectionalDetails"
     data = await _ab_rest_get(url, params={"sections": "companyLocations"})
     locations = data.get("companyLocations", [])
@@ -182,6 +187,7 @@ async def ab_get_applied_jobs_insights() -> dict:
     Cross-references Naukri applications with AmbitionBox salary data.
     No parameters needed -- returns insights for your recent applications.
     """
+    logger.info("AB REST: fetching applied jobs insights")
     data = await _ab_rest_get(AB_INSIGHTS_APPLIED_API)
     insights = data if isinstance(data, list) else data.get("data", [])
     return {
@@ -193,6 +199,7 @@ async def ab_get_applied_jobs_insights() -> dict:
 
 async def ab_get_salary_rest(company_id: str, job_profile_id: str) -> dict:
     """Fetch detailed salary data (17 fields) for a specific role at a company."""
+    logger.info("AB REST: fetching salary for company %s, profile %s", company_id, job_profile_id)
     url = f"{AB_SALARY_API}/{company_id}/jobProfile/{job_profile_id}/salaryData"
     data = await _ab_rest_get(url)
     salary_data = data.get("data", {})

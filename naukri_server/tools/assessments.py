@@ -1,8 +1,12 @@
 """Assessment tools — skill test scores and profile completeness metrics."""
 
+import logging
+
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
 from naukri_server.config import DASHBOARD_API
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -11,6 +15,7 @@ from naukri_server.config import DASHBOARD_API
 
 async def _list_assessments() -> dict:
     """Fetch skill assessment results from the dashboard API."""
+    logger.info("Fetching skill assessments from dashboard")
     data = await api_client.get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
     assessments_raw = dashboard.get("assessments", [])
@@ -53,6 +58,7 @@ async def _list_assessments() -> dict:
 
 async def _get_profile_completeness() -> dict:
     """Fetch profile completeness score and key metrics from the dashboard API."""
+    logger.info("Fetching profile completeness from dashboard")
     data = await api_client.get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
 
@@ -103,8 +109,10 @@ async def _assessments_dispatch(action: str = "list") -> dict:
         try:
             return await _list_assessments()
         except NaukriAPIError as e:
+            logger.error("List assessments API error: %s (HTTP %s)", e, e.status)
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
+            logger.error("List assessments failed: %s", e)
             return {"status": "error", "message": f"Get assessments failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── completeness ──────────────────────────────────────────────────
@@ -112,8 +120,10 @@ async def _assessments_dispatch(action: str = "list") -> dict:
         try:
             return await _get_profile_completeness()
         except NaukriAPIError as e:
+            logger.error("Profile completeness API error: %s (HTTP %s)", e, e.status)
             return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
         except Exception as e:
+            logger.error("Profile completeness failed: %s", e)
             return {"status": "error", "message": f"Get profile completeness failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
     # ── unknown action ────────────────────────────────────────────────

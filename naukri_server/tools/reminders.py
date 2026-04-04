@@ -32,6 +32,7 @@ async def _set_reminder(
     company: Optional[str] = None,
 ) -> dict:
     """Set a follow-up reminder for a job application."""
+    logger.info("Setting reminder for job %s in %d days", job_id, days)
     if days < 1 or days > 365:
         return {"status": "error", "message": "days must be between 1 and 365", "error_code": "VALIDATION_ERROR"}
 
@@ -86,6 +87,7 @@ async def _list_reminders(include_past: bool = True, include_app_status: bool = 
         include_past: Include already-due reminders (default True).
         include_app_status: Batch-fetch live application status for each reminder (default False).
     """
+    logger.info("Listing reminders (include_past=%s, include_app_status=%s)", include_past, include_app_status)
     async with _reminders_lock:
         reminders = _load_reminders()
 

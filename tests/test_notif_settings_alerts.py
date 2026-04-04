@@ -183,7 +183,7 @@ class TestAlerts:
 # 4. Helper-level validation
 # =====================================================================
 
-class TestHelperValidation:
+class TestNotifSettingsHelperValidation:
     """Validation inside internal helpers that runs before any API call."""
 
     @pytest.mark.asyncio

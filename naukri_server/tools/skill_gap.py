@@ -36,6 +36,7 @@ async def _skill_gap_analysis(
            assessments_used: int}
         - {status: "error", message}
     """
+    logger.info("Skill gap analysis: keywords=%s, use_recommendations=%s, sample_size=%d", keywords, use_recommendations, sample_size)
     if not use_recommendations and not keywords:
         return {"status": "error", "message": "keywords is required when use_recommendations is False.", "error_code": "VALIDATION_ERROR"}
 
@@ -64,10 +65,12 @@ async def _skill_gap_analysis(
 
         if isinstance(jobs_result, Exception) or jobs_result.get("status") == "error":
             msg = str(jobs_result) if isinstance(jobs_result, Exception) else jobs_result.get("message")
+            logger.error("Skill gap analysis failed to fetch jobs: %s", msg)
             return {"status": "error", "message": f"Failed to fetch jobs: {msg}", "error_code": "API_ERROR"}
 
         if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
             msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
+            logger.error("Skill gap analysis failed to fetch profile: %s", msg)
             return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
 
         jobs = jobs_result.get("jobs", [])

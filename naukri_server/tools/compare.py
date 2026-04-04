@@ -27,6 +27,7 @@ async def _compare_jobs(
            common_skills, all_skills, best_match_job_id, average_fit_score}
         - {status: "error", message}
     """
+    logger.info("Comparing %d jobs: %s", len(job_ids), job_ids)
     if len(job_ids) < 2:
         return {"status": "error", "message": "Need at least 2 job IDs to compare.", "error_code": "VALIDATION_ERROR"}
     if len(job_ids) > 5:
@@ -133,6 +134,7 @@ async def _compare_jobs(
             jobs.append(job_entry)
 
         if not jobs:
+            logger.error("Compare failed — no jobs fetched. Errors: %s", errors)
             return {"status": "error", "message": f"No jobs could be fetched. Errors: {errors}", "error_code": "API_ERROR"}
 
         # Compute skill overlap (using normalized sets)

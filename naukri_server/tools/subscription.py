@@ -1,8 +1,12 @@
 """Subscription tools — Naukri 360 Pro status, promo codes, and login verification."""
 
+import logging
+
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
 from naukri_server.config import N360_CONFIG_API
+
+logger = logging.getLogger(__name__)
 
 
 async def _get_subscription_status() -> dict:
@@ -13,6 +17,7 @@ async def _get_subscription_status() -> dict:
         - {status: "success", is_paid, has_active_subscription, is_jobseeker_agent_eligible, promo_code, promo_discount, services: {...}}
         - {status: "error", message}
     """
+    logger.info("Fetching subscription status")
     try:
         data = await api_client.get(N360_CONFIG_API)
 
@@ -39,8 +44,10 @@ async def _get_subscription_status() -> dict:
             "services": serv_details if isinstance(serv_details, dict) else {},
         }
     except NaukriAPIError as e:
+        logger.error("Subscription status API error: %s (HTTP %s)", e, e.status)
         return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "AUTH_ERROR" if e.status == 401 else "API_ERROR"}
     except Exception as e:
+        logger.error("Subscription status failed: %s", e)
         return {"status": "error", "message": f"Get subscription status failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 

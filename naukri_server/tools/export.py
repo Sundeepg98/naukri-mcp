@@ -49,6 +49,7 @@ async def _export_data(
         - {status: "success", file_path, record_count, data_type}
         - {status: "error", message}
     """
+    logger.info("Exporting %s as %s", data_type, format)
     format = format.lower()
     if format not in ("json", "csv"):
         return {"status": "error", "message": f"Unsupported format '{format}'. Use 'json' or 'csv'.", "error_code": "VALIDATION_ERROR"}
@@ -67,6 +68,7 @@ async def _export_data(
         try:
             records = json.loads(apps_file.read_text(encoding="utf-8"))
         except Exception as e:
+            logger.error("Failed to read applications for export: %s", e)
             return {"status": "error", "message": f"Failed to read applications: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "saved_jobs":
@@ -76,6 +78,7 @@ async def _export_data(
         try:
             records = json.loads(saved_file.read_text(encoding="utf-8"))
         except Exception as e:
+            logger.error("Failed to read saved jobs for export: %s", e)
             return {"status": "error", "message": f"Failed to read saved jobs: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "search_results":
@@ -128,6 +131,7 @@ async def _export_data(
             file_path.write_text(output.getvalue(), encoding="utf-8")
 
     except Exception as e:
+        logger.error("Failed to write %s export file: %s", format, e)
         return {"status": "error", "message": f"Failed to write {format} file: {e}", "error_code": "API_ERROR"}
 
     return {

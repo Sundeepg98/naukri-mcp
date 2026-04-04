@@ -36,6 +36,8 @@ async def _research_company(
            errors: [any partial failures]}
         - {status: "error", message}
     """
+    logger.info("Researching company: %s", keyword)
+
     async def _do_work() -> dict:
         from naukri_server.tools.ambitionbox import (
             _fetch_salary, _fetch_reviews, _fetch_interviews,
@@ -218,6 +220,7 @@ async def _salary_benchmark(
     import re
     import statistics
 
+    logger.info("Salary benchmark: keywords=%s, location=%s, sample_size=%d", keywords, location, sample_size)
     sample_size = min(sample_size, 50)
     if sample_size < 1:
         return {"status": "error", "message": "sample_size must be >= 1", "error_code": "VALIDATION_ERROR"}
@@ -358,7 +361,7 @@ async def _salary_benchmark(
     try:
         return await asyncio.wait_for(_do_work(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        return {"status": "error", "message": f"Salary benchmark timed out after {timeout_seconds}s", "error_code": "API_ERROR"}
+        return {"status": "error", "message": f"Salary benchmark timed out after {timeout_seconds}s", "error_code": "TIMEOUT"}
 
 
 # Backward-compat alias (was @mcp.tool, now dispatched via naukri_insights(insight_type="salary_benchmark"))

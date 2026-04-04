@@ -134,7 +134,7 @@ class TestEmptyResponses:
 # ============================================================================
 
 
-class TestSalaryParsing:
+class TestSalaryParsingEdge:
     def test_not_disclosed(self):
         from naukri_server.tools.insights import _parse_salary_str
         assert _parse_salary_str("Not Disclosed") == (None, None)

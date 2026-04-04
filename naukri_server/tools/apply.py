@@ -338,7 +338,7 @@ async def naukri_batch_apply(
                     timeout=BATCH_APPLY_PER_JOB_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                return {"status": "error", "job_id": j["job_id"], "message": f"Timed out after {BATCH_APPLY_PER_JOB_TIMEOUT}s", "error_code": "API_ERROR"}
+                return {"status": "error", "job_id": j["job_id"], "message": f"Timed out after {BATCH_APPLY_PER_JOB_TIMEOUT}s", "error_code": "TIMEOUT"}
 
     # Stagger task launches with delay between each submission
     tasks = []

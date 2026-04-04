@@ -673,7 +673,7 @@ class TestRemindersAppStatus:
 # 12. naukri_sync
 # =====================================================================
 
-class TestSync:
+class TestSyncConsolidation:
     """Tests for naukri_server.tools.sync.naukri_sync."""
 
     @pytest.mark.asyncio
@@ -773,7 +773,7 @@ class TestAssessments:
 # 15. Cross-cutting: helper-level validation (no action routing)
 # =====================================================================
 
-class TestHelperValidation:
+class TestConsolidationHelperValidation:
     """Validation inside internal helpers that runs before any API/browser call."""
 
     @pytest.mark.asyncio

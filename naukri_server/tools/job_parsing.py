@@ -1,10 +1,15 @@
 """Shared job-list parsing helpers used by search and company tools."""
 
+import logging
+
 from naukri_server.config import NAUKRI_BASE, LAKHS_MULTIPLIER
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_job_list(job_details: list, limit: int) -> list:
     """Parse Naukri's jobDetails array into a clean list of job dicts."""
+    logger.info("Parsing %d job details (limit %d)", len(job_details), limit)
     jobs = []
     for job in job_details[:limit]:
         salary = job.get("salaryDetail", {})

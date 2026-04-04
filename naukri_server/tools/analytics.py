@@ -1,7 +1,11 @@
 """Match analytics for job applications."""
 
+import logging
+
 from naukri_server.interfaces import api_client
 from naukri_server.config import MATCH_ANALYTICS_API
+
+logger = logging.getLogger(__name__)
 
 
 async def _get_match_analytics(days: int = 7) -> dict:
@@ -15,6 +19,7 @@ async def _get_match_analytics(days: int = 7) -> dict:
            low_match, field_breakdown, user_details}
         - {status: "error", message}
     """
+    logger.info("Fetching match analytics for last %d days", days)
     if days < 1:
         return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
     data = await api_client.get(MATCH_ANALYTICS_API, params={"days": str(days)})
