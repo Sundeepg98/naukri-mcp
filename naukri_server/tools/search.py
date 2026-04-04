@@ -6,8 +6,15 @@ from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.tools.job_parsing import _parse_job_list
-from naukri_server.validation import validate_job_list, validate_limit, validate_page
+from naukri_server.tools.job_parsing import _parse_job_list  # noqa: F401
+from naukri_server.validation import validate_job_list, validate_limit, validate_page  # noqa: F401
+
+# ── Service re-exports — result builders live in search_service ───────────
+from naukri_server.services.search_service import (
+    build_search_result,
+    build_recommendations_result,
+    build_similar_jobs_result,
+)
 
 
 @mcp.tool()
@@ -94,37 +101,15 @@ async def naukri_search_jobs(
 
         data = await api_client.get(SEARCH_API, params=rest_params)
         if data and isinstance(data, dict) and data.get("jobDetails"):
-            jobs = _parse_job_list(data.get("jobDetails", []), limit)
-            total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
-            result = {
-                "status": "success",
-                "keywords": keywords,
-                "location": location,
-                "page": page_no,
-                "total": total,
-                "count": len(jobs),
-                "has_more": (page_no * limit) < total if isinstance(total, int) else len(jobs) == limit,
-                "filters": {k: v for k, v in {
-                    "experience": experience,
-                    "salary_min": salary_min,
-                    "salary_max": salary_max,
-                    "sort_by": sort_by,
-                    "freshness": freshness,
-                    "work_mode": work_mode,
-                    "job_type": job_type,
-                    "company_type": company_type,
-                    "industry": industry,
-                    "education": education,
-                    "role_category": role_category,
-                    "posted_within": posted_within,
-                }.items() if v is not None},
-                "jobs": jobs,
-                "search_path": "rest",
+            filters = {
+                "experience": experience, "salary_min": salary_min,
+                "salary_max": salary_max, "sort_by": sort_by,
+                "freshness": freshness, "work_mode": work_mode,
+                "job_type": job_type, "company_type": company_type,
+                "industry": industry, "education": education,
+                "role_category": role_category, "posted_within": posted_within,
             }
-            warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
-            if warnings:
-                result["warnings"] = warnings
-            return result
+            return build_search_result(data, keywords, location, page_no, limit, filters, "rest")
     except Exception as e:
         logger.info("REST search failed (%s), falling back to browser", e)
 
@@ -182,39 +167,15 @@ async def naukri_search_jobs(
             if not data:
                 return {"status": "error", "message": "Search API response not captured. Try again.", "error_code": "API_ERROR"}
 
-            jobs = _parse_job_list(data.get("jobDetails", []), limit)
-
-            total_jobs = data.get("noOfJobs") or 0
-            result = {
-                "status": "success",
-                "keywords": keywords,
-                "location": location,
-                "page": page_no,
-                "total": total_jobs,
-                "count": len(jobs),
-                "has_more": (page_no * limit) < total_jobs,
-                "clusters": data.get("clusters", {}),
-                "filters": {k: v for k, v in {
-                    "experience": experience,
-                    "salary_min": salary_min,
-                    "salary_max": salary_max,
-                    "sort_by": sort_by,
-                    "freshness": freshness,
-                    "work_mode": work_mode,
-                    "job_type": job_type,
-                    "company_type": company_type,
-                    "industry": industry,
-                    "education": education,
-                    "role_category": role_category,
-                    "posted_within": posted_within,
-                }.items() if v is not None},
-                "jobs": jobs,
-                "search_path": "browser",
+            filters = {
+                "experience": experience, "salary_min": salary_min,
+                "salary_max": salary_max, "sort_by": sort_by,
+                "freshness": freshness, "work_mode": work_mode,
+                "job_type": job_type, "company_type": company_type,
+                "industry": industry, "education": education,
+                "role_category": role_category, "posted_within": posted_within,
             }
-            warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
-            if warnings:
-                result["warnings"] = warnings
-            return result
+            return build_search_result(data, keywords, location, page_no, limit, filters, "browser")
 
     return await handle_tool_action(_browser_search, "search.browser_fallback")
 
@@ -244,38 +205,7 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     limit = validate_limit(limit)
     page = validate_page(page)
     data = await api_client.post(RECOMMENDED_JOBS_API, body={})
-    job_details = data.get("jobDetails", [])
-    all_jobs = _parse_job_list(job_details, len(job_details))
-    total = data.get("noOfJobs") or len(all_jobs)
-    offset = (page - 1) * limit
-    jobs = all_jobs[offset:offset + limit]
-    raw_clusters = data.get("clusters") or data.get("recommendedClusters", {})
-    cluster_info = {}
-    if isinstance(raw_clusters, dict):
-        for cluster_type, cluster_data in raw_clusters.items():
-            if isinstance(cluster_data, dict):
-                cluster_info[cluster_type] = {
-                    "count": cluster_data.get("count", 0),
-                    "title": cluster_data.get("title") or cluster_type,
-                }
-            elif isinstance(cluster_data, (int, float)):
-                cluster_info[cluster_type] = {"count": int(cluster_data), "title": cluster_type}
-    result = {
-        "status": "success",
-        "source": "recommendations",
-        "total": total,
-        "count": len(jobs),
-        "page": page,
-        "has_more": (offset + limit) < total,
-        "jobs": jobs,
-    }
-    result["agent_eligible_exists"] = data.get("agentEligibleJobExists", False)
-    result["cluster_split_date"] = data.get("clusterSplitDate")
-    result["clusters"] = cluster_info
-    warnings = validate_job_list(jobs, total, "recommendations")
-    if warnings:
-        result["warnings"] = warnings
-    return result
+    return build_recommendations_result(data, page, limit)
 
 
 async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
@@ -300,27 +230,7 @@ async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict
             "noOfResults": str(limit * page),
             "searchType": "sim",
         })
-        # Similar jobs uses simJobDetails with content + collaborative arrays
-        sim = data.get("simJobDetails", {})
-        job_details = sim.get("content", []) + sim.get("collaborative", [])
-        all_jobs = _parse_job_list(job_details, len(job_details))
-        total = data.get("noOfJobs") or len(all_jobs)
-        offset = (page - 1) * limit
-        jobs = all_jobs[offset:offset + limit]
-        result = {
-            "status": "success",
-            "job_id": job_id,
-            "source": "similar",
-            "total": total,
-            "count": len(jobs),
-            "page": page,
-            "has_more": (offset + limit) < total,
-            "jobs": jobs,
-        }
-        warnings = validate_job_list(jobs, total, "similar_jobs")
-        if warnings:
-            result["warnings"] = warnings
-        return result
+        return build_similar_jobs_result(data, job_id, page, limit)
 
     return await handle_tool_action(_do, "search.similar")
 

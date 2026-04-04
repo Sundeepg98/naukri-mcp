@@ -9,7 +9,7 @@ from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_
 from naukri_server.events import event_bus, ApplicationSubmitted
 from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
-from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
+from naukri_server.tools.tracking import record_application
 from naukri_server.validation import validate_limit
 
 
@@ -210,21 +210,18 @@ async def naukri_apply(
     job_id = _extract_job_id(job_id)
 
     # Check for duplicate application from local tracking
-    async with _applications_lock:
-        existing = _load_json(APPLICATIONS_FILE)
-        existing_app = next(
-            (a for a in existing if str(a.get("job_id")) == str(job_id)), None
-        )
-        if existing_app:
-            # Allow retry if previous attempt needs_input and answers are provided
-            if ApplicationStatus.from_string(existing_app.get("status", "")) == ApplicationStatus.NEEDS_INPUT and answers:
-                pass  # Fall through to _apply_single for retry
-            else:
-                return {
-                    "status": "already_applied",
-                    "message": "You have already applied to this job (from local tracking).",
-                    "job_id": job_id,
-                }
+    from naukri_server.database import get_application
+    existing_app = await get_application(str(job_id))
+    if existing_app:
+        # Allow retry if previous attempt needs_input and answers are provided
+        if ApplicationStatus.from_string(existing_app.get("status", "")) == ApplicationStatus.NEEDS_INPUT and answers:
+            pass  # Fall through to _apply_single for retry
+        else:
+            return {
+                "status": "already_applied",
+                "message": "You have already applied to this job (from local tracking).",
+                "job_id": job_id,
+            }
 
     return await _apply_single(job_id, answers, tracking_extra={"source": "single"})
 
@@ -308,9 +305,8 @@ async def naukri_batch_apply(
     to_apply = [j for j in all_jobs if not j.get("is_applied")]
 
     # Also filter out jobs we've already applied to locally
-    async with _applications_lock:
-        existing = _load_json(APPLICATIONS_FILE)
-        applied_ids = {str(a.get("job_id")) for a in existing}
+    from naukri_server.database import get_applied_job_ids
+    applied_ids = await get_applied_job_ids()
     before_local_filter = len(to_apply)
     to_apply = [j for j in to_apply if str(j.get("job_id")) not in applied_ids]
     skipped_duplicates = before_local_filter - len(to_apply)

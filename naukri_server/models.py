@@ -3,7 +3,7 @@
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional, Any, TypedDict, NotRequired
 
 
 class ApplicationStatus(Enum):
@@ -207,3 +207,167 @@ class Application:
         d = self.__dict__.copy()
         d["status"] = self.status.value
         return {k: v for k, v in d.items() if v is not None}
+
+
+# ---------------------------------------------------------------------------
+# Response TypedDicts — document the shape of MCP tool return values
+# ---------------------------------------------------------------------------
+
+
+class ErrorResult(TypedDict):
+    """Standard error response from any MCP tool."""
+    status: str  # "error"
+    message: str
+    error_code: str  # ErrorCode value
+
+
+class PaginatedResult(TypedDict):
+    """Standard pagination metadata included in list responses."""
+    total: int
+    count: int
+    page: int
+    has_more: bool
+
+
+class ApplicationDict(TypedDict, total=False):
+    """Shape of an application record from SQLite/API."""
+    job_id: str
+    title: str
+    company: str
+    status: str
+    applied_at: str
+    source: str
+    ars_score: int
+    star_rating: str
+    job_activity: int
+    company_rating: str
+    is_open: bool
+    view_count: int
+    follow_up_priority: int
+    last_synced: str
+    is_stale: bool
+    days_since_applied: int
+    has_recruiter_interest: bool
+
+
+class JobDict(TypedDict, total=False):
+    """Shape of a parsed job listing from Naukri API."""
+    job_id: str
+    title: str
+    company: str
+    salary: str
+    salary_min_lakhs: float
+    salary_max_lakhs: float
+    location: str
+    experience: str
+    experience_min: int
+    experience_max: int
+    tags: list[str]
+    is_applied: bool
+    posted_date: str
+    url: str
+    work_mode: str
+    company_rating: str
+    company_reviews_count: int
+    vacancies: int
+    apply_count: int
+    is_agent_eligible: bool
+    group_id: str
+    company_id: str
+
+
+class SavedJobDict(TypedDict, total=False):
+    """Shape of a saved/bookmarked job record."""
+    job_id: str
+    title: str
+    company: str
+    notes: str
+    saved_at: str
+    source: str
+
+
+class ReminderDict(TypedDict, total=False):
+    """Shape of a follow-up reminder record."""
+    job_id: str
+    title: str
+    company: str
+    remind_at: str
+    note: str
+    is_due: bool
+    days_until_due: int
+    created_at: str
+
+
+class InterviewRoundDict(TypedDict, total=False):
+    """Shape of an interview round record."""
+    id: int
+    job_id: str
+    round_type: str  # phone_screen, technical, system_design, hr, offer, other
+    date: str
+    notes: str
+    status: str  # scheduled, completed, cancelled
+    created_at: str
+
+
+class FitScoreResult(TypedDict):
+    """Shape of a fit score computation result."""
+    overall_score: int
+    skill_match: dict  # {matched: [...], missing: [...], match_pct: float}
+    experience_match: dict
+    recommendation: str
+    bonuses: NotRequired[dict]
+    reasons: NotRequired[list[str]]
+
+
+class StaleApplicationDict(TypedDict, total=False):
+    """Shape of a stale application detection result."""
+    job_id: str
+    title: str
+    company: str
+    stale_score: int
+    follow_up_priority: int
+    reasons: list[str]
+    recommendation: str
+    applied_date: str
+    is_open: bool
+    view_count: int
+    job_activity: int
+    ars_score: int
+
+
+class ApplicationDetailResult(TypedDict, total=False):
+    """Shape of detailed application status from Naukri API."""
+    status: str
+    job_id: str
+    title: str
+    company: str
+    location: str
+    is_open: bool
+    total_applicants: int
+    recruiter_activity: int
+    match_rating: int
+    status_timeline: list[dict]
+    current_status: str
+    application_date: str
+    view_count: int
+    ars_score: int
+    star_rating: int
+    screening_questions: list[dict]
+    recruiter: dict
+    local_tracking: dict
+
+
+class ProfileResult(TypedDict, total=False):
+    """Shape of profile data from Naukri API."""
+    status: str
+    name: str
+    email: str
+    phone: str
+    current_location: str
+    total_experience: str
+    current_ctc: str
+    expected_ctc: str
+    notice_period: str
+    key_skills: list[str]
+    headline: str
+    profile_score: int

@@ -68,10 +68,8 @@ async def _compare_jobs(
         # Load local tracking for cross-check
         local_applied_ids = set()
         try:
-            from naukri_server.tools.tracking import _load_json, APPLICATIONS_FILE, _applications_lock
-            async with _applications_lock:
-                local_apps = _load_json(APPLICATIONS_FILE)
-                local_applied_ids = {str(a.get("job_id")) for a in local_apps}
+            from naukri_server.database import get_applied_job_ids
+            local_applied_ids = await get_applied_job_ids()
         except Exception as e:
             logger.debug("Scoring failed for job cross-ref: %s", e)
 

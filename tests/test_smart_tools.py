@@ -761,7 +761,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_returns_action_items(self):
         """follow_up returns prioritized action items for stale applications."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -783,7 +783,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_stale_failure(self):
         """follow_up returns error when stale detection fails."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {"status": "error", "message": "Failed"}
@@ -797,7 +797,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_recruiter_contact_high_priority(self):
         """follow_up marks apps with recruiter messages as high priority."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -828,7 +828,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_due_reminder_high_priority(self):
         """follow_up marks apps with due reminders as high priority."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -852,7 +852,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_partial_success_inbox_failure(self):
         """follow_up returns partial_success when inbox fetch fails."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -874,7 +874,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_low_priority_for_low_stale_score(self):
         """follow_up assigns low priority when stale_score < 70 and no inbox/reminder matches."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -894,7 +894,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_priority_sorting(self):
         """follow_up sorts action items: high first, then medium, then low."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {
@@ -920,7 +920,7 @@ class TestApplicationFollowUp:
     async def test_follow_up_empty_stale_apps(self):
         """follow_up returns empty lists when no stale applications exist."""
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._get_stale_applications", new_callable=AsyncMock) as mock_stale, \
+        with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {"status": "success", "stale_applications": []}

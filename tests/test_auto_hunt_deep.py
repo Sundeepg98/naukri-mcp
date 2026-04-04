@@ -100,9 +100,8 @@ class TestMinFitScoreValidation:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = _SEARCH_ONE_JOB
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -120,9 +119,8 @@ class TestMinFitScoreValidation:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = _SEARCH_EMPTY
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -268,9 +266,8 @@ class TestAppliedJobsFiltered:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -310,9 +307,8 @@ class TestJobsScoredAndSorted:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -348,9 +344,8 @@ class TestMinFitScoreFiltering:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -377,9 +372,8 @@ class TestMinFitScoreFiltering:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -436,9 +430,8 @@ class TestLimitClamping:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = _SEARCH_EMPTY
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -459,9 +452,8 @@ class TestLimitClamping:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = _SEARCH_EMPTY
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -542,9 +534,8 @@ class TestRankedJobFields:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 
@@ -571,9 +562,8 @@ class TestRankedJobFields:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 

@@ -825,3 +825,129 @@ class TestCompanyIntelConsolidation:
             mock_helper.return_value = {"status": "success", "interview_experiences": []}
             result = await naukri_company_intel(company="google", intel_type="interviews")
             mock_helper.assert_awaited_once()
+
+
+# =====================================================================
+# AmbitionBox REST Bridge (recovered from tier25.py)
+# =====================================================================
+
+class TestABRestBridgeFunctions:
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_benefits(self, mock_get):
+        mock_get.return_value = {
+            "data": {"totalBenefits": 30, "benefits": [
+                {"name": "Health Insurance", "percentage": 92, "count": 4500},
+                {"name": "Cafeteria", "percentage": 78, "count": 3800},
+            ]}
+        }
+        from naukri_server.tools.ambitionbox import ab_get_benefits
+        result = await ab_get_benefits("41")
+        assert result["status"] == "success"
+        assert result["total_benefits"] == 30
+        assert len(result["benefits"]) == 2
+        assert result["benefits"][0]["name"] == "Health Insurance"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_work_culture(self, mock_get):
+        mock_get.return_value = {
+            "data": {
+                "reviewsCount": 47802,
+                "workMonitorLabels": ["Flexible timing", "Strict timing"],
+                "workMonitorSeries": [73, 27],
+                "travelTagsLabels": ["No travel", "Occasional"],
+                "travelTagsSeries": [67, 33],
+                "workDaysLabels": ["Mon-Fri", "Mon-Sat"],
+                "workDaysSeries": [89, 11],
+                "shiftsLabels": ["Day", "Night"],
+                "shiftsSeries": [95, 5],
+            }
+        }
+        from naukri_server.tools.ambitionbox import ab_get_work_culture
+        result = await ab_get_work_culture("41")
+        assert result["reviews_count"] == 47802
+        assert result["work_timing"]["labels"] == ["Flexible timing", "Strict timing"]
+        assert result["travel"]["labels"] == ["No travel", "Occasional"]
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_interview_questions(self, mock_get):
+        mock_get.return_value = {
+            "data": [
+                {"question": "What is Node.js?", "difficulty": "Easy"},
+                {"question": "Explain event loop", "difficulty": "Medium"},
+            ],
+            "meta": {"count": 10, "currentPage": 1},
+            "totalInterviewExperiencesLive": 8364,
+        }
+        from naukri_server.tools.ambitionbox import ab_get_interview_questions
+        result = await ab_get_interview_questions("41", designation_id="1027")
+        assert result["total_interviews"] == 8364
+        assert result["count"] == 10
+        assert len(result["questions"]) == 2
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_competitors(self, mock_get):
+        mock_get.return_value = [
+            {"CompanyId": 42, "CompanyName": "TCS", "Rating": 3.3, "ReviewCount": 112022},
+            {"CompanyId": 43, "CompanyName": "Wipro", "Rating": 3.5, "ReviewCount": 50000},
+        ]
+        from naukri_server.tools.ambitionbox import ab_get_competitors
+        result = await ab_get_competitors("41")
+        assert result["count"] == 2
+        assert result["competitors"][0]["CompanyName"] == "TCS"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_locations(self, mock_get):
+        mock_get.return_value = {
+            "companyLocations": [
+                {"city": "Bengaluru", "address": "Electronics City"},
+                {"city": "Pune", "address": "Hinjewadi"},
+            ]
+        }
+        from naukri_server.tools.ambitionbox import ab_get_locations
+        result = await ab_get_locations("41")
+        assert result["count"] == 2
+        assert result["locations"][0]["city"] == "Bengaluru"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_applied_jobs_insights(self, mock_get):
+        mock_get.return_value = [
+            {"companyName": "Meesho", "minCtc": 2500000, "maxCtc": 4000000,
+             "jobProfileName": "Backend Developer", "timeLapse": "3 days ago"}
+        ]
+        from naukri_server.tools.ambitionbox import ab_get_applied_jobs_insights
+        result = await ab_get_applied_jobs_insights()
+        assert result["count"] == 1
+        assert result["insights"][0]["minCtc"] == 2500000
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_get_salary_rest(self, mock_get):
+        mock_get.return_value = {
+            "data": {
+                "profileInfo": {"name": "Backend Developer"},
+                "summaryData": {"avgSalary": 1500000, "minSalary": 800000, "maxSalary": 2500000},
+                "confidence": "VeryHigh",
+                "experienceLevels": [{"level": "0-2 yrs", "avg": 600000}],
+                "ctcComparison": {"marketAvg": 1400000},
+                "takeHomeSalary": {"monthly": 95000},
+            }
+        }
+        from naukri_server.tools.ambitionbox import ab_get_salary_rest
+        result = await ab_get_salary_rest("41", "1027")
+        assert result["summary"]["avgSalary"] == 1500000
+        assert result["confidence"] == "VeryHigh"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.ambitionbox_rest._ab_rest_get", new_callable=AsyncMock)
+    async def test_empty_response_handling(self, mock_get):
+        mock_get.return_value = {}
+        from naukri_server.tools.ambitionbox import ab_get_benefits
+        result = await ab_get_benefits("999")
+        assert result["total_benefits"] == 0
+        assert result["benefits"] == []

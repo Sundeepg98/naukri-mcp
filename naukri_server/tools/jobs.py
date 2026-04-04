@@ -18,214 +18,17 @@ from naukri_server.validation import validate_job_detail
 # ============================================================================
 
 
-def _extract_job_id(job_url_or_id: str) -> str:
-    """Extract numeric job ID from URL or pass through if already an ID.
-
-    Raises ValueError if no valid numeric job ID can be extracted.
-    """
-    if job_url_or_id.isdigit():
-        return job_url_or_id
-    # URL pattern: ...-<jobId> at the end
-    match = re.search(r'(\d{6,})', job_url_or_id)
-    if match:
-        return match.group(1)
-    raise ValueError(f"Invalid job ID or URL: {job_url_or_id}")
-
-
-def _extract_skills(raw_skills) -> list:
-    """Extract skill labels from keySkills — handles both list and dict formats."""
-    if isinstance(raw_skills, dict):
-        # v3 format: {"preferred": [{label: "Python"}, ...], "other": [...]}
-        skills = []
-        for category_skills in raw_skills.values():
-            if isinstance(category_skills, list):
-                for s in category_skills:
-                    label = s.get("label", s) if isinstance(s, dict) else s
-                    if label and isinstance(label, str):
-                        skills.append(label)
-        return skills
-    elif isinstance(raw_skills, list):
-        return [s.get("label", s) if isinstance(s, dict) else s for s in raw_skills]
-    return []
-
-
-def _format_education(edu) -> str | None:
-    """Format the v4 education object into a readable string."""
-    if not edu or not isinstance(edu, dict):
-        return None
-    parts = []
-    ug = edu.get("ugQualification") or edu.get("ug")
-    pg = edu.get("pgQualification") or edu.get("pg")
-    if ug:
-        parts.append(f"UG: {ug}")
-    if pg:
-        parts.append(f"PG: {pg}")
-    return ", ".join(parts) if parts else None
-
-
-def _extract_placeholder(placeholders: list, ptype: str) -> str | None:
-    """Extract a label from Naukri's placeholders array by type."""
-    for p in placeholders:
-        if isinstance(p, dict) and p.get("type") == ptype:
-            return p.get("label")
-    return None
-
-
-def _parse_salary_data(job: dict) -> dict:
-    """Extract salary info from job data."""
-    salary = job.get("salaryDetail", {})
-    sal_label = salary.get("label", "")
-    sal_min = salary.get("minimumSalary", 0)
-    sal_max = salary.get("maximumSalary", 0)
-    salary_str = sal_label if sal_label else (
-        f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
-    )
-    return {
-        "salary": salary_str,
-        "salary_min": sal_min,
-        "salary_max": sal_max,
-    }
-
-
-def _parse_company_data(job: dict, details_data: dict) -> dict:
-    """Extract company details + ambitionbox rating."""
-    company = job.get("companyDetail", {})
-    ambition = job.get("ambitionBoxData") or {}
-    ab_details = details_data.get("ambitionBoxDetails", {})
-    if not ambition and ab_details:
-        ci = ab_details.get("companyInfo") or {}
-        ambition = {
-            "AggregateRating": ci.get("rating"),
-            "ReviewsCount": ci.get("reviewsCount"),
-        }
-    return {
-        "company_name": company.get("name"),
-        "company_rating": ambition.get("AggregateRating") or ambition.get("Rating"),
-        "company_reviews_count": ambition.get("ReviewsCount"),
-        "company_website": company.get("websiteUrl") if company else None,
-        "group_id": company.get("groupId") if company else None,
-    }
-
-
-def _parse_match_score(score_data: dict) -> dict:
-    """Build normalized match_score dict from job scoring data (browser or REST)."""
-    if not score_data:
-        return {"match_score": None, "match_details": None}
-
-    skill_mismatch_str = score_data.get("skillMismatch") or ""
-    # Normalize to consistent dict format (same shape as _fetch_match_score REST path)
-    match_score = {
-        "education": (score_data.get("education", {}).get("userMatching", False)
-                      if isinstance(score_data.get("education"), dict)
-                      else score_data.get("education")),
-        "functional_area": (score_data.get("functionalArea", {}).get("userMatching", False)
-                            if isinstance(score_data.get("functionalArea"), dict)
-                            else score_data.get("functionalArea")),
-        "key_skills": score_data.get("Keyskills"),
-        "work_experience": (score_data.get("Experience", {}).get("userMatching", False)
-                            if isinstance(score_data.get("Experience"), dict)
-                            else score_data.get("workExperience")),
-        "industry": (score_data.get("Industry", {}).get("userMatching", False)
-                     if isinstance(score_data.get("Industry"), dict)
-                     else score_data.get("industry")),
-        "location": (score_data.get("Location", {}).get("userMatching", False)
-                     if isinstance(score_data.get("Location"), dict)
-                     else score_data.get("location")),
-        "early_applicant": score_data.get("earlyApplicant", False),
-    }
-    match_details = {
-        "skill_mismatch": [s.strip() for s in skill_mismatch_str.split(",") if s.strip()],
-    }
-    return {"match_score": match_score, "match_details": match_details}
-
-
-def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
-                      score_data: dict = None) -> dict:
-    """Parse job detail API response (v3 or v4 format) into a structured result dict."""
-    job = details_data.get("jobDetails", details_data)
-
-    salary_data = _parse_salary_data(job)
-    company_data = _parse_company_data(job, details_data)
-    match_data = _parse_match_score(score_data)
-
-    is_applied = job.get("isApplied", False)
-    external = bool(job.get("applyRedirectUrl"))
-
-    result = {
-        "status": "success",
-        "job_id": job_id,
-        "title": job.get("title"),
-        "company": company_data["company_name"],
-        "company_rating": company_data["company_rating"],
-        "company_reviews_count": company_data["company_reviews_count"],
-        "salary": salary_data["salary"],
-        "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
-        "experience_min": job.get("minimumExperience"),
-        "experience_max": job.get("maximumExperience"),
-        "candidates_count": job.get("candidatesCount"),
-        "location": (
-            job.get("cityName")
-            or job.get("citySuburb")
-            or _extract_placeholder(job.get("placeholders", []), "location")
-            or job.get("location")
-        ),
-        "description": job.get("description", ""),
-        "skills": _extract_skills(job.get("keySkills", [])),
-        "match_score": match_data["match_score"],
-        "match_details": match_data["match_details"],
-        "is_applied": is_applied,
-        "external_apply": external,
-        "can_apply": not is_applied and not external,
-        "vacancies": job.get("vacany"),
-        "apply_count": job.get("applyCount"),
-        "hr_name": job.get("contactPerson") or job.get("createdBy"),
-        "hr_email": job.get("contactEmail"),
-        "external_apply_url": job.get("applyRedirectUrl"),
-        "company_website": company_data["company_website"],
-        "notice_period": job.get("noticePeriod"),
-        "benefits": job.get("benefits"),
-        "group_id": company_data["group_id"],
-        "work_mode": job.get("workMode") or job.get("wfhType"),
-        "posted_date": job.get("createdDate"),
-        "industry": (
-            job.get("industryType")
-            or (job.get("industryTypeGid", {}).get("label")
-                if isinstance(job.get("industryTypeGid"), dict) else None)
-        ),
-        "role_category": job.get("roleCategory"),
-        "education": _format_education(job.get("education")) or job.get("qualification"),
-        "job_role": job.get("jobRole"),
-        "employment_type": job.get("employmentType"),
-        "hybrid_detail": job.get("hybridWfhDetail"),
-        "saved": bool(job.get("savedJobFlag")),
-        "valid_through": job.get("validThrough") or job.get("expiryDate"),
-        "department": job.get("department") or job.get("functionalArea"),
-        "url": page_url,
-    }
-    # AmbitionBox enrichment from top-level v4 response
-    ab = details_data.get("ambitionBoxDetails", {})
-    if ab:
-        salaries = ab.get("salaries", {})
-        if salaries:
-            result["salary_benchmarks"] = {
-                "average": salaries.get("averageSalary"),
-                "min": salaries.get("minSalary"),
-                "max": salaries.get("maxSalary"),
-            }
-        benefits_data = ab.get("benefits", {})
-        if isinstance(benefits_data, dict) and benefits_data.get("benefitsList"):
-            result["benefits_list"] = benefits_data["benefitsList"]
-        reviews_list = ab.get("reviews", [])
-        if reviews_list:
-            result["top_reviews"] = [
-                {"rating": r.get("rating"), "role": r.get("role"), "title": r.get("title")}
-                for r in reviews_list[:3] if isinstance(r, dict)
-            ]
-
-    warnings = validate_job_detail(result)
-    if warnings:
-        result["warnings"] = warnings
-    return result
+# ── Service delegates — canonical logic lives in search_service ──────────
+from naukri_server.services.search_service import (
+    extract_job_id as _extract_job_id,
+    extract_skills as _extract_skills,
+    format_education as _format_education,
+    extract_placeholder as _extract_placeholder,
+    parse_salary_data as _parse_salary_data,
+    parse_company_data as _parse_company_data,
+    parse_match_score as _parse_match_score,
+    parse_job_detail as _parse_job_detail,
+)
 
 
 async def _fetch_match_score(job_id: str) -> dict | None:
@@ -545,7 +348,7 @@ async def naukri_jobs(
     job_ids: Optional[list[str]] = None,
     timeout_seconds: int = 120,
 ) -> dict:
-    """Unified job operations — fetch details, find similar, compare, or report fraud.
+    """[Deprecated — use naukri_get_job, naukri_similar_jobs, naukri_compare_jobs, naukri_report_fraud, naukri_job_detail_v1, naukri_bulk_fetch_jobs instead] Unified job operations.
 
     Actions:
         get: Fetch full job details (REST-first, browser fallback). Accepts job_id or full URL.
@@ -610,3 +413,104 @@ async def naukri_jobs(
         "message": f"Unknown action '{action}'. Use: {', '.join(_JOBS_REGISTRY)}",
         "error_code": "VALIDATION_ERROR",
     }
+
+
+# ============================================================================
+# Single-purpose job tools (preferred over consolidated naukri_jobs)
+# ============================================================================
+
+
+@mcp.tool(name="naukri_get_job")
+async def _tool_get_job(job_id: str) -> dict:
+    """Fetch full job details -- description, skills, salary, match score, apply status.
+
+    Args:
+        job_id: Naukri job ID or full job URL
+
+    Returns:
+        {status, title, company, salary, experience, location, skills, match_score, is_applied, can_apply, url, ...}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _get_job(job_id_or_url=job_id), "jobs.get")
+
+
+@mcp.tool(name="naukri_similar_jobs")
+async def _tool_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict:
+    """Find jobs similar to a given job posting.
+
+    Args:
+        job_id: Naukri job ID to find similar jobs for
+        limit: Max similar jobs to return (default 10)
+        page: Page number (default 1)
+
+    Returns:
+        {status, job_id, source, total, count, jobs: [...]}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _do_similar(job_id=job_id, limit=limit, page=page), "jobs.similar")
+
+
+@mcp.tool(name="naukri_compare_jobs")
+async def _tool_compare_jobs(job_ids: list[str], timeout_seconds: int = 120) -> dict:
+    """Compare 2-5 jobs side-by-side with fit scores.
+
+    Args:
+        job_ids: List of 2-5 job IDs to compare
+        timeout_seconds: Max seconds before timeout (default 120)
+
+    Returns:
+        {status, count, jobs, common_skills, all_skills, best_match_job_id, average_fit_score}
+    """
+    if not job_ids:
+        return {"status": "error", "message": "job_ids is required (list of 2-5 IDs)", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _do_compare(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare")
+
+
+@mcp.tool(name="naukri_report_fraud")
+async def _tool_report_fraud(job_id: str, reason: str = "") -> dict:
+    """Report a fraudulent or suspicious job listing.
+
+    Args:
+        job_id: The job ID to report
+        reason: Description of why this job seems fraudulent
+
+    Returns:
+        {status, job_id, message}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    if not reason:
+        return {"status": "error", "message": "reason is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud")
+
+
+@mcp.tool(name="naukri_job_detail_v1")
+async def _tool_job_detail_v1(job_id: str) -> dict:
+    """Get V1 job detail -- walk-in info, contact details, jd views/applies, closing date.
+
+    Args:
+        job_id: Naukri job ID
+
+    Returns:
+        {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1")
+
+
+@mcp.tool(name="naukri_bulk_fetch_jobs")
+async def _tool_bulk_fetch_jobs(job_ids: list[str]) -> dict:
+    """Bulk fetch multiple job details in one API call (up to 20).
+
+    Args:
+        job_ids: List of 1-20 job IDs to fetch
+
+    Returns:
+        {status, count, jobs: [...]}
+    """
+    if not job_ids:
+        return {"status": "error", "message": "job_ids is required (list of 1-20 IDs)", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk")

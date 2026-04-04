@@ -232,7 +232,9 @@ async def naukri_inbox(
     mail_type: str = "",
     page: int = 1,
 ) -> dict:
-    """Unified inbox management — list messages, read, mark interest, accept NVites.
+    """[Deprecated — use naukri_list_inbox, naukri_read_message, naukri_mark_interested, naukri_accept_nvite instead.]
+
+    Unified inbox management — list messages, read, mark interest, accept NVites.
 
     Actions:
       - "list": Fetch inbox messages (use limit/page/unread_only/mail_type for filtering)
@@ -308,3 +310,106 @@ async def naukri_inbox(
     # ── unknown action ─────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, read, mark_interested, accept_nvite", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Single-purpose MCP tools (preferred over deprecated naukri_inbox)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_inbox(
+    limit: int = 20,
+    unread_only: bool = False,
+    mail_type: Optional[str] = None,
+    page: int = 1,
+) -> dict:
+    """List recruiter messages and NVite invitations from your Naukri inbox.
+
+    Args:
+        limit: Max messages per page (default 20, max 50)
+        unread_only: Only return unread messages (default False)
+        mail_type: Filter by type e.g. "powerNvite" (default None for all)
+        page: Page number (default 1)
+
+    Returns:
+        {status, total, count, page, has_more, unread, total_power_nvite,
+         unread_power_nvite, relevant_count, has_power_nvites, messages: [...]}
+    """
+    return await handle_tool_action(
+        lambda: _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type or "", page=page),
+        "list_inbox",
+    )
+
+
+@mcp.tool()
+async def naukri_read_message(
+    message_id: Optional[str] = None,
+    vcard_id: Optional[str] = None,
+    unique_id: Optional[str] = None,
+) -> dict:
+    """Read full content of a specific inbox message.
+
+    Args:
+        message_id: Message ID from list results
+        vcard_id: VCard ID from list results
+        unique_id: Unique ID from list results
+
+    Returns:
+        {status, message_id, subject, content, date, type, conversation_id}
+    """
+    if not message_id or not vcard_id or not unique_id:
+        return {"status": "error", "message": "message_id, vcard_id, and unique_id are all required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _read_message(message_id, vcard_id, unique_id),
+        "read_message",
+    )
+
+
+@mcp.tool()
+async def naukri_mark_interested(
+    mail_id: str,
+    conversation_id: Optional[str] = None,
+    interested: bool = True,
+) -> dict:
+    """Mark a recruiter message as interested or not interested.
+
+    Args:
+        mail_id: Mail ID from list/read results
+        conversation_id: Conversation ID from read results
+        interested: True=interested, False=not interested (default True)
+
+    Returns:
+        {status, mail_id, interested, message}
+    """
+    if not mail_id or not conversation_id:
+        return {"status": "error", "message": "mail_id and conversation_id are required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _mark_interested(mail_id, conversation_id, interested),
+        "mark_interested",
+    )
+
+
+@mcp.tool()
+async def naukri_accept_nvite(
+    nvite_job_id: str,
+    answers: Optional[dict] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+) -> dict:
+    """Accept a recruiter NVite by applying to the associated job.
+
+    Args:
+        nvite_job_id: Job ID from list → job_details.nvite_job_id
+        answers: Screening question answers {question_id: answer} (optional)
+        title: Job title for tracking (optional)
+        company: Company name for tracking (optional)
+
+    Returns:
+        {status: "applied"|"needs_input"|"already_applied"|"error", ...}
+    """
+    if not nvite_job_id:
+        return {"status": "error", "message": "nvite_job_id is required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _accept_nvite(nvite_job_id, answers, title, company),
+        "accept_nvite",
+    )

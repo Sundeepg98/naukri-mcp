@@ -1,6 +1,5 @@
 """Saved/bookmarked jobs management tools."""
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -8,13 +7,9 @@ from naukri_server import mcp
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
     logger, SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
-from naukri_server.models import paginate, validate_action_params
+from naukri_server.models import validate_action_params
 from naukri_server.validation import validate_limit, validate_page
-from naukri_server.tools.tracking import _load_json, _save_json
-
-_saved_jobs_lock = asyncio.Lock()
 
 
 async def _push_save_to_naukri(job_id: str) -> bool:
@@ -32,19 +27,21 @@ async def _push_save_to_naukri(job_id: str) -> bool:
 
 async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     """List saved/bookmarked jobs from local tracking."""
+    from naukri_server.database import list_saved_jobs as db_list_saved
+
     limit = validate_limit(limit)
     page = validate_page(page)
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
+    offset = (page - 1) * limit
 
-    saved.sort(key=lambda j: j.get("saved_at", ""), reverse=True)
-
-    pagination, page_items = paginate(saved, page, limit)
+    saved, total = await db_list_saved(limit=limit, offset=offset)
 
     return {
         "status": "success",
-        **pagination,
-        "saved_jobs": page_items,
+        "total": total,
+        "count": len(saved),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "saved_jobs": saved,
     }
 
 
@@ -52,35 +49,37 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
                     notes: Optional[str] = None,
                     sync_to_naukri: bool = False) -> dict:
     """Save/bookmark a job locally (and optionally on Naukri)."""
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
+    from naukri_server.database import get_saved_job, upsert_saved_job, count_saved_jobs, get_application
 
-        # Check for duplicate
-        if any(j.get("job_id") == job_id for j in saved):
-            return {"status": "success", "action": "already_saved", "job_id": job_id}
+    # Check for duplicate
+    existing = await get_saved_job(job_id)
+    if existing:
+        return {"status": "success", "action": "already_saved", "job_id": job_id}
 
-        # Cross-file warning: check if already applied
-        apps = _load_json(APPLICATIONS_FILE)
-        applied_match = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    # Cross-file warning: check if already applied
+    applied_match = await get_application(str(job_id))
 
-        saved.append({
-            "job_id": job_id,
-            "title": title,
-            "company": company,
-            "notes": notes,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-        })
-        _save_json(SAVED_JOBS_FILE, saved)
+    await upsert_saved_job({
+        "job_id": job_id,
+        "title": title,
+        "company": company,
+        "notes": notes,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    total = await count_saved_jobs()
 
     synced_remote = False
     if sync_to_naukri:
         synced_remote = await _push_save_to_naukri(job_id)
 
-    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": len(saved), "synced_remote": synced_remote, "already_applied": bool(applied_match)}
+    return {"status": "success", "action": "saved", "job_id": job_id, "total_saved": total, "synced_remote": synced_remote, "already_applied": bool(applied_match)}
 
 
 async def _sync_saved_jobs_from_naukri() -> dict:
     """Pull saved jobs from Naukri server and merge with local tracking."""
+    from naukri_server.database import get_saved_job, upsert_saved_job, count_saved_jobs
+
     try:
         data = await api_client.get(SAVED_JOBS_API, params={"start": "0", "limit": "100"})
     except Exception as e:
@@ -90,52 +89,49 @@ async def _sync_saved_jobs_from_naukri() -> dict:
     if not isinstance(remote_jobs, list):
         remote_jobs = []
 
-    async with _saved_jobs_lock:
-        local = _load_json(SAVED_JOBS_FILE)
-        local_ids = {str(j.get("job_id")) for j in local}
-        new_added = 0
-        for rj in remote_jobs:
-            jid = str(rj.get("jobId", rj.get("job_id", "")))
-            if jid and jid not in local_ids:
-                local.append({
-                    "job_id": jid,
-                    "title": rj.get("title"),
-                    "company": rj.get("companyName", rj.get("company")),
-                    "saved_at": rj.get("savedDate") or datetime.now(timezone.utc).isoformat(),
-                    "source": "naukri_sync",
-                })
-                local_ids.add(jid)
-                new_added += 1
-        if new_added:
-            _save_json(SAVED_JOBS_FILE, local)
+    new_added = 0
+    for rj in remote_jobs:
+        jid = str(rj.get("jobId", rj.get("job_id", "")))
+        if not jid:
+            continue
+        existing = await get_saved_job(jid)
+        if not existing:
+            await upsert_saved_job({
+                "job_id": jid,
+                "title": rj.get("title"),
+                "company": rj.get("companyName", rj.get("company")),
+                "saved_at": rj.get("savedDate") or datetime.now(timezone.utc).isoformat(),
+                "source": "naukri_sync",
+            })
+            new_added += 1
+
+    total_local = await count_saved_jobs()
 
     return {
         "status": "success",
         "total_remote": len(remote_jobs),
         "new_added": new_added,
         "already_local": len(remote_jobs) - new_added,
-        "total_local": len(local),
+        "total_local": total_local,
     }
 
 
 async def _unsave_job(job_id: str) -> dict:
     """Unsave/unbookmark a job locally and on Naukri."""
+    from naukri_server.database import delete_saved_job
+
     # Always attempt the remote unsave regardless of local state
     try:
         await api_client.post(UNSAVE_JOB_API + job_id, body={})
     except Exception as e:
         logger.warning("Failed to unsave job on Naukri: %s", e)
 
-    # Remove from local saved_jobs.json
-    async with _saved_jobs_lock:
-        saved = _load_json(SAVED_JOBS_FILE)
-        original_len = len(saved)
-        saved = [j for j in saved if j.get("job_id") != job_id]
-        if len(saved) < original_len:
-            _save_json(SAVED_JOBS_FILE, saved)
-            return {"status": "success", "action": "unsaved", "job_id": job_id}
-        else:
-            return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}
+    # Remove from local DB
+    deleted = await delete_saved_job(job_id)
+    if deleted:
+        return {"status": "success", "action": "unsaved", "job_id": job_id}
+    else:
+        return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +161,9 @@ async def naukri_saved_jobs(
     limit: int = 50,
     page: int = 1,
 ) -> dict:
-    """Unified saved/bookmarked jobs management — list, save, unsave, and sync.
+    """[Deprecated — use naukri_list_saved_jobs, naukri_save_job, naukri_unsave_job, naukri_sync_saved_jobs instead]
+
+    Unified saved/bookmarked jobs management — list, save, unsave, and sync.
 
     Actions:
       - "list": Get saved/bookmarked jobs (use limit/page for pagination)
@@ -228,3 +226,69 @@ async def naukri_saved_jobs(
     # -- unknown action -----------------------------------------------------
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave, sync", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Single-purpose MCP tools (preferred over the unified naukri_saved_jobs)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
+    """List your saved/bookmarked jobs with pagination.
+
+    Args:
+        limit: Max results per page (default 50)
+        page: Page number (default 1)
+
+    Returns:
+        {status, total, count, page, has_more, saved_jobs: [...]}
+    """
+    return await _list_saved_jobs(limit=limit, page=page)
+
+
+@mcp.tool()
+async def naukri_save_job(
+    job_id: str,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    notes: Optional[str] = None,
+    sync_to_naukri: bool = False,
+) -> dict:
+    """Save/bookmark a job for later review.
+
+    Args:
+        job_id: The Naukri job ID to save (required)
+        title: Job title for display (optional)
+        company: Company name for display (optional)
+        notes: Personal notes about this job (optional)
+        sync_to_naukri: If True, also save the job on Naukri's backend (default False)
+
+    Returns:
+        {status: "success", action: "saved", job_id, total_saved, synced_remote, already_applied}
+        or {status: "success", action: "already_saved", job_id}
+    """
+    return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
+
+
+@mcp.tool()
+async def naukri_unsave_job(job_id: str) -> dict:
+    """Unsave/unbookmark a previously saved job.
+
+    Args:
+        job_id: The Naukri job ID to unsave (required)
+
+    Returns:
+        {status: "success", action: "unsaved", job_id}
+        or {status: "error", message, error_code: "NOT_FOUND"}
+    """
+    return await _unsave_job(job_id)
+
+
+@mcp.tool()
+async def naukri_sync_saved_jobs() -> dict:
+    """Pull saved jobs from Naukri server and merge with local tracking.
+
+    Returns:
+        {status, total_remote, new_added, already_local, total_local}
+    """
+    return await _sync_saved_jobs_from_naukri()

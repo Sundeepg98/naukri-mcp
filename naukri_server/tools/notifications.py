@@ -133,7 +133,10 @@ async def naukri_notifications(
     page: int = 1,
     notif_type: Optional[str] = None,
 ) -> dict:
-    """Unified notification management — list, count, and mark read.
+    """DEPRECATED — use individual tools: naukri_list_notifications, naukri_notification_count,
+    naukri_mark_notification_read, naukri_mark_all_notifications_read, naukri_notification_summary.
+
+    Unified notification management — list, count, and mark read.
 
     Actions:
       - "list": Fetch notifications (use limit/page for pagination, notif_type to filter)
@@ -244,3 +247,140 @@ async def naukri_notifications(
     # ── unknown action ─────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read, summary", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Individual MCP tools (preferred over the consolidated tool above)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_notifications(
+    limit: int = 20,
+    page: int = 1,
+    notif_type: Optional[str] = None,
+) -> dict:
+    """List Naukri notifications with optional type filtering.
+
+    Args:
+        limit: Max notifications to return (default 20, max 50).
+        page: Page number for pagination (default 1).
+        notif_type: Filter by type substring (case-insensitive). Common: "JA", "RA", "SYSTEM", "APPLICATION_UPDATE".
+
+    Returns:
+        {status, total, count, notifications: [{id, title, message, type, date, is_read, url, metadata}], filtered_by?}
+    """
+    return await handle_tool_action(
+        lambda: _fetch_notifications(limit=limit, page=page, notif_type=notif_type),
+        "notifications.list",
+    )
+
+
+@mcp.tool()
+async def naukri_notification_count() -> dict:
+    """Get unread notification count.
+
+    Returns:
+        {status, count}
+    """
+    async def _count():
+        data = await api_client.get(NOTIFICATION_COUNT_API)
+        return {"status": "success", "count": data.get("count", 0)}
+
+    return await handle_tool_action(_count, "notifications.count")
+
+
+@mcp.tool()
+async def naukri_mark_notification_read(
+    notification_id: Optional[str] = None,
+    date: Optional[str] = None,
+) -> dict:
+    """Mark a single notification as read.
+
+    Args:
+        notification_id: The notification ID (required).
+        date: The notification date string (required).
+
+    Returns:
+        {status, notification_id}
+    """
+    if not notification_id or not date:
+        return {"status": "error", "message": "mark_read requires notification_id and date.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _mark_single_read(notification_id, date),
+        "notifications.mark_read",
+    )
+
+
+@mcp.tool()
+async def naukri_mark_all_notifications_read() -> dict:
+    """Mark all unread notifications as read (paginated, up to MAX_MARK_ALL_ITERATIONS batches).
+
+    Returns:
+        {status, marked_count, already_read, total_processed, errors?}
+    """
+    async def _mark_all():
+        total_marked = 0
+        total_read = 0
+        total_processed = 0
+        all_errors = []
+
+        iteration = 0
+        while iteration < MAX_MARK_ALL_ITERATIONS:
+            iteration += 1
+            result = await _fetch_notifications(limit=50)
+            if result.get("status") != "success":
+                if total_processed == 0:
+                    return result
+                break
+
+            notifications = result.get("notifications", [])
+            if not notifications:
+                break
+
+            total_processed += len(notifications)
+            unread = [n for n in notifications if not n.get("is_read")]
+            total_read += len(notifications) - len(unread)
+
+            if not unread:
+                break
+
+            mark_tasks = [
+                _mark_single_read(notification_id=n["id"], date=n["date"])
+                for n in unread
+            ]
+            mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
+            for mr in mark_results:
+                if isinstance(mr, Exception):
+                    all_errors.append(str(mr))
+                elif isinstance(mr, dict) and mr.get("status") == "success":
+                    total_marked += 1
+                else:
+                    all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
+
+            await asyncio.sleep(BROWSER_DOM_SETTLE)
+
+            if len(notifications) < 50:
+                break
+
+        return {
+            "status": "success",
+            "marked_count": total_marked,
+            "already_read": total_read,
+            "total_processed": total_processed,
+            "errors": all_errors if all_errors else None,
+        }
+
+    return await handle_tool_action(_mark_all, "notifications.mark_all_read")
+
+
+@mcp.tool()
+async def naukri_notification_summary() -> dict:
+    """Get unified notification dashboard — all categories in one call.
+
+    Returns 8 categories (recoJobs, appStatus, criticalActions, rmj, FF, NL, RR, recruiterSearch)
+    with counts, latest status, and display metadata.
+
+    Returns:
+        {status, source, new_count, total_count, categories, total_types, display_order}
+    """
+    return await handle_tool_action(_get_unified_notify, "notifications.summary")

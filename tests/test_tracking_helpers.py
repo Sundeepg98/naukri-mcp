@@ -20,75 +20,73 @@ class TestRecordApplication:
 
     @pytest.mark.asyncio
     async def test_new_application_added(self):
-        """A brand-new job_id should be appended to the applications list."""
+        """A brand-new job_id should insert a new application via upsert."""
         from naukri_server.tools.tracking import record_application
 
         captured = {}
 
-        def fake_save(path, data):
-            captured["data"] = data
+        async def fake_upsert(app):
+            captured["app"] = app
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=[]) as mock_load, \
-             patch("naukri_server.tools.tracking._save_json", side_effect=fake_save) as mock_save:
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock,
+                    return_value=None), \
+             patch("naukri_server.database.upsert_application", new_callable=AsyncMock,
+                    side_effect=fake_upsert):
             await record_application(job_id="J100", title="SDE", company="Acme", status="applied")
 
-        mock_load.assert_called_once()
-        mock_save.assert_called_once()
-        apps = captured["data"]
-        assert len(apps) == 1
-        assert apps[0]["job_id"] == "J100"
-        assert apps[0]["title"] == "SDE"
-        assert apps[0]["company"] == "Acme"
-        assert apps[0]["status"] == "applied"
-        assert "applied_at" in apps[0]
+        app = captured["app"]
+        assert app["job_id"] == "J100"
+        assert app["title"] == "SDE"
+        assert app["company"] == "Acme"
+        assert app["status"] == "applied"
+        assert "applied_at" in app
 
     @pytest.mark.asyncio
     async def test_existing_application_updated(self):
         """An existing job_id should update status and updated_at, not duplicate."""
         from naukri_server.tools.tracking import record_application
 
-        existing = [
-            {"job_id": "J200", "title": "QA", "company": "Beta", "status": "applied",
-             "applied_at": "2026-01-01T00:00:00+00:00"},
-        ]
+        existing = {"job_id": "J200", "title": "QA", "company": "Beta", "status": "applied",
+                    "applied_at": "2026-01-01T00:00:00+00:00"}
         captured = {}
 
-        def fake_save(path, data):
-            captured["data"] = data
+        async def fake_upsert(app):
+            captured["app"] = app
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=existing), \
-             patch("naukri_server.tools.tracking._save_json", side_effect=fake_save):
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock,
+                    return_value=existing.copy()), \
+             patch("naukri_server.database.upsert_application", new_callable=AsyncMock,
+                    side_effect=fake_upsert):
             await record_application(job_id="J200", status="interviewed")
 
-        apps = captured["data"]
-        assert len(apps) == 1  # No duplicate
-        assert apps[0]["status"] == "interviewed"
-        assert "updated_at" in apps[0]
+        app = captured["app"]
+        assert app["status"] == "interviewed"
+        assert "updated_at" in app
         # Original fields preserved
-        assert apps[0]["title"] == "QA"
-        assert apps[0]["company"] == "Beta"
-        assert apps[0]["applied_at"] == "2026-01-01T00:00:00+00:00"
+        assert app["title"] == "QA"
+        assert app["company"] == "Beta"
+        assert app["applied_at"] == "2026-01-01T00:00:00+00:00"
 
     @pytest.mark.asyncio
     async def test_update_preserves_fields_not_passed(self):
         """When updating, passing title=None should NOT overwrite existing title."""
         from naukri_server.tools.tracking import record_application
 
-        existing = [
-            {"job_id": "J300", "title": "DevOps", "company": "Gamma", "status": "applied",
-             "applied_at": "2026-02-01T00:00:00+00:00"},
-        ]
+        existing = {"job_id": "J300", "title": "DevOps", "company": "Gamma", "status": "applied",
+                    "applied_at": "2026-02-01T00:00:00+00:00"}
         captured = {}
 
-        def fake_save(path, data):
-            captured["data"] = data
+        async def fake_upsert(app):
+            captured["app"] = app
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=existing), \
-             patch("naukri_server.tools.tracking._save_json", side_effect=fake_save):
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock,
+                    return_value=existing.copy()), \
+             patch("naukri_server.database.upsert_application", new_callable=AsyncMock,
+                    side_effect=fake_upsert):
             # Pass title=None and company=None — should not overwrite
             await record_application(job_id="J300", status="rejected")
 
-        app = captured["data"][0]
+        app = captured["app"]
         assert app["title"] == "DevOps"
         assert app["company"] == "Gamma"
         assert app["status"] == "rejected"
@@ -100,14 +98,16 @@ class TestRecordApplication:
 
         captured = {}
 
-        def fake_save(path, data):
-            captured["data"] = data
+        async def fake_upsert(app):
+            captured["app"] = app
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._save_json", side_effect=fake_save):
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock,
+                    return_value=None), \
+             patch("naukri_server.database.upsert_application", new_callable=AsyncMock,
+                    side_effect=fake_upsert):
             await record_application(job_id="J400", extra={"source": "batch", "ars_score": 85})
 
-        app = captured["data"][0]
+        app = captured["app"]
         assert app["source"] == "batch"
         assert app["ars_score"] == 85
 
@@ -134,7 +134,7 @@ class TestApplicationFollowUp:
         inbox_result = {"status": "success", "messages": []}
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -172,7 +172,7 @@ class TestApplicationFollowUp:
         }
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -194,7 +194,7 @@ class TestApplicationFollowUp:
         inbox_result = {"status": "success", "messages": []}
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -222,7 +222,7 @@ class TestApplicationFollowUp:
         inbox_exc = RuntimeError("Inbox API down")
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, side_effect=inbox_exc), \
@@ -366,16 +366,18 @@ class TestSaveUnsaveJob:
 
     @pytest.mark.asyncio
     async def test_save_job_new(self):
-        """Saving a new job should append to list and write."""
+        """Saving a new job should insert via upsert and return total_saved."""
         from naukri_server.tools.tracking import _save_job
 
         captured = {}
 
-        def fake_save(path, data):
+        async def fake_upsert(data):
             captured["data"] = data
 
-        with patch("naukri_server.tools.saved_jobs._load_json", return_value=[]), \
-             patch("naukri_server.tools.saved_jobs._save_json", side_effect=fake_save):
+        with patch("naukri_server.database.get_saved_job", new_callable=AsyncMock, return_value=None), \
+             patch("naukri_server.database.upsert_saved_job", new_callable=AsyncMock, side_effect=fake_upsert), \
+             patch("naukri_server.database.count_saved_jobs", new_callable=AsyncMock, return_value=1), \
+             patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None):
             result = await _save_job("J600", title="ML Eng", company="DeepCo")
 
         assert result["status"] == "success"
@@ -383,62 +385,47 @@ class TestSaveUnsaveJob:
         assert result["job_id"] == "J600"
         assert result["total_saved"] == 1
         assert result["synced_remote"] is False
-        assert captured["data"][0]["title"] == "ML Eng"
+        assert captured["data"]["title"] == "ML Eng"
 
     @pytest.mark.asyncio
     async def test_save_job_duplicate(self):
         """Saving a job_id that already exists should return already_saved."""
         from naukri_server.tools.tracking import _save_job
 
-        existing = [{"job_id": "J700", "title": "X", "saved_at": "2026-01-01"}]
+        existing = {"job_id": "J700", "title": "X", "saved_at": "2026-01-01"}
 
-        with patch("naukri_server.tools.saved_jobs._load_json", return_value=existing), \
-             patch("naukri_server.tools.saved_jobs._save_json") as mock_save:
+        with patch("naukri_server.database.get_saved_job", new_callable=AsyncMock, return_value=existing), \
+             patch("naukri_server.database.upsert_saved_job", new_callable=AsyncMock) as mock_upsert:
             result = await _save_job("J700", title="Y")
 
         assert result["action"] == "already_saved"
-        mock_save.assert_not_called()
+        mock_upsert.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_unsave_job_removes_entry(self):
-        """Unsaving an existing job should remove it and call remote unsave."""
+        """Unsaving an existing job should delete it from DB and call remote unsave."""
         from naukri_server.tools.tracking import _unsave_job
 
-        existing = [
-            {"job_id": "J800", "title": "Ops"},
-            {"job_id": "J801", "title": "Dev"},
-        ]
-        captured = {}
-
-        def fake_save(path, data):
-            captured["data"] = data
-
-        with patch("naukri_server.tools.saved_jobs._load_json", return_value=existing), \
-             patch("naukri_server.tools.saved_jobs._save_json", side_effect=fake_save), \
+        with patch("naukri_server.database.delete_saved_job", new_callable=AsyncMock, return_value=True), \
              patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock, return_value={}):
             result = await _unsave_job("J800")
 
         assert result["status"] == "success"
         assert result["action"] == "unsaved"
-        # Only J801 should remain
-        assert len(captured["data"]) == 1
-        assert captured["data"][0]["job_id"] == "J801"
 
     @pytest.mark.asyncio
     async def test_unsave_job_not_found(self):
-        """Unsaving a job_id not in local list should return NOT_FOUND error."""
+        """Unsaving a job_id not in local DB should return NOT_FOUND error."""
         from naukri_server.tools.tracking import _unsave_job
 
-        with patch("naukri_server.tools.saved_jobs._load_json", return_value=[]), \
-             patch("naukri_server.tools.saved_jobs._save_json") as mock_save, \
+        with patch("naukri_server.database.delete_saved_job", new_callable=AsyncMock, return_value=False), \
              patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock, return_value={}):
             result = await _unsave_job("J999")
 
         assert result["status"] == "error"
         assert result["error_code"] == "NOT_FOUND"
-        mock_save.assert_not_called()
 
 
 # =====================================================================
@@ -490,10 +477,8 @@ class TestInterviewPrep:
         """All three external calls succeed — prep should contain every field."""
         from naukri_server.tools.tracking import _interview_prep
 
-        apps = [
-            {"job_id": "IP1", "title": "Backend Dev", "company": "TestCorp",
-             "applied_at": "2026-03-01T10:00:00+00:00", "ars_score": 72},
-        ]
+        app = {"job_id": "IP1", "title": "Backend Dev", "company": "TestCorp",
+               "applied_at": "2026-03-01T10:00:00+00:00", "ars_score": 72}
 
         company_intel = {
             "status": "success",
@@ -520,12 +505,12 @@ class TestInterviewPrep:
             },
         }
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=app), \
+             patch("naukri_server.services.application_service._safe_fetch_company_intel",
                    new_callable=AsyncMock, return_value=company_intel), \
-             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+             patch("naukri_server.services.application_service._safe_fetch_mock_topics",
                    new_callable=AsyncMock, return_value=mock_topics), \
-             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+             patch("naukri_server.services.application_service._safe_fetch_fit_score",
                    new_callable=AsyncMock, return_value=fit_data):
             result = await _interview_prep("IP1")
 
@@ -551,10 +536,8 @@ class TestInterviewPrep:
         """Company intel fails, mock topics and fit succeed — prep should still work."""
         from naukri_server.tools.tracking import _interview_prep
 
-        apps = [
-            {"job_id": "IP2", "title": "Frontend Dev", "company": "FailCo",
-             "applied_at": "2026-03-10T12:00:00+00:00", "ars_score": None},
-        ]
+        app = {"job_id": "IP2", "title": "Frontend Dev", "company": "FailCo",
+               "applied_at": "2026-03-10T12:00:00+00:00", "ars_score": None}
 
         mock_topics = {
             "status": "success",
@@ -570,12 +553,12 @@ class TestInterviewPrep:
             },
         }
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=app), \
+             patch("naukri_server.services.application_service._safe_fetch_company_intel",
                    new_callable=AsyncMock, return_value=None), \
-             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+             patch("naukri_server.services.application_service._safe_fetch_mock_topics",
                    new_callable=AsyncMock, return_value=mock_topics), \
-             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+             patch("naukri_server.services.application_service._safe_fetch_fit_score",
                    new_callable=AsyncMock, return_value=fit_data):
             result = await _interview_prep("IP2")
 

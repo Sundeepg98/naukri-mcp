@@ -73,6 +73,7 @@ from mcp.server.fastmcp import FastMCP
 
 from naukri_server.api import close_api_session
 from naukri_server.browser import browser
+from naukri_server.database import init_db
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ async def lifespan(server):
         _lifespan_refs += 1
         if _lifespan_refs == 1:
             await browser.start()
+            await init_db()
             # Startup health check — validates core services after browser is ready
             logger.info("Running startup health check...")
             try:

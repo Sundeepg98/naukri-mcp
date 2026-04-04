@@ -4,7 +4,7 @@ All tests are PURE: no network, no browser, no file I/O.
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone, timedelta
 
 
@@ -17,17 +17,15 @@ class TestDraftFollowUp:
         from naukri_server.tools.tracking import _draft_follow_up
 
         applied_at = "2026-03-01T10:00:00+00:00"
-        apps = [
-            {
-                "job_id": "J100",
-                "title": "Backend Developer",
-                "company": "Acme Corp",
-                "status": "applied",
-                "applied_at": applied_at,
-            }
-        ]
+        app = {
+            "job_id": "J100",
+            "title": "Backend Developer",
+            "company": "Acme Corp",
+            "status": "applied",
+            "applied_at": applied_at,
+        }
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps):
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=app):
             result = await _draft_follow_up("J100")
 
         assert result["status"] == "success"
@@ -45,7 +43,7 @@ class TestDraftFollowUp:
         """Should return NOT_FOUND error when job_id does not exist."""
         from naukri_server.tools.tracking import _draft_follow_up
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=[]):
+        with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None):
             result = await _draft_follow_up("NONEXISTENT")
 
         assert result["status"] == "error"
@@ -72,14 +70,16 @@ class TestRecruiterHistory:
         """Should aggregate applications per company and detect responsive ones."""
         from naukri_server.tools.tracking import _recruiter_history
 
-        apps = [
-            {"job_id": "J1", "company": "Acme", "status": "applied", "applied_at": "2026-01-10T00:00:00+00:00"},
-            {"job_id": "J2", "company": "Acme", "status": "viewed", "applied_at": "2026-01-15T00:00:00+00:00"},
-            {"job_id": "J3", "company": "Beta Inc", "status": "applied", "applied_at": "2026-02-01T00:00:00+00:00"},
-            {"job_id": "J4", "company": "Gamma LLC", "status": "interview", "applied_at": "2026-02-10T00:00:00+00:00"},
+        rows = [
+            {"company": "Acme", "applications": 2, "first_applied": "2026-01-10T00:00:00+00:00",
+             "last_applied": "2026-01-15T00:00:00+00:00", "statuses": "applied,viewed"},
+            {"company": "Beta Inc", "applications": 1, "first_applied": "2026-02-01T00:00:00+00:00",
+             "last_applied": "2026-02-01T00:00:00+00:00", "statuses": "applied"},
+            {"company": "Gamma LLC", "applications": 1, "first_applied": "2026-02-10T00:00:00+00:00",
+             "last_applied": "2026-02-10T00:00:00+00:00", "statuses": "interview"},
         ]
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps):
+        with patch("naukri_server.database.get_recruiter_history", new_callable=AsyncMock, return_value=rows):
             result = await _recruiter_history()
 
         assert result["status"] == "success"
@@ -115,7 +115,7 @@ class TestRecruiterHistory:
         """Empty applications list should return zero counts."""
         from naukri_server.tools.tracking import _recruiter_history
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=[]):
+        with patch("naukri_server.database.get_recruiter_history", new_callable=AsyncMock, return_value=[]):
             result = await _recruiter_history()
 
         assert result["status"] == "success"

@@ -105,12 +105,9 @@ class TestExportData:
 
     @pytest.mark.asyncio
     async def test_export_applications_no_file(self):
-        """When applications.json does not exist, should return NOT_FOUND."""
+        """When no applications in SQLite, should return NOT_FOUND."""
         from naukri_server.tools.export import naukri_export_data
-        from unittest.mock import MagicMock
-        fake_apps_file = MagicMock()
-        fake_apps_file.exists.return_value = False
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps_file):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await naukri_export_data(data_type="applications")
             assert result["status"] == "error"
             assert result["error_code"] == "NOT_FOUND"
@@ -118,12 +115,9 @@ class TestExportData:
 
     @pytest.mark.asyncio
     async def test_export_saved_jobs_no_file(self):
-        """When saved_jobs.json does not exist, should return NOT_FOUND."""
+        """When no saved jobs in SQLite, should return NOT_FOUND."""
         from naukri_server.tools.export import naukri_export_data
-        from unittest.mock import MagicMock
-        fake_saved_file = MagicMock()
-        fake_saved_file.exists.return_value = False
-        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_saved_file):
+        with patch("naukri_server.database.list_all_saved_jobs", new_callable=AsyncMock, return_value=[]):
             result = await naukri_export_data(data_type="saved_jobs")
             assert result["status"] == "error"
             assert result["error_code"] == "NOT_FOUND"

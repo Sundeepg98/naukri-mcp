@@ -1,6 +1,8 @@
-"""Tests for Tier 24: smart_apply module — scoring, bulk, apply_top_fits flows.
+"""Deep tests for naukri_server.tools.smart_apply — scoring, bulk saved, apply_top_fits,
+action routing, agent-eligible priority sorting.
 
 Every test is PURE: no network, no browser, no file I/O.
+Recovered from deleted tier24_smart_apply.py and tier24.py.
 """
 
 import asyncio
@@ -51,26 +53,21 @@ def _make_saved_jobs(count=2):
 
 
 # ---------------------------------------------------------------------------
-# 1. _score_job basic invocation
+# 1. _score_job
 # ---------------------------------------------------------------------------
 
 class TestScoreJob:
     def test_basic_score_job_returns_dict(self):
         from naukri_server.tools.smart_apply import _score_job
-        job = _make_job_result()
-        profile = _make_profile()
-        result = _score_job(job, profile)
+        result = _score_job(_make_job_result(), _make_profile())
         assert isinstance(result, dict)
         assert "overall_score" in result
         assert "skill_match" in result
         assert "recommendation" in result
 
     def test_score_job_with_is_agent_eligible_false(self):
-        """is_agent_eligible=False is the default — result is still a valid dict."""
         from naukri_server.tools.smart_apply import _score_job
-        job = _make_job_result()
-        profile = _make_profile()
-        result = _score_job(job, profile, is_agent_eligible=False)
+        result = _score_job(_make_job_result(), _make_profile(), is_agent_eligible=False)
         assert 0 <= result["overall_score"] <= 100
 
     def test_score_job_uses_skills_key_fallback(self):
@@ -79,84 +76,64 @@ class TestScoreJob:
         job = _make_job_result(tags=None)
         job.pop("tags", None)
         job["skills"] = ["Python"]
-        profile = _make_profile()
-        result = _score_job(job, profile)
+        result = _score_job(job, _make_profile())
         assert isinstance(result, dict)
 
 
 # ---------------------------------------------------------------------------
-# 2. _bulk_saved_scoring — empty saved jobs
+# 2. _bulk_saved_scoring
 # ---------------------------------------------------------------------------
 
 class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_empty_saved_jobs(self):
-        """If no saved jobs exist, return early with empty scored_jobs."""
         with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved:
             with patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
                 mock_saved.return_value = {"status": "success", "saved_jobs": []}
                 mock_profile.return_value = _make_profile()
-
                 from naukri_server.tools.smart_apply import _bulk_saved_scoring
                 result = await _bulk_saved_scoring(min_fit_score=0, timeout_seconds=5)
-
         assert result["status"] == "success"
         assert result["total_saved"] == 0
         assert result["scored_jobs"] == []
 
     @pytest.mark.asyncio
     async def test_bulk_saved_profile_fetch_failure(self):
-        """If profile fetch fails, return error."""
         with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved:
             with patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
                 mock_saved.return_value = _make_saved_jobs(2)
                 mock_profile.return_value = {"status": "error", "message": "Unauthorized"}
-
                 from naukri_server.tools.smart_apply import _bulk_saved_scoring
                 result = await _bulk_saved_scoring(min_fit_score=0, timeout_seconds=5)
-
         assert result["status"] == "error"
         assert "profile" in result["message"].lower()
 
     @pytest.mark.asyncio
     async def test_bulk_saved_job_detail_fetch_failure_graceful(self):
         """If one job detail fetch fails, it's skipped gracefully."""
-        with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved:
-            with patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
-                with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_get_job:
-                    mock_saved.return_value = _make_saved_jobs(2)
-                    mock_profile.return_value = _make_profile()
-                    # First job fails, second succeeds
-                    mock_get_job.side_effect = [
-                        Exception("timeout"),
-                        _make_job_result("J1"),
-                    ]
-
-                    from naukri_server.tools.smart_apply import _bulk_saved_scoring
-                    result = await _bulk_saved_scoring(min_fit_score=0, timeout_seconds=10)
-
+        with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved, \
+             patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile, \
+             patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_get_job:
+            mock_saved.return_value = _make_saved_jobs(2)
+            mock_profile.return_value = _make_profile()
+            mock_get_job.side_effect = [Exception("timeout"), _make_job_result("J1")]
+            from naukri_server.tools.smart_apply import _bulk_saved_scoring
+            result = await _bulk_saved_scoring(min_fit_score=0, timeout_seconds=10)
         assert result["status"] == "success"
-        # One succeeded, one skipped — errors may be recorded
         assert result["scored_count"] <= 1
 
 
 # ---------------------------------------------------------------------------
-# 3. _apply_top_fits — no jobs above threshold
+# 3. _apply_top_fits
 # ---------------------------------------------------------------------------
 
 class TestApplyTopFits:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
     async def test_no_jobs_above_threshold(self, mock_bulk):
-        """If no jobs meet min_fit_score, return success with applied=0."""
-        mock_bulk.return_value = {
-            "status": "success",
-            "total_saved": 3,
-            "scored_jobs": [],
-        }
+        mock_bulk.return_value = {"status": "success", "total_saved": 3, "scored_jobs": []}
         from naukri_server.tools.smart_apply import _apply_top_fits
         result = await _apply_top_fits(min_fit_score=80)
-
         assert result["status"] == "success"
         assert result["applied"] == 0
         assert "No saved jobs" in result["message"]
@@ -165,7 +142,6 @@ class TestApplyTopFits:
     @patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock)
     @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
     async def test_applies_top_n(self, mock_bulk, mock_apply):
-        """Applies to top N jobs from scored list."""
         mock_bulk.return_value = {
             "status": "success",
             "total_saved": 5,
@@ -176,17 +152,72 @@ class TestApplyTopFits:
             ],
         }
         mock_apply.return_value = {"status": "applied"}
-
         from naukri_server.tools.smart_apply import _apply_top_fits
         result = await _apply_top_fits(min_fit_score=60, limit=3)
-
         assert result["status"] == "success"
         assert result["applied"] == 3
         assert result["attempted"] == 3
 
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
+    async def test_bulk_scoring_error_propagated(self, mock_bulk):
+        mock_bulk.return_value = {"status": "error", "message": "timeout", "error_code": "API_ERROR"}
+        from naukri_server.tools.smart_apply import _apply_top_fits
+        result = await _apply_top_fits(min_fit_score=60)
+        assert result["status"] == "error"
+        assert "timeout" in result["message"]
+
 
 # ---------------------------------------------------------------------------
-# 4. naukri_smart_apply — action routing
+# 4. Agent-eligible sort priority in _apply_top_fits
+# ---------------------------------------------------------------------------
+
+class TestApplyTopFitsPriority:
+    def _make_scored_jobs(self, specs):
+        jobs = []
+        for job_id, fit_score, agent_bonus in specs:
+            jobs.append({
+                "job_id": job_id, "title": f"Job {job_id}", "company": "Co",
+                "fit_score": fit_score,
+                "fit_details": {"bonuses": {"agent_eligible": agent_bonus}},
+            })
+        return jobs
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock)
+    @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
+    async def test_agent_eligible_sorted_first_at_equal_score(self, mock_bulk, mock_apply):
+        """Two jobs at score 80: agent-eligible applied first."""
+        mock_bulk.return_value = {
+            "status": "success", "total_saved": 2,
+            "scored_jobs": self._make_scored_jobs([("J_non", 80, 0), ("J_elig", 80, 5)]),
+        }
+        mock_apply.return_value = {"status": "applied"}
+        from naukri_server.tools.smart_apply import _apply_top_fits
+        result = await _apply_top_fits(min_fit_score=60, limit=1)
+        assert result["applied"] == 1
+        assert result["results"][0]["job_id"] == "J_elig"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock)
+    @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
+    async def test_full_ordering_eligible_then_score_descending(self, mock_bulk, mock_apply):
+        mock_bulk.return_value = {
+            "status": "success", "total_saved": 4,
+            "scored_jobs": self._make_scored_jobs([
+                ("JE90", 90, 5), ("JE80", 80, 5), ("JN95", 95, 0), ("JN70", 70, 0),
+            ]),
+        }
+        mock_apply.return_value = {"status": "applied"}
+        from naukri_server.tools.smart_apply import _apply_top_fits
+        result = await _apply_top_fits(min_fit_score=60, limit=4)
+        applied_ids = [r["job_id"] for r in result["results"]]
+        assert applied_ids.index("JE90") < applied_ids.index("JN95")
+        assert applied_ids.index("JE80") < applied_ids.index("JN70")
+
+
+# ---------------------------------------------------------------------------
+# 5. naukri_smart_apply — action routing
 # ---------------------------------------------------------------------------
 
 class TestNaukriSmartApply:
@@ -237,14 +268,11 @@ class TestNaukriSmartApply:
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
     async def test_single_job_assessment(self, mock_get_job, mock_profile, mock_match):
-        """Single job assessment returns fit_assessment and job_summary."""
         mock_get_job.return_value = _make_job_result()
         mock_profile.return_value = _make_profile()
         mock_match.return_value = None
-
         from naukri_server.tools.smart_apply import naukri_smart_apply
         result = await naukri_smart_apply(job_id="J1")
-
         assert result["status"] == "success"
         assert "fit_assessment" in result
         assert "job_summary" in result
@@ -254,10 +282,8 @@ class TestNaukriSmartApply:
     @patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock)
     @patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock)
     async def test_single_job_fetch_failure(self, mock_get_job, mock_profile):
-        """Job fetch failure returns error."""
         mock_get_job.return_value = {"status": "error", "message": "Not found"}
         mock_profile.return_value = _make_profile()
-
         from naukri_server.tools.smart_apply import naukri_smart_apply
         result = await naukri_smart_apply(job_id="J_BAD")
         assert result["status"] == "error"

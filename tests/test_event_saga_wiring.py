@@ -42,8 +42,9 @@ class TestSyncEmitsStatusChangedEvents:
 
         with (
             patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock, return_value=remote_rest_data),
-            patch("naukri_server.tools.sync._load_json", return_value=list(local_apps)),
-            patch("naukri_server.tools.sync._save_json"),
+            patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=list(local_apps)),
+            patch("naukri_server.database.upsert_application", new_callable=AsyncMock),
+            patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock),
             patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock, return_value={}),
             patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock),
             patch("naukri_server.tools.sync.event_bus", test_bus),
@@ -94,8 +95,9 @@ class TestSyncEmitsStatusChangedEvents:
 
         with (
             patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock, return_value=remote_rest_data),
-            patch("naukri_server.tools.sync._load_json", return_value=list(local_apps)),
-            patch("naukri_server.tools.sync._save_json"),
+            patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=list(local_apps)),
+            patch("naukri_server.database.upsert_application", new_callable=AsyncMock),
+            patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock),
             patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock, return_value={}),
             patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock),
             patch("naukri_server.tools.sync.event_bus", test_bus),
@@ -199,7 +201,7 @@ class TestApplySagaSteps:
         apply_result = {"status": "applied", "job_id": "999"}
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
         ):
@@ -219,7 +221,7 @@ class TestApplySagaSteps:
             pass
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
             patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock, side_effect=mock_set_reminder),
@@ -239,7 +241,7 @@ class TestApplySagaSteps:
         apply_result = {"status": "applied", "job_id": "999"}
 
         with (
-            patch("naukri_server.tools.tracking._load_json", return_value=[]),
+            patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None),
             patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock, return_value=apply_result),
             patch("naukri_server.tools.jobs._extract_job_id", return_value="999"),
         ):

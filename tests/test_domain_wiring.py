@@ -6,7 +6,6 @@ Covers:
 - EventBus default subscribers are registered at module load
 """
 
-import asyncio
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
@@ -47,9 +46,11 @@ class TestListApplicationsEnrichment:
             },
         ]
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=mock_apps), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+        by_status = {"applied": 1, "shortlisted": 1}
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(mock_apps, len(mock_apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=by_status):
             result = await _list_applications()
 
         assert result["status"] == "success"
@@ -121,9 +122,8 @@ class TestAutoHuntSalaryDisclosed:
                    new_callable=AsyncMock) as mock_search, \
              patch("naukri_server.tools.profile.get_cached_profile",
                    new_callable=AsyncMock) as mock_profile, \
-             patch("naukri_server.tools.tracking._load_json", return_value=[]), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+             patch("naukri_server.database.get_applied_job_ids",
+                   new_callable=AsyncMock, return_value=set()):
             mock_search.return_value = search_result
             mock_profile.return_value = _GOOD_PROFILE
 

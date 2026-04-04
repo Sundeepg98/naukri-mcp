@@ -236,3 +236,122 @@ class TestCompanyFollowRouting:
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "Unknown action" in result["message"]
+
+
+# =====================================================================
+# 5xx retry backoff tests (recovered from tier17_hardening_verify.py)
+# =====================================================================
+
+def _make_mock_response(status, json_data=None, text="", headers=None):
+    resp = AsyncMock()
+    resp.status = status
+    default_headers = {"content-type": "application/json"}
+    if headers:
+        default_headers.update(headers)
+    resp.headers = default_headers
+    resp.json = AsyncMock(return_value=json_data or {})
+    resp.text = AsyncMock(return_value=text)
+    return resp
+
+
+def _make_session_with_responses(responses):
+    call_idx = {"i": 0}
+    def make_ctx(*args, **kwargs):
+        idx = call_idx["i"]
+        call_idx["i"] += 1
+        resp = responses[idx]
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return ctx
+    session = AsyncMock()
+    session.request = MagicMock(side_effect=make_ctx)
+    return session
+
+
+class TestBackoff502SingleRetry:
+    """502 on first call, 200 on second -- verify sleep called with BACKOFF_BASE * 2**0."""
+
+    @pytest.mark.asyncio
+    async def test_502_then_200_sleeps_once(self):
+        from naukri_server.api import _api_request
+        from naukri_server.config import API_BACKOFF_BASE as BACKOFF_BASE
+
+        resp_502 = _make_mock_response(502, text="Bad Gateway")
+        resp_200 = _make_mock_response(200, json_data={"ok": True})
+        session = _make_session_with_responses([resp_502, resp_200])
+
+        mock_token_mgr = AsyncMock()
+        mock_token_mgr.ensure_token = AsyncMock(return_value="fake-token")
+        mock_token_mgr.get_cookies = MagicMock(return_value="cookie=val")
+
+        with patch("naukri_server.api.get_session", AsyncMock(return_value=session)), \
+             patch("naukri_server.api.browser") as mock_browser, \
+             patch("naukri_server.api.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_browser.token_manager = mock_token_mgr
+            mock_browser.token_manager.get_cookies = MagicMock(return_value="cookie=val")
+            result = await _api_request("GET", "/test-path")
+
+        assert result == {"ok": True}
+        mock_sleep.assert_called_once()
+        actual_delay = mock_sleep.call_args[0][0]
+        assert BACKOFF_BASE * 0.5 <= actual_delay <= BACKOFF_BASE * 1.5
+
+
+class TestBackoff503TwiceIncreasingDelays:
+    """503 twice then 200 -- verify sleep called with increasing delays."""
+
+    @pytest.mark.asyncio
+    async def test_503_503_200_sleeps_twice(self):
+        from naukri_server.api import _api_request
+        from naukri_server.config import API_BACKOFF_BASE as BACKOFF_BASE
+
+        resp_503_a = _make_mock_response(503, text="Service Unavailable")
+        resp_503_b = _make_mock_response(503, text="Service Unavailable")
+        resp_200 = _make_mock_response(200, json_data={"result": "ok"})
+        session = _make_session_with_responses([resp_503_a, resp_503_b, resp_200])
+
+        mock_token_mgr = AsyncMock()
+        mock_token_mgr.ensure_token = AsyncMock(return_value="fake-token")
+        mock_token_mgr.get_cookies = MagicMock(return_value="cookie=val")
+
+        with patch("naukri_server.api.get_session", AsyncMock(return_value=session)), \
+             patch("naukri_server.api.browser") as mock_browser, \
+             patch("naukri_server.api.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_browser.token_manager = mock_token_mgr
+            mock_browser.token_manager.get_cookies = MagicMock(return_value="cookie=val")
+            result = await _api_request("GET", "/test-path")
+
+        assert result == {"result": "ok"}
+        assert mock_sleep.call_count == 2
+        d0 = mock_sleep.call_args_list[0][0][0]
+        assert BACKOFF_BASE * 0.5 <= d0 <= BACKOFF_BASE * 1.5
+        d1 = mock_sleep.call_args_list[1][0][0]
+        assert BACKOFF_BASE * 2 * 0.5 <= d1 <= BACKOFF_BASE * 2 * 1.5
+
+
+class TestBackoff504ExhaustsRetries:
+    """504 exhausts MAX_RETRIES -- verify error is raised."""
+
+    @pytest.mark.asyncio
+    async def test_504_exhausts_retries_raises_error(self):
+        from naukri_server.api import _api_request, NaukriAPIError
+        from naukri_server.config import API_MAX_RETRIES as MAX_RETRIES
+
+        responses = [_make_mock_response(504, text='{"message": "Gateway Timeout"}') for _ in range(MAX_RETRIES + 1)]
+        session = _make_session_with_responses(responses)
+
+        mock_token_mgr = AsyncMock()
+        mock_token_mgr.ensure_token = AsyncMock(return_value="fake-token")
+        mock_token_mgr.get_cookies = MagicMock(return_value="cookie=val")
+
+        with patch("naukri_server.api.get_session", AsyncMock(return_value=session)), \
+             patch("naukri_server.api.browser") as mock_browser, \
+             patch("naukri_server.api.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_browser.token_manager = mock_token_mgr
+            mock_browser.token_manager.get_cookies = MagicMock(return_value="cookie=val")
+            with pytest.raises(NaukriAPIError) as exc_info:
+                await _api_request("GET", "/test-path")
+
+        assert exc_info.value.status == 504
+        assert mock_sleep.call_count == MAX_RETRIES

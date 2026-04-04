@@ -14,22 +14,23 @@ from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
     BROWSER_MODAL_APPEAR,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE, SYNC_STATE_FILE,
+    SYNC_STATE_FILE,
     AUTO_PURGE_DAYS,
 )
 from naukri_server.events import event_bus, ApplicationStatusChanged
-from naukri_server.tools.tracking import (
-    _load_json, _save_json, _applications_lock,
+
+# Re-export pure business logic from service layer for backward compatibility.
+# Tests import these names from naukri_server.tools.sync — keep them importable.
+from naukri_server.services.sync_service import (  # noqa: F401
+    _parse_applied_jobs,
+    _parse_saved_jobs,
+    _map_naukri_status,
 )
-from naukri_server.tools.saved_jobs import _saved_jobs_lock
 
 
-# URL patterns for browser interception (discovered)
-_APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
-_SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
-
+# ---------------------------------------------------------------------------
 # Sync state persistence — path comes from config.SYNC_STATE_FILE
-
+# ---------------------------------------------------------------------------
 
 def _load_sync_state() -> dict:
     if SYNC_STATE_FILE.exists():
@@ -58,6 +59,118 @@ async def _load_sync_state_async() -> dict:
 
 async def _save_sync_state_async(state: dict):
     await asyncio.to_thread(_save_sync_state, state)
+
+
+# ---------------------------------------------------------------------------
+# Merge logic
+# ---------------------------------------------------------------------------
+
+def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
+    """Merge remote applied jobs into local list. Mutates local_apps in place.
+
+    Rules:
+    - Existing job_id: update status/title/company from remote, preserve local fields.
+    - New job_id: add with source="naukri_sync".
+    - Local-only jobs are left untouched.
+    """
+    # Deduplicate local_apps by job_id (keep last entry per id)
+    local_by_id = {}
+    for a in local_apps:
+        jid = a.get("job_id")
+        if jid:
+            local_by_id[jid] = a
+    now = datetime.now(timezone.utc).isoformat()
+
+    new_added = 0
+    updated = 0
+    unchanged = 0
+    remote_ids = set()
+
+    for rj in remote_jobs:
+        rid = rj["job_id"]
+        remote_ids.add(rid)
+
+        if rid in local_by_id:
+            existing = local_by_id[rid]
+            changed = False
+            for field in ("title", "company", "status", "recruiter_active", "apply_type",
+              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
+                if rj.get(field) is not None and rj[field] != existing.get(field):
+                    existing[field] = rj[field]
+                    changed = True
+            for field in ("applied_date", "salary", "location", "url"):
+                if rj.get(field) is not None and field not in existing:
+                    existing[field] = rj[field]
+            if changed:
+                existing["last_synced"] = now
+                updated += 1
+            else:
+                unchanged += 1
+        else:
+            entry = {
+                "job_id": rid,
+                "title": rj.get("title"),
+                "company": rj.get("company"),
+                "status": rj.get("status", "applied"),
+                "applied_at": rj.get("applied_date") or now,
+                "source": "naukri_sync",
+                "last_synced": now,
+            }
+            for k, v in rj.items():
+                if k not in entry and v is not None:
+                    entry[k] = v
+            local_by_id[rid] = entry
+            new_added += 1
+
+    # Rebuild local_apps from deduplicated dict (preserves merge results)
+    local_apps.clear()
+    local_apps.extend(local_by_id.values())
+
+    local_only = sum(1 for a in local_apps
+                     if a.get("job_id") and a["job_id"] not in remote_ids)
+
+    return {"new_added": new_added, "updated": updated,
+            "unchanged": unchanged, "local_only": local_only}
+
+
+def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
+    """Merge remote saved jobs into local list. Mutates local_saved in place."""
+    local_ids = {j["job_id"] for j in local_saved if j.get("job_id")}
+    now = datetime.now(timezone.utc).isoformat()
+
+    new_added = 0
+    already_local = 0
+    remote_ids = set()
+
+    for rj in remote_jobs:
+        rid = rj["job_id"]
+        remote_ids.add(rid)
+
+        if rid in local_ids:
+            already_local += 1
+        else:
+            local_saved.append({
+                "job_id": rid,
+                "title": rj.get("title"),
+                "company": rj.get("company"),
+                "saved_at": rj.get("saved_date") or now,
+                "source": "naukri_sync",
+                "last_synced": now,
+                **{k: v for k, v in rj.items()
+                   if k not in ("job_id", "title", "company", "saved_date") and v is not None},
+            })
+            new_added += 1
+
+    local_only = sum(1 for j in local_saved
+                     if j.get("job_id") and j["job_id"] not in remote_ids)
+
+    return {"new_added": new_added, "already_local": already_local,
+            "local_only": local_only}
+
+
+# URL patterns for browser interception (discovered)
+_APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
+_SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
 
 
 # ---------------------------------------------------------------------------
@@ -330,239 +443,6 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 
 
 # ---------------------------------------------------------------------------
-# Parsers (defensive multi-key lookups for unknown schemas)
-# ---------------------------------------------------------------------------
-
-def _parse_applied_jobs(data) -> list:
-    """Parse Naukri applied-jobs API response into normalized format.
-
-    Handles two schemas:
-    - History API (applyDetails): {jobId, jobTitle, company, appliedDate, location, ...}
-    - Generic fallback: {jobs, jobDetails, applications, data, ...}
-    """
-    items = []
-
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("applyDetails", "appliedJobs", "jobs", "jobDetails",
-                     "applications", "data", "appliedJobList", "results"):
-            if key in data and isinstance(data[key], list):
-                items = data[key]
-                break
-
-    jobs = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        job_id = str(item.get("jobId") or item.get("job_id") or item.get("id") or "")
-        if not job_id:
-            continue
-
-        # Extract status — history API uses statusMsg or nested status list
-        raw_status = item.get("statusMsg") or item.get("status") or item.get("applicationStatus")
-        status_list = []
-        if isinstance(raw_status, list):
-            status_list = raw_status
-            # History API: status is a list of {statusMsg, statusDate, ...}
-            raw_status = raw_status[0].get("statusMsg") if raw_status and isinstance(raw_status[0], dict) else raw_status
-
-        # Extract view count from status array (statusId=4 = "Viewed")
-        view_count = None
-        last_viewed = None
-        for s in status_list:
-            if isinstance(s, dict) and s.get("statusId") == 4:
-                view_count = s.get("count", 0)
-                last_viewed = s.get("modifiedDate")
-                break
-
-        jobs.append({
-            "job_id": job_id,
-            "title": item.get("jobTitle") or item.get("title") or item.get("designation"),
-            "company": item.get("company") or item.get("companyName"),
-            "status": _map_naukri_status(raw_status),
-            "applied_date": item.get("appliedDate") or item.get("applied_date") or item.get("createdDate"),
-            "salary": (item.get("salary")
-                       or (item.get("salaryDetail", {}).get("label")
-                           if isinstance(item.get("salaryDetail"), dict) else None)),
-            "location": item.get("location") or item.get("cityName"),
-            "url": item.get("jdUrl") or item.get("url"),
-            "apply_type": item.get("applyType"),
-            "recruiter_active": item.get("isRecruiterActive"),
-            "ars_score": item.get("arsScore"),
-            "star_rating": item.get("starRating"),
-            "is_open": item.get("isOpen") == "true" if item.get("isOpen") is not None else None,
-            "job_activity": item.get("jobActivity"),
-            "job_activity_date": item.get("jobActivityDate"),
-            "apply_flow_type": item.get("applyFlowType"),
-            "is_crawled": item.get("isCrawled", False),
-            "company_rating": item.get("companyRating"),
-            "view_count": view_count,
-            "last_viewed": last_viewed,
-        })
-    return jobs
-
-
-def _parse_saved_jobs(data) -> list:
-    """Parse Naukri saved-jobs API response into normalized format."""
-    items = []
-
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("savedJobs", "jobs", "jobDetails", "data",
-                     "savedJobList", "results", "bookmarks"):
-            if key in data and isinstance(data[key], list):
-                items = data[key]
-                break
-
-    jobs = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        job_id = str(item.get("jobId") or item.get("job_id") or item.get("id") or "")
-        if not job_id:
-            continue
-        jobs.append({
-            "job_id": job_id,
-            "title": item.get("title") or item.get("jobTitle") or item.get("designation"),
-            "company": item.get("companyName") or item.get("company"),
-            "saved_date": item.get("savedDate") or item.get("createdDate") or item.get("savedAt"),
-            "salary": item.get("salary"),
-            "location": item.get("location") or item.get("cityName"),
-            "url": item.get("url") or item.get("jdUrl"),
-        })
-    return jobs
-
-
-def _map_naukri_status(status) -> str:
-    """Map Naukri's internal status labels to our tracking statuses."""
-    if not status:
-        return "applied"
-    s = str(status).lower()
-    mapping = {
-        "applied": "applied",
-        "viewed": "viewed_by_recruiter",
-        "shortlisted": "shortlisted",
-        "rejected": "rejected",
-        "not interested": "rejected",
-        "interview": "interview",
-        "hired": "hired",
-    }
-    for pattern, local_status in mapping.items():
-        if pattern in s:
-            return local_status
-    return s
-
-
-# ---------------------------------------------------------------------------
-# Merge logic
-# ---------------------------------------------------------------------------
-
-def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
-    """Merge remote applied jobs into local list. Mutates local_apps in place.
-
-    Rules:
-    - Existing job_id: update status/title/company from remote, preserve local fields.
-    - New job_id: add with source="naukri_sync".
-    - Local-only jobs are left untouched.
-    """
-    # Deduplicate local_apps by job_id (keep last entry per id)
-    local_by_id = {}
-    for a in local_apps:
-        jid = a.get("job_id")
-        if jid:
-            local_by_id[jid] = a
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    updated = 0
-    unchanged = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_by_id:
-            existing = local_by_id[rid]
-            changed = False
-            for field in ("title", "company", "status", "recruiter_active", "apply_type",
-              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
-                if rj.get(field) is not None and rj[field] != existing.get(field):
-                    existing[field] = rj[field]
-                    changed = True
-            for field in ("applied_date", "salary", "location", "url"):
-                if rj.get(field) is not None and field not in existing:
-                    existing[field] = rj[field]
-            if changed:
-                existing["last_synced"] = now
-                updated += 1
-            else:
-                unchanged += 1
-        else:
-            entry = {
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "status": rj.get("status", "applied"),
-                "applied_at": rj.get("applied_date") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-            }
-            for k, v in rj.items():
-                if k not in entry and v is not None:
-                    entry[k] = v
-            local_by_id[rid] = entry
-            new_added += 1
-
-    # Rebuild local_apps from deduplicated dict (preserves merge results)
-    local_apps.clear()
-    local_apps.extend(local_by_id.values())
-
-    local_only = sum(1 for a in local_apps
-                     if a.get("job_id") and a["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "updated": updated,
-            "unchanged": unchanged, "local_only": local_only}
-
-
-def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
-    """Merge remote saved jobs into local list. Mutates local_saved in place."""
-    local_ids = {j["job_id"] for j in local_saved if j.get("job_id")}
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    already_local = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_ids:
-            already_local += 1
-        else:
-            local_saved.append({
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "saved_at": rj.get("saved_date") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-                **{k: v for k, v in rj.items()
-                   if k not in ("job_id", "title", "company", "saved_date") and v is not None},
-            })
-            new_added += 1
-
-    local_only = sum(1 for j in local_saved
-                     if j.get("job_id") and j["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "already_local": already_local,
-            "local_only": local_only}
-
-
-# ---------------------------------------------------------------------------
 # Internal helpers (not MCP tools — used by the unified tool)
 # ---------------------------------------------------------------------------
 
@@ -620,33 +500,39 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         else:
             job["status"] = "applied"
 
-    async with _applications_lock:
-        local_apps = _load_json(APPLICATIONS_FILE)
-        # Snapshot old statuses for change detection
-        old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
-        stats = _merge_applications(local_apps, remote_jobs)
-        # Auto-purge applications older than AUTO_PURGE_DAYS
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
-        before_count = len(local_apps)
-        local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
-        purged = before_count - len(local_apps)
-        if purged:
-            logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
-        # Detect status changes
-        status_changes = []
-        for app in local_apps:
-            jid = app.get("job_id")
-            old_s = old_status_map.get(jid)
-            new_s = app.get("status")
-            if old_s and new_s and old_s != new_s:
-                status_changes.append({
-                    "job_id": jid,
-                    "title": app.get("title"),
-                    "company": app.get("company"),
-                    "old_status": old_s,
-                    "new_status": new_s,
-                })
-        _save_json(APPLICATIONS_FILE, local_apps)
+    from naukri_server.database import list_all_applications, upsert_application, delete_applications_before
+
+    local_apps = await list_all_applications()
+    # Snapshot old statuses for change detection
+    old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
+    stats = _merge_applications(local_apps, remote_jobs)
+    # Auto-purge applications older than AUTO_PURGE_DAYS
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+    before_count = len(local_apps)
+    local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
+    purged = before_count - len(local_apps)
+    if purged:
+        logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
+    # Detect status changes
+    status_changes = []
+    for app in local_apps:
+        jid = app.get("job_id")
+        old_s = old_status_map.get(jid)
+        new_s = app.get("status")
+        if old_s and new_s and old_s != new_s:
+            status_changes.append({
+                "job_id": jid,
+                "title": app.get("title"),
+                "company": app.get("company"),
+                "old_status": old_s,
+                "new_status": new_s,
+            })
+    # Persist merged + purged results to SQLite
+    for app in local_apps:
+        await upsert_application(app)
+    # Delete purged entries from SQLite (those older than cutoff and not manual)
+    if purged:
+        await delete_applications_before(cutoff)
 
     # Emit events for status changes (outside the lock)
     for change in status_changes:
@@ -710,10 +596,12 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
 
     remote_jobs = _parse_saved_jobs(remote_data)
 
-    async with _saved_jobs_lock:
-        local_saved = _load_json(SAVED_JOBS_FILE)
-        stats = _merge_saved_jobs(local_saved, remote_jobs)
-        _save_json(SAVED_JOBS_FILE, local_saved)
+    from naukri_server.database import list_all_saved_jobs, upsert_saved_job
+
+    local_saved = await list_all_saved_jobs()
+    stats = _merge_saved_jobs(local_saved, remote_jobs)
+    for sj in local_saved:
+        await upsert_saved_job(sj)
 
     # Record sync metadata
     async with _sync_state_lock:
@@ -749,6 +637,9 @@ async def naukri_sync(
     output_path: Optional[str] = None,
 ) -> dict:
     """Unified sync & export — pull data from Naukri.com or export local data to files.
+
+    DEPRECATED: Use individual tools instead — naukri_sync_applications(),
+    naukri_sync_saved(), naukri_export_data().
 
     Note: Uses 'entity' instead of 'action' because the dispatch selects a data source
     to synchronize (applications, saved_jobs) or an export target, not an operation to
@@ -812,3 +703,86 @@ async def naukri_sync(
     # ── unknown entity ────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs, export", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Individual tools (preferred over naukri_sync)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def naukri_sync_applications(
+    force_browser: bool = False,
+    days_back: Optional[int] = None,
+) -> dict:
+    """Sync applied jobs from Naukri.com into local tracking.
+
+    Uses 3-tier fallback: REST API -> browser intercept -> HTML scrape.
+    Merges with local applications, preserves local-only fields.
+
+    Args:
+        force_browser: If True, skip REST API and use browser strategies.
+        days_back: Fetch from last N days (default 365). Use smaller values
+                   (e.g., 7 or 30) for faster incremental syncs.
+
+    Returns:
+        {status, method, total_remote, new_added, updated, unchanged, local_only,
+         days_back, last_sync, applications: [...first 20...]}
+    """
+    try:
+        return await _sync_applications(
+            force_browser=force_browser,
+            days_back=days_back if days_back is not None else 365,
+        )
+    except Exception as e:
+        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+
+
+@mcp.tool()
+async def naukri_sync_saved(force_browser: bool = False) -> dict:
+    """Sync saved/bookmarked jobs from Naukri.com into local tracking.
+
+    Uses 2-tier fallback: REST API -> browser intercept.
+    Merges with local saved jobs list.
+
+    Args:
+        force_browser: If True, skip REST API and use browser strategy.
+
+    Returns:
+        {status, method, total_remote, new_added, already_local, local_only,
+         last_sync, saved_jobs: [...first 20...]}
+    """
+    try:
+        return await _sync_saved_jobs(force_browser=force_browser)
+    except Exception as e:
+        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+
+
+@mcp.tool()
+async def naukri_export_data(
+    data_type: str,
+    export_format: str = "json",
+    keywords: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> dict:
+    """Export applications, saved jobs, or search results to a file.
+
+    Args:
+        data_type: What to export — "applications", "saved_jobs", or "search_results".
+        export_format: Output format — "json" or "csv" (default "json").
+        keywords: Required when data_type is "search_results" — the search query.
+        output_path: Custom file path (default: exports/<type>_<date>.<ext>).
+
+    Returns:
+        {status, file_path, record_count, data_type, format}
+    """
+    from naukri_server.tools.export import _export_data
+    try:
+        return await _export_data(
+            data_type=data_type,
+            format=export_format,
+            keywords=keywords,
+            output_path=output_path,
+        )
+    except Exception as e:
+        return {"status": "error", "message": f"Export failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

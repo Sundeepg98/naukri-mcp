@@ -743,3 +743,128 @@ class TestPendingAssessmentCount:
         results[15] = Exception("assessments API down")
         result = await _run_brief_with_mocked_results(results)
         assert result["assessments"]["pending"] == 0
+
+
+# =====================================================================
+# Competition Section (recovered from tier24.py)
+# =====================================================================
+
+class TestCompetitionSection:
+    """_build_competition_section - bucket applications by applicant count."""
+
+    def _call(self, apps_result):
+        from naukri_server.tools.daily_brief import _build_competition_section
+        return _build_competition_section(apps_result)
+
+    def test_none_input_returns_empty_section(self):
+        result = self._call(None)
+        assert result["total_with_data"] == 0
+        assert result["average_applicants"] is None
+        assert result["top_competitive"] == []
+
+    def test_empty_applications_list_returns_zeroes(self):
+        result = self._call({"applications": []})
+        assert result["total_with_data"] == 0
+
+    def test_apps_with_no_total_applicants_field_all_zeroes(self):
+        apps = [{"job_id": "J1", "title": "SWE"}, {"job_id": "J2", "title": "PM"}]
+        result = self._call({"applications": apps})
+        assert result["total_with_data"] == 0
+        assert result["low"] == 0 and result["medium"] == 0
+        assert result["high"] == 0 and result["very_high"] == 0
+
+    def test_bucket_boundary_50_is_low(self):
+        result = self._call({"applications": [{"job_id": "J1", "total_applicants": 50}]})
+        assert result["low"] == 1
+        assert result["medium"] == 0
+
+    def test_bucket_boundary_51_is_medium(self):
+        result = self._call({"applications": [{"job_id": "J1", "total_applicants": 51}]})
+        assert result["low"] == 0
+        assert result["medium"] == 1
+
+    def test_bucket_boundary_200_medium_201_high(self):
+        apps = [
+            {"job_id": "J1", "total_applicants": 200},
+            {"job_id": "J2", "total_applicants": 201},
+        ]
+        result = self._call({"applications": apps})
+        assert result["medium"] == 1
+        assert result["high"] == 1
+
+    def test_bucket_boundary_500_high_501_very_high(self):
+        apps = [
+            {"job_id": "J1", "total_applicants": 500},
+            {"job_id": "J2", "total_applicants": 501},
+        ]
+        result = self._call({"applications": apps})
+        assert result["high"] == 1
+        assert result["very_high"] == 1
+
+    def test_top_competitive_returns_top_3_sorted_descending(self):
+        apps = [
+            {"job_id": "J1", "title": "T1", "company": "C1", "total_applicants": 100},
+            {"job_id": "J2", "title": "T2", "company": "C2", "total_applicants": 600},
+            {"job_id": "J3", "title": "T3", "company": "C3", "total_applicants": 300},
+            {"job_id": "J4", "title": "T4", "company": "C4", "total_applicants": 50},
+        ]
+        result = self._call({"applications": apps})
+        top = result["top_competitive"]
+        assert len(top) == 3
+        assert top[0]["total_applicants"] == 600
+        assert top[1]["total_applicants"] == 300
+
+    def test_average_applicants_rounded_correctly(self):
+        apps = [
+            {"job_id": "J1", "total_applicants": 10},
+            {"job_id": "J2", "total_applicants": 20},
+            {"job_id": "J3", "total_applicants": 50},
+        ]
+        result = self._call({"applications": apps})
+        assert result["average_applicants"] == round((10 + 20 + 50) / 3, 1)
+
+
+class TestCompetitionRecommendedAction:
+    """_build_recommended_actions - high competition triggers medium-priority action."""
+
+    def _base_brief(self):
+        return {
+            "unread_messages": {"count": 0},
+            "due_reminders": {"count": 0},
+            "stale_applications": {"count": 0},
+            "notification_summary": {"categories": {}},
+            "early_access_roles": {"newly_posted_count": 0},
+            "assessments": {"pending": 0},
+        }
+
+    def test_avg_above_200_triggers_medium_action(self):
+        from naukri_server.tools.daily_brief import _build_recommended_actions
+        brief = self._base_brief()
+        brief["competition_overview"] = {"average_applicants": 350}
+        actions = _build_recommended_actions(brief)
+        competition_actions = [a for a in actions if "competition" in a["action"].lower() or "applicant" in a["action"].lower()]
+        assert len(competition_actions) == 1
+        assert competition_actions[0]["priority"] == "medium"
+        assert "350" in competition_actions[0]["action"]
+
+    def test_avg_exactly_200_does_not_trigger(self):
+        from naukri_server.tools.daily_brief import _build_recommended_actions
+        brief = self._base_brief()
+        brief["competition_overview"] = {"average_applicants": 200}
+        actions = _build_recommended_actions(brief)
+        competition_actions = [a for a in actions if "competition" in a["action"].lower() or "applicant" in a["action"].lower()]
+        assert len(competition_actions) == 0
+
+    def test_missing_competition_overview_is_safe(self):
+        from naukri_server.tools.daily_brief import _build_recommended_actions
+        brief = self._base_brief()
+        actions = _build_recommended_actions(brief)
+        assert isinstance(actions, list)
+
+    def test_competition_overview_with_none_avg_is_safe(self):
+        from naukri_server.tools.daily_brief import _build_recommended_actions
+        brief = self._base_brief()
+        brief["competition_overview"] = {"average_applicants": None}
+        actions = _build_recommended_actions(brief)
+        competition_actions = [a for a in actions if "competition" in a["action"].lower() or "applicant" in a["action"].lower()]
+        assert len(competition_actions) == 0

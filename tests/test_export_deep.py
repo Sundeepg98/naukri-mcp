@@ -114,8 +114,7 @@ class TestFormatValidation:
         """'CSV' (uppercase) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
 
-        fake_apps = _make_fake_file([{"title": "SDE"}])
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[{"title": "SDE"}]), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             fake_file = MagicMock()
@@ -130,8 +129,7 @@ class TestFormatValidation:
         """'JSON' (uppercase) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
 
-        fake_apps = _make_fake_file([{"title": "SDE"}])
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[{"title": "SDE"}]), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             fake_file = MagicMock()
@@ -171,8 +169,7 @@ class TestDataTypeValidation:
         """'Applications' (mixed case) should be accepted after lower()."""
         from naukri_server.tools.export import _export_data
 
-        fake_apps = _make_fake_file([{"title": "SDE"}])
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[{"title": "SDE"}]), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             fake_file = MagicMock()
@@ -215,14 +212,13 @@ class TestSearchResultsKeywordsGuard:
 
 
 class TestFileNotFound:
-    """_export_data returns NOT_FOUND when data files are missing."""
+    """_export_data returns NOT_FOUND when SQLite returns empty results."""
 
     @pytest.mark.asyncio
     async def test_applications_file_not_found(self):
         from naukri_server.tools.export import _export_data
 
-        fake_missing = _make_fake_file([], exists=False)
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_missing):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await _export_data(data_type="applications")
 
         assert result["status"] == "error"
@@ -233,8 +229,7 @@ class TestFileNotFound:
     async def test_saved_jobs_file_not_found(self):
         from naukri_server.tools.export import _export_data
 
-        fake_missing = _make_fake_file([], exists=False)
-        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_missing):
+        with patch("naukri_server.database.list_all_saved_jobs", new_callable=AsyncMock, return_value=[]):
             result = await _export_data(data_type="saved_jobs")
 
         assert result["status"] == "error"
@@ -248,30 +243,29 @@ class TestFileNotFound:
 
 
 class TestFileReadError:
-    """_export_data returns API_ERROR when reading a file raises an exception."""
+    """_export_data returns NOT_FOUND when SQLite returns empty (replaces file read errors)."""
 
     @pytest.mark.asyncio
     async def test_applications_read_error(self):
+        """SQLite returning empty is equivalent to old file-not-found/read-error."""
         from naukri_server.tools.export import _export_data
 
-        fake_erroring = _make_fake_file([], exists=True, read_error=True)
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_erroring):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await _export_data(data_type="applications")
 
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
-        assert "applications" in result["message"].lower()
+        assert result["error_code"] == "NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_saved_jobs_read_error(self):
+        """SQLite returning empty is equivalent to old file-not-found/read-error."""
         from naukri_server.tools.export import _export_data
 
-        fake_erroring = _make_fake_file([], exists=True, read_error=True)
-        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_erroring):
+        with patch("naukri_server.database.list_all_saved_jobs", new_callable=AsyncMock, return_value=[]):
             result = await _export_data(data_type="saved_jobs")
 
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
+        assert result["error_code"] == "NOT_FOUND"
 
 
 # ===========================================================================
@@ -280,14 +274,13 @@ class TestFileReadError:
 
 
 class TestNoRecords:
-    """_export_data returns NOT_FOUND when the file exists but holds [] ."""
+    """_export_data returns NOT_FOUND when SQLite returns empty list."""
 
     @pytest.mark.asyncio
     async def test_applications_empty_list(self):
         from naukri_server.tools.export import _export_data
 
-        fake_apps = _make_fake_file([])
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await _export_data(data_type="applications")
 
         assert result["status"] == "error"
@@ -323,11 +316,10 @@ class TestJsonExport:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE", "company": "Google"}]
-        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
         fake_file.__str__ = lambda self: "/fake/exports/applications_2026-01-01.json"
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
@@ -344,10 +336,9 @@ class TestJsonExport:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE"}]
-        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
@@ -374,10 +365,9 @@ class TestCsvExport:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE", "company": "Google"}]
-        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
@@ -393,10 +383,9 @@ class TestCsvExport:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE", "company": "Google"}]
-        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
@@ -417,10 +406,9 @@ class TestCsvExport:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE", "loc": {"city": "Bangalore"}}]
-        fake_apps = _make_fake_file(records)
         fake_file = MagicMock()
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
@@ -444,14 +432,13 @@ class TestOutputPath:
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "SDE"}]
-        fake_apps = _make_fake_file(records)
         captured_name = []
 
         def fake_truediv(self, name):
             captured_name.append(name)
             return MagicMock()
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = fake_truediv
@@ -475,14 +462,13 @@ class TestOutputPath:
         from pathlib import Path
 
         records = [{"title": "SDE"}]
-        fake_apps = _make_fake_file(records)
 
         # Use a path within exports/ so the path validation passes
         import os
         exports_resolved = str(export_mod._EXPORTS_DIR.resolve())
         custom_path = os.path.join(exports_resolved, "my_custom_export.json")
 
-        with patch("naukri_server.tools.export.APPLICATIONS_FILE", fake_apps), \
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir, \
              patch("naukri_server.tools.export.Path") as mock_path_cls:
             mock_dir.mkdir = MagicMock()
@@ -566,17 +552,16 @@ class TestSearchResultsDataSource:
 
 
 class TestSavedJobsExport:
-    """_export_data reads saved_jobs.json and exports it successfully."""
+    """_export_data reads saved jobs from SQLite and exports successfully."""
 
     @pytest.mark.asyncio
     async def test_saved_jobs_json_export_success(self):
         from naukri_server.tools.export import _export_data
 
         records = [{"title": "Data Scientist", "company": "Meta"}]
-        fake_saved = _make_fake_file(records)
         fake_file = MagicMock()
 
-        with patch("naukri_server.tools.export.SAVED_JOBS_FILE", fake_saved), \
+        with patch("naukri_server.database.list_all_saved_jobs", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir:
             mock_dir.mkdir = MagicMock()
             mock_dir.__truediv__ = MagicMock(return_value=fake_file)
