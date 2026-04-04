@@ -6,6 +6,7 @@ from typing import Optional
 from naukri_server.interfaces import api_client
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT, logger
+from naukri_server.events import event_bus, ApplicationSubmitted
 from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application, _load_json, _applications_lock, APPLICATIONS_FILE
@@ -76,6 +77,9 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     _save_cache(cache)
             await record_application(job_id, title=title, company=company, status="applied",
                                      extra={**(tracking_extra or {})})
+            await event_bus.emit(ApplicationSubmitted(
+                job_id=job_id, company=company or "", title=title or "",
+            ))
             return {
                 "status": "applied",
                 "job_id": job_id,
@@ -136,6 +140,9 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                 if jobs2 and jobs2[0].get("status") == 200:
                     await record_application(job_id, title=title, company=company, status="applied",
                                              extra={**(tracking_extra or {})})
+                    await event_bus.emit(ApplicationSubmitted(
+                        job_id=job_id, company=company or "", title=title or "",
+                    ))
                     return {
                         "status": "applied",
                         "job_id": job_id,

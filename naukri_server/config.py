@@ -27,6 +27,7 @@ REMINDERS_FILE = DATA_DIR / "reminders.json"
 QUESTIONS_FILE = DATA_DIR / "questions.json"
 SYNC_STATE_FILE = DATA_DIR / "sync_state.json"
 EARLY_ACCESS_TRACKING_FILE = DATA_DIR / "early_access_tracking.json"
+INTERVIEW_ROUNDS_FILE = DATA_DIR / "interview_rounds.json"
 EXPORTS_DIR = DATA_DIR / "exports"
 
 # Backward-compatible alias

@@ -170,7 +170,8 @@ class TestAutoReminder:
             mock_apply.return_value = {"status": "error", "message": "Failed"}
             result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
             assert result["status"] == "error"
-            assert "reminder_set" not in result
+            # Saga runs the reminder step but it returns reminder_set=False since apply failed
+            assert result.get("reminder_set") is False or "reminder_set" not in result
 
     @pytest.mark.asyncio
     async def test_reminder_failure_doesnt_block_apply(self):
@@ -183,9 +184,11 @@ class TestAutoReminder:
             mock_apply.return_value = {"status": "applied", "job_id": "123", "company": "TestCo"}
             mock_reminder.side_effect = Exception("Reminder DB error")
             result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
+            # Apply still succeeds even when reminder saga step fails
             assert result["status"] == "applied"
-            assert result["reminder_set"] is False
-            assert "Reminder DB error" in result["reminder_error"]
+            # Saga reports the error via saga_errors (compensation path)
+            assert "saga_errors" in result
+            assert any("Reminder DB error" in err for err in result["saga_errors"])
 
     @pytest.mark.asyncio
     async def test_batch_apply_with_reminders(self):

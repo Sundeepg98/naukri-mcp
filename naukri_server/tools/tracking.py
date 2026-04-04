@@ -16,7 +16,7 @@ from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API,
     BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE,
+    APPLICATIONS_FILE, SAVED_JOBS_FILE, INTERVIEW_ROUNDS_FILE,
 )
 from naukri_server.validation import validate_limit, validate_page
 
@@ -724,6 +724,97 @@ async def _application_follow_up(
 
 
 # ---------------------------------------------------------------------------
+# Interview round tracking helpers
+# ---------------------------------------------------------------------------
+
+_VALID_ROUND_TYPES = {"phone_screen", "technical", "system_design", "hr", "offer", "other"}
+_VALID_ROUND_STATUSES = {"scheduled", "completed", "cancelled"}
+
+
+async def _add_interview_round(job_id: str, round_type: str, date: str = "",
+                                notes: str = "", status: str = "scheduled") -> dict:
+    """Track an interview round for an application.
+
+    round_type: "phone_screen", "technical", "system_design", "hr", "offer", "other"
+    status: "scheduled", "completed", "cancelled"
+    """
+    if round_type not in _VALID_ROUND_TYPES:
+        return {"status": "error", "message": f"Invalid round_type '{round_type}'. Use: {', '.join(sorted(_VALID_ROUND_TYPES))}", "error_code": "VALIDATION_ERROR"}
+    if status not in _VALID_ROUND_STATUSES:
+        return {"status": "error", "message": f"Invalid status '{status}'. Use: {', '.join(sorted(_VALID_ROUND_STATUSES))}", "error_code": "VALIDATION_ERROR"}
+
+    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
+    round_entry = {
+        "job_id": job_id,
+        "round_type": round_type,
+        "date": date or datetime.now(timezone.utc).isoformat(),
+        "notes": notes,
+        "status": status,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    rounds.append(round_entry)
+    _save_json(INTERVIEW_ROUNDS_FILE, rounds)
+
+    return {
+        "status": "success",
+        "action": "round_added",
+        "job_id": job_id,
+        "round_type": round_type,
+        "total_rounds": len([r for r in rounds if r.get("job_id") == job_id]),
+    }
+
+
+async def _list_interview_rounds(job_id: str = None) -> dict:
+    """List interview rounds, optionally filtered by job_id."""
+    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
+    if job_id:
+        rounds = [r for r in rounds if str(r.get("job_id")) == str(job_id)]
+
+    # Group by job
+    by_job = {}
+    for r in rounds:
+        jid = r.get("job_id", "")
+        if jid not in by_job:
+            by_job[jid] = []
+        by_job[jid].append(r)
+
+    return {
+        "status": "success",
+        "total_rounds": len(rounds),
+        "jobs_with_rounds": len(by_job),
+        "rounds": rounds,
+    }
+
+
+async def _compare_offers(job_ids: list) -> dict:
+    """Compare multiple job offers side by side."""
+    apps = _load_json(APPLICATIONS_FILE)
+    rounds = _load_json(INTERVIEW_ROUNDS_FILE)
+
+    offers = []
+    for jid in job_ids:
+        app = next((a for a in apps if str(a.get("job_id")) == str(jid)), None)
+        job_rounds = [r for r in rounds if str(r.get("job_id")) == str(jid)]
+
+        offer = {
+            "job_id": jid,
+            "title": app.get("title", "") if app else "",
+            "company": app.get("company", "") if app else "",
+            "status": app.get("status", "") if app else "",
+            "ars_score": app.get("ars_score") if app else None,
+            "interview_rounds": len(job_rounds),
+            "latest_round": job_rounds[-1] if job_rounds else None,
+        }
+        offers.append(offer)
+
+    return {
+        "status": "success",
+        "count": len(offers),
+        "offers": offers,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Application registry — maps action to handler(kwargs) -> dict
 # ---------------------------------------------------------------------------
 
@@ -741,12 +832,16 @@ _VALID_PARAMS_PER_ACTION = {
     "draft_follow_up": {"job_id"},
     "recruiter_history": set(),
     "interview_prep": {"job_id"},
+    "add_round": {"job_id", "round_type", "date", "notes", "status"},
+    "list_rounds": {"job_id"},
+    "compare_offers": {"job_ids"},
 }
 
 async def _do_apply(**kw) -> dict:
-    """Wrap apply with duplicate check, composite lock, and optional reminder."""
+    """Wrap apply with duplicate check, composite lock, saga orchestration, and optional reminder."""
     from naukri_server.tools.apply import _apply_single
     from naukri_server.tools.jobs import _extract_job_id
+    from naukri_server.sagas import SagaExecutor
 
     job_id = _extract_job_id(kw["job_id"])
     # Check for duplicate application from local tracking
@@ -760,23 +855,52 @@ async def _do_apply(**kw) -> dict:
             }
 
     async with _tracking_composite_lock:
-        result = await _apply_single(job_id, kw.get("answers"), tracking_extra={"source": "single"})
-        # Auto-set reminder if requested and apply succeeded
+        saga = SagaExecutor("apply_workflow")
+        apply_result = {}
+
+        async def do_apply():
+            nonlocal apply_result
+            apply_result = await _apply_single(job_id, kw.get("answers"), tracking_extra={"source": "single"})
+            return apply_result
+
+        saga.add_step("apply", do_apply)
+
+        # Step 2: Set reminder (only if apply succeeds and reminder requested)
         set_reminder_days = kw.get("set_reminder_days")
-        if set_reminder_days and result.get("status") == "applied":
-            from naukri_server.tools.reminders import _set_reminder
-            try:
-                await _set_reminder(
-                    job_id=job_id,
-                    days=set_reminder_days,
-                    note=f"Follow up on application to {result.get('company', 'unknown')}",
-                )
-                result["reminder_set"] = True
-                result["reminder_days"] = set_reminder_days
-            except Exception as e:
-                result["reminder_set"] = False
-                result["reminder_error"] = str(e)
-    return result
+        if set_reminder_days:
+            async def do_reminder():
+                if apply_result.get("status") == "applied":
+                    from naukri_server.tools.reminders import _set_reminder
+                    await _set_reminder(
+                        job_id=job_id,
+                        days=set_reminder_days,
+                        note=f"Follow up on application to {apply_result.get('company', 'unknown')}",
+                    )
+                    return {"reminder_set": True, "reminder_days": set_reminder_days}
+                return {"reminder_set": False}
+
+            saga.add_step("reminder", do_reminder)
+
+        saga_result = await saga.run()
+
+        # Merge saga metadata into the apply result
+        if saga_result["status"] == "success" and apply_result:
+            apply_result["saga_steps"] = saga_result["completed_steps"]
+            # Copy reminder fields from saga results into apply_result
+            reminder_result = saga_result.get("results", {}).get("reminder")
+            if reminder_result:
+                apply_result.update(reminder_result)
+            return apply_result
+
+        # Saga failed — return error with saga context
+        if saga_result["status"] == "error":
+            if apply_result:
+                apply_result["saga_steps"] = saga_result.get("completed_steps", [])
+                apply_result["saga_errors"] = saga_result.get("errors", [])
+                return apply_result
+            return saga_result
+
+    return apply_result
 
 
 async def _do_batch_apply(**kw) -> dict:
@@ -823,6 +947,9 @@ _APPLICATION_REGISTRY: dict[str, callable] = {
     "draft_follow_up": lambda **kw: _draft_follow_up(kw["job_id"]),
     "recruiter_history": lambda **kw: _recruiter_history(),
     "interview_prep": lambda **kw: _interview_prep(kw["job_id"]),
+    "add_round": lambda **kw: _add_interview_round(kw["job_id"], kw.get("round_type", "other"), kw.get("date", ""), kw.get("notes", ""), kw.get("status", "scheduled")),
+    "list_rounds": lambda **kw: _list_interview_rounds(kw.get("job_id")),
+    "compare_offers": lambda **kw: _compare_offers([jid.strip() for jid in (kw.get("job_ids") or "").split(",") if jid.strip()]),
     "apply": _do_apply,
     "batch_apply": _do_batch_apply,
 }
@@ -861,8 +988,14 @@ async def naukri_applications(
     max_concurrent: int = BATCH_APPLY_DEFAULT_CONCURRENCY,
     set_reminder_days: Optional[int] = None,
     filter_info: Optional[int] = None,
+    # interview round params
+    round_type: Optional[str] = None,
+    date: Optional[str] = None,
+    notes: Optional[str] = None,
+    # offer comparison
+    job_ids: Optional[str] = None,
 ) -> dict:
-    """Unified application tracking — list, detail, purge, stale detection, follow-up, draft, recruiter CRM, interview prep, apply, and batch apply.
+    """Unified application tracking — list, detail, purge, stale detection, follow-up, draft, recruiter CRM, interview prep, interview rounds, offer comparison, apply, and batch apply.
 
     Actions:
       - "list": List tracked applications with filtering (use status/date_from/date_to/limit/page/filter_info)
@@ -879,14 +1012,19 @@ async def naukri_applications(
         Parallel-fetches company intel (reviews, interview difficulty), mock interview topics,
         and fit/skill-match assessment. Returns a single prep bundle with matched/missing skills,
         sample questions, and company rating.
+      - "add_round": Track an interview round for a job application (requires job_id, round_type).
+        Stores rounds in interview_rounds.json. round_type: phone_screen/technical/system_design/hr/offer/other.
+      - "list_rounds": List interview rounds, optionally filtered by job_id. Groups by job.
+      - "compare_offers": Compare multiple job offers side by side (requires job_ids as comma-separated string).
+        Returns application data, interview round counts, and latest round for each job.
       - "apply": Apply to a single job (requires job_id; optional answers for screening questions).
         If set_reminder_days is provided and apply succeeds, a follow-up reminder is auto-created.
       - "batch_apply": Search and apply to multiple jobs (requires keywords; optional location/experience/filters).
         If set_reminder_days is provided, reminders are auto-created for each successful application.
 
     Args:
-        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "draft_follow_up" | "recruiter_history" | "interview_prep" | "apply" | "batch_apply"
-        job_id: Required for detail/apply/interview_prep — the Naukri job ID (e.g. "270226007446")
+        action: "list" | "detail" | "purge" | "stale" | "follow_up" | "draft_follow_up" | "recruiter_history" | "interview_prep" | "add_round" | "list_rounds" | "compare_offers" | "apply" | "batch_apply"
+        job_id: Required for detail/apply/interview_prep/add_round — the Naukri job ID (e.g. "270226007446")
         status: (list) Filter by status ("applied", "needs_input", "already_applied", "error")
         date_from: (list) ISO date, include applications on/after this date (e.g. "2026-02-01")
         date_to: (list) ISO date, include applications on/before this date (e.g. "2026-02-28")
@@ -913,6 +1051,10 @@ async def naukri_applications(
         set_reminder_days: (apply/batch_apply) If set, auto-create a follow-up reminder N days after
                            successful application. Ignored if apply fails.
         filter_info: Filter by source — 1=recruiter-active jobs, 2=naukri-synced, 3=external/manual. Applied to local tracking data.
+        round_type: (add_round) "phone_screen", "technical", "system_design", "hr", "offer", "other"
+        date: (add_round) ISO date/datetime for the interview round (defaults to now)
+        notes: (add_round) Free-text notes about the round
+        job_ids: (compare_offers) Comma-separated job IDs to compare (e.g. "123,456,789")
 
     Returns:
         - list: {status, total, count, page, has_more, summary: {total_all_statuses, by_status}, applications: [...]}
@@ -928,6 +1070,10 @@ async def naukri_applications(
         - interview_prep: {status, job_id, company, title, applied_at, ars_score,
                            company_rating, interview_difficulty, sample_questions,
                            mock_topics, matched_skills, missing_skills}
+        - add_round: {status, action: "round_added", job_id, round_type, total_rounds}
+        - list_rounds: {status, total_rounds, jobs_with_rounds, rounds: [...]}
+        - compare_offers: {status, count, offers: [{job_id, title, company, status, ars_score,
+                           interview_rounds, latest_round}]}
         - apply: {status: "applied"/"needs_input"/"already_applied"/"error", job_id, ...}
         - batch_apply: {status: "success"/"partial_success"/"error", searched, filtered, applied,
                         already_applied, needs_input, errors, pending_questions, results}
@@ -947,16 +1093,19 @@ async def naukri_applications(
         "delay_ms": delay_ms if delay_ms != BATCH_APPLY_DEFAULT_DELAY_MS else None,
         "max_concurrent": max_concurrent if max_concurrent != BATCH_APPLY_DEFAULT_CONCURRENCY else None,
         "set_reminder_days": set_reminder_days, "filter_info": filter_info,
+        "round_type": round_type, "date": date, "notes": notes, "job_ids": job_ids,
     }
     _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
 
     # ── Pre-validation ──────────────────────────────────────────────────
-    if action in ("detail", "draft_follow_up", "interview_prep", "apply") and not job_id:
+    if action in ("detail", "draft_follow_up", "interview_prep", "apply", "add_round") and not job_id:
         return {"status": "error", "message": f"{action} requires job_id.", "error_code": "VALIDATION_ERROR"}
     if action == "purge" and not before_date:
         return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
     if action == "batch_apply" and not keywords:
         return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
+    if action == "compare_offers" and not job_ids:
+        return {"status": "error", "message": "compare_offers requires job_ids (comma-separated).", "error_code": "VALIDATION_ERROR"}
 
     # ── Helper to attach unused_params to response ───────────────────
     def _attach_unused(result: dict) -> dict:
@@ -978,6 +1127,8 @@ async def naukri_applications(
             "job_type": job_type, "company_type": company_type,
             "delay_ms": delay_ms, "max_concurrent": max_concurrent,
             "set_reminder_days": set_reminder_days,
+            "round_type": round_type, "date": date, "notes": notes,
+            "job_ids": job_ids,
         }
         return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"applications.{action}"))
 

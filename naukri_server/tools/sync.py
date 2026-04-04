@@ -17,6 +17,7 @@ from naukri_server.config import (
     APPLICATIONS_FILE, SAVED_JOBS_FILE, SYNC_STATE_FILE,
     AUTO_PURGE_DAYS,
 )
+from naukri_server.events import event_bus, ApplicationStatusChanged
 from naukri_server.tools.tracking import (
     _load_json, _save_json, _applications_lock,
 )
@@ -641,10 +642,21 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
                 status_changes.append({
                     "job_id": jid,
                     "title": app.get("title"),
+                    "company": app.get("company"),
                     "old_status": old_s,
                     "new_status": new_s,
                 })
         _save_json(APPLICATIONS_FILE, local_apps)
+
+    # Emit events for status changes (outside the lock)
+    for change in status_changes:
+        await event_bus.emit(ApplicationStatusChanged(
+            job_id=change.get("job_id", ""),
+            company=change.get("company", ""),
+            title=change.get("title", ""),
+            old_status=change.get("old_status", ""),
+            new_status=change.get("new_status", ""),
+        ))
 
     # Record sync metadata
     async with _sync_state_lock:
