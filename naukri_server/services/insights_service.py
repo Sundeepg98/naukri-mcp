@@ -181,27 +181,9 @@ async def application_insights(days: int = 30) -> dict:
 
 def parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
     """Parse salary strings like '10-15 Lacs', '₹10L - ₹15L', 'Not disclosed' into (min, max) in LPA."""
-    if not salary_str or not isinstance(salary_str, str):
-        return None, None
-    s = salary_str.lower().strip()
-    if "not disclosed" in s or "confidential" in s:
-        return None, None
-
-    nums = re.findall(r'(\d+(?:\.\d+)?)', s)
-    if not nums:
-        return None, None
-
-    vals = [float(n) for n in nums[:2]]
-
-    factor = 1
-    if any(v > 200 for v in vals):
-        factor = 1 / LAKHS_MULTIPLIER
-
-    if len(vals) == 2:
-        return round(vals[0] * factor, 1), round(vals[1] * factor, 1)
-    elif len(vals) == 1:
-        return round(vals[0] * factor, 1), round(vals[0] * factor, 1)
-    return None, None
+    from naukri_server.domain.salary import Salary
+    s = Salary.from_string(salary_str)
+    return s.min_lakhs, s.max_lakhs
 
 
 async def salary_position(designation: Optional[str] = None) -> dict:

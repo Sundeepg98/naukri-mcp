@@ -56,9 +56,9 @@ def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
     Only scores when both job salary and profile expected CTC are available.
     Accepts profile_expected_ctc as float or string (e.g., "15.0 Lacs").
     """
+    from naukri_server.domain.salary import Salary
+
     if not job_salary or profile_expected_ctc is None:
-        return 0
-    if "not disclosed" in job_salary.lower():
         return 0
     # Parse profile CTC to float if string
     if isinstance(profile_expected_ctc, str):
@@ -68,20 +68,11 @@ def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
         profile_expected_ctc = float(ctc_nums[0])
     elif not isinstance(profile_expected_ctc, (int, float)):
         return 0
-    nums = re.findall(r'(\d+(?:\.\d+)?)', job_salary)
-    if len(nums) < 2:
+
+    salary = Salary.from_string(job_salary)
+    if not salary.is_disclosed:
         return 0
-    try:
-        job_max = float(nums[-1])
-        if job_max > 200:  # Likely wrong unit — can't compare
-            return 0
-        if job_max >= profile_expected_ctc:
-            return 5  # Meets or exceeds expectation
-        elif job_max >= profile_expected_ctc * 0.8:
-            return 3  # Within 20%
-        return 0  # Below expectation
-    except (ValueError, IndexError):
-        return 0
+    return salary.compare_to_ctc(profile_expected_ctc)
 
 
 # ── Main Scoring Function ───────────────────────────────────────────────────
