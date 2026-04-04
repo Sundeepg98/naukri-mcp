@@ -502,6 +502,37 @@ _VALID_PARAMS_PER_ACTION = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Jobs registry — maps action to handler(kwargs) -> awaitable[dict]
+# ---------------------------------------------------------------------------
+
+async def _do_similar(**kw) -> dict:
+    """REST-first similar jobs with browser fallback."""
+    job_id, limit, page = kw["job_id"], kw.get("limit", 10), kw.get("page", 1)
+    try:
+        return await _get_similar_jobs_rest(job_id, limit)
+    except Exception:
+        pass
+    from naukri_server.tools.search import _get_similar_jobs
+    return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)
+
+
+async def _do_compare(**kw) -> dict:
+    """Compare 2-5 jobs side-by-side with fit scores."""
+    from naukri_server.tools.compare import _compare_jobs
+    return await _compare_jobs(job_ids=kw["job_ids"], timeout_seconds=kw.get("timeout_seconds", 120))
+
+
+_JOBS_REGISTRY: dict[str, callable] = {
+    "get": lambda **kw: _get_job(job_id_or_url=kw["job_id"]),
+    "similar": _do_similar,
+    "compare": _do_compare,
+    "bulk": lambda **kw: _bulk_fetch_jobs(job_ids=kw["job_ids"]),
+    "detail_v1": lambda **kw: _get_job_v1(job_id=kw["job_id"]),
+    "report_fraud": lambda **kw: _report_fraud(job_id=kw["job_id"], reason=kw["reason"]),
+}
+
+
 @mcp.tool()
 async def naukri_jobs(
     action: str = "get",
@@ -556,47 +587,26 @@ async def naukri_jobs(
             result["unused_params"] = _unused
         return result
 
-    if action == "get":
-        if not job_id:
-            return {"status": "error", "message": "job_id required", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await _get_job(job_id_or_url=job_id))
-    elif action == "similar":
-        if not job_id:
-            return {"status": "error", "message": "similar requires job_id.", "error_code": "VALIDATION_ERROR"}
+    # ── Pre-validation ─────────────────────────────────────────────────
+    if action in ("get", "similar", "detail_v1", "report_fraud") and not job_id:
+        return {"status": "error", "message": f"job_id required for {action}", "error_code": "VALIDATION_ERROR"}
+    if action in ("compare", "bulk") and not job_ids:
+        msg = "compare requires job_ids (list of 2-5 IDs)." if action == "compare" else "bulk requires job_ids (list of 1-20 IDs)."
+        return {"status": "error", "message": msg, "error_code": "VALIDATION_ERROR"}
+    if action == "report_fraud" and not reason:
+        return {"status": "error", "message": "reason required for report_fraud", "error_code": "VALIDATION_ERROR"}
 
-        async def _similar():
-            # REST-first: lightweight v2 API, no browser needed
-            try:
-                return await _get_similar_jobs_rest(job_id, limit)
-            except Exception:
-                pass
-            # Fallback: full parser via search module helper
-            from naukri_server.tools.search import _get_similar_jobs
-            return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)
+    # ── Registry lookup ─────────────────────────────────────────────────
+    handler = _JOBS_REGISTRY.get(action)
+    if handler:
+        kw = {
+            "job_id": job_id, "reason": reason, "limit": limit,
+            "page": page, "job_ids": job_ids, "timeout_seconds": timeout_seconds,
+        }
+        return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"jobs.{action}"))
 
-        return _attach_unused(await handle_tool_action(_similar, "jobs.similar"))
-    elif action == "compare":
-        if not job_ids:
-            return {"status": "error", "message": "compare requires job_ids (list of 2-5 IDs).", "error_code": "VALIDATION_ERROR"}
-        from naukri_server.tools.compare import _compare_jobs
-        return _attach_unused(await handle_tool_action(
-            lambda: _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare"))
-    elif action == "bulk":
-        if not job_ids:
-            return {"status": "error", "message": "bulk requires job_ids (list of 1-20 IDs).", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(
-            lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk"))
-    elif action == "detail_v1":
-        if not job_id:
-            return {"status": "error", "message": "job_id required for detail_v1", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(
-            lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1"))
-    elif action == "report_fraud":
-        if not job_id:
-            return {"status": "error", "message": "job_id required for report_fraud", "error_code": "VALIDATION_ERROR"}
-        if not reason:
-            return {"status": "error", "message": "reason required for report_fraud", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(
-            lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud"))
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, bulk, detail_v1, report_fraud", "error_code": "VALIDATION_ERROR"}
+    return {
+        "status": "error",
+        "message": f"Unknown action '{action}'. Use: {', '.join(_JOBS_REGISTRY)}",
+        "error_code": "VALIDATION_ERROR",
+    }

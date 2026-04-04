@@ -325,6 +325,171 @@ def _compute_follow_up_priority(app: dict) -> int:
     return max(0, min(100, priority))
 
 
+async def _safe_fetch_company_intel(company):
+    try:
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        return await naukri_company_intel(company=company, intel_type="interviews")
+    except Exception:
+        return None
+
+
+async def _safe_fetch_mock_topics():
+    try:
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        return await naukri_mock_interview(action="topics")
+    except Exception:
+        return None
+
+
+async def _safe_fetch_fit_score(job_id):
+    try:
+        from naukri_server.tools.smart_apply import naukri_smart_apply
+        return await naukri_smart_apply(job_id=job_id)
+    except Exception:
+        return None
+
+
+async def _interview_prep(job_id: str) -> dict:
+    """Generate interview prep package for a specific job application."""
+    import asyncio
+
+    # Get application details
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    if not app:
+        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
+
+    company = app.get("company", "")
+    title = app.get("title", "")
+
+    # Parallel fetch: company intel + mock interview topics + fit assessment
+    results = await asyncio.gather(
+        _safe_fetch_company_intel(company),
+        _safe_fetch_mock_topics(),
+        _safe_fetch_fit_score(job_id),
+        return_exceptions=True,
+    )
+
+    company_intel = results[0] if not isinstance(results[0], Exception) else None
+    mock_topics = results[1] if not isinstance(results[1], Exception) else None
+    fit_data = results[2] if not isinstance(results[2], Exception) else None
+
+    prep = {
+        "status": "success",
+        "job_id": job_id,
+        "company": company,
+        "title": title,
+        "applied_at": app.get("applied_at"),
+        "ars_score": app.get("ars_score"),
+    }
+
+    if company_intel and isinstance(company_intel, dict) and company_intel.get("status") == "success":
+        prep["company_rating"] = company_intel.get("overall_rating")
+        prep["interview_difficulty"] = company_intel.get("difficulty_breakdown")
+        prep["sample_questions"] = company_intel.get("interview_experiences", [])[:3]
+
+    if mock_topics and isinstance(mock_topics, dict) and mock_topics.get("status") == "success":
+        prep["mock_topics"] = mock_topics.get("topics", [])[:5]
+
+    if fit_data and isinstance(fit_data, dict) and fit_data.get("status") == "success":
+        prep["matched_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("matched", [])
+        prep["missing_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("missing", [])
+
+    return prep
+
+
+async def _draft_follow_up(job_id: str) -> dict:
+    """Generate a follow-up message draft for a stale application."""
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
+    if not app:
+        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
+
+    company = app.get("company", "the company")
+    title = app.get("title", "the position")
+    applied_at = app.get("applied_at", "")
+
+    # Parse date for message
+    try:
+        applied_date = datetime.fromisoformat(applied_at.replace("+00:00", "")).strftime("%B %d, %Y")
+    except Exception:
+        applied_date = "recently"
+
+    # Calculate days since applied
+    try:
+        delta = datetime.now(timezone.utc) - datetime.fromisoformat(applied_at)
+        days_ago = delta.days
+    except Exception:
+        days_ago = 0
+
+    draft = (
+        f"Hi,\n\n"
+        f"I applied for the {title} position at {company} on {applied_date} "
+        f"({days_ago} days ago). I remain very interested in this opportunity "
+        f"and would love to discuss how my experience aligns with the role.\n\n"
+        f"Would you be available for a brief conversation? I'm happy to work "
+        f"around your schedule.\n\n"
+        f"Thank you for your time.\n"
+        f"Best regards"
+    )
+
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "company": company,
+        "title": title,
+        "days_since_applied": days_ago,
+        "draft_message": draft,
+        "suggested_subject": f"Follow-up: {title} Application at {company}",
+    }
+
+
+async def _recruiter_history() -> dict:
+    """Aggregate per-recruiter communication history from applications + inbox."""
+    async with _applications_lock:
+        apps = _load_json(APPLICATIONS_FILE)
+
+    # Group by company
+    by_company: dict = {}
+    for a in apps:
+        co = a.get("company", "Unknown")
+        if co not in by_company:
+            by_company[co] = {
+                "company": co,
+                "applications": 0,
+                "statuses": [],
+                "first_applied": None,
+                "last_applied": None,
+                "has_response": False,
+            }
+        entry = by_company[co]
+        entry["applications"] += 1
+        entry["statuses"].append(a.get("status", "unknown"))
+
+        applied_at = a.get("applied_at", "")
+        if not entry["first_applied"] or applied_at < entry["first_applied"]:
+            entry["first_applied"] = applied_at
+        if not entry["last_applied"] or applied_at > entry["last_applied"]:
+            entry["last_applied"] = applied_at
+
+        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
+            entry["has_response"] = True
+
+    # Sort by most applications first
+    companies = sorted(by_company.values(), key=lambda x: -x["applications"])
+
+    return {
+        "status": "success",
+        "total_companies": len(companies),
+        "responsive_count": sum(1 for c in companies if c["has_response"]),
+        "unresponsive_count": sum(1 for c in companies if not c["has_response"]),
+        "companies": companies[:20],
+    }
+
+
 async def _get_stale_applications(
     days_threshold: int = 14,
     min_stale_score: int = 40,
@@ -557,170 +722,6 @@ async def _application_follow_up(
     return result
 
 
-async def _safe_fetch_company_intel(company):
-    try:
-        from naukri_server.tools.ambitionbox import naukri_company_intel
-        return await naukri_company_intel(company=company, intel_type="interviews")
-    except Exception:
-        return None
-
-
-async def _safe_fetch_mock_topics():
-    try:
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        return await naukri_mock_interview(action="topics")
-    except Exception:
-        return None
-
-
-async def _safe_fetch_fit_score(job_id):
-    try:
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        return await naukri_smart_apply(job_id=job_id)
-    except Exception:
-        return None
-
-
-async def _interview_prep(job_id: str) -> dict:
-    """Generate interview prep package for a specific job application."""
-    import asyncio
-
-    # Get application details
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
-    if not app:
-        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
-
-    company = app.get("company", "")
-    title = app.get("title", "")
-
-    # Parallel fetch: company intel + mock interview topics + fit assessment
-    results = await asyncio.gather(
-        _safe_fetch_company_intel(company),
-        _safe_fetch_mock_topics(),
-        _safe_fetch_fit_score(job_id),
-        return_exceptions=True,
-    )
-
-    company_intel = results[0] if not isinstance(results[0], Exception) else None
-    mock_topics = results[1] if not isinstance(results[1], Exception) else None
-    fit_data = results[2] if not isinstance(results[2], Exception) else None
-
-    prep = {
-        "status": "success",
-        "job_id": job_id,
-        "company": company,
-        "title": title,
-        "applied_at": app.get("applied_at"),
-        "ars_score": app.get("ars_score"),
-    }
-
-    if company_intel and isinstance(company_intel, dict) and company_intel.get("status") == "success":
-        prep["company_rating"] = company_intel.get("overall_rating")
-        prep["interview_difficulty"] = company_intel.get("difficulty_breakdown")
-        prep["sample_questions"] = company_intel.get("interview_experiences", [])[:3]
-
-    if mock_topics and isinstance(mock_topics, dict) and mock_topics.get("status") == "success":
-        prep["mock_topics"] = mock_topics.get("topics", [])[:5]
-
-    if fit_data and isinstance(fit_data, dict) and fit_data.get("status") == "success":
-        prep["matched_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("matched", [])
-        prep["missing_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("missing", [])
-
-    return prep
-
-
-async def _draft_follow_up(job_id: str) -> dict:
-    """Generate a follow-up message draft for a stale application."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-
-    app = next((a for a in apps if str(a.get("job_id")) == str(job_id)), None)
-    if not app:
-        return {"status": "error", "message": f"No application found for job {job_id}", "error_code": "NOT_FOUND"}
-
-    company = app.get("company", "the company")
-    title = app.get("title", "the position")
-    applied_at = app.get("applied_at", "")
-
-    # Parse date for message
-    try:
-        applied_date = datetime.fromisoformat(applied_at.replace("+00:00", "")).strftime("%B %d, %Y")
-    except Exception:
-        applied_date = "recently"
-
-    # Calculate days since applied
-    try:
-        delta = datetime.now(timezone.utc) - datetime.fromisoformat(applied_at)
-        days_ago = delta.days
-    except Exception:
-        days_ago = 0
-
-    draft = (
-        f"Hi,\n\n"
-        f"I applied for the {title} position at {company} on {applied_date} "
-        f"({days_ago} days ago). I remain very interested in this opportunity "
-        f"and would love to discuss how my experience aligns with the role.\n\n"
-        f"Would you be available for a brief conversation? I'm happy to work "
-        f"around your schedule.\n\n"
-        f"Thank you for your time.\n"
-        f"Best regards"
-    )
-
-    return {
-        "status": "success",
-        "job_id": job_id,
-        "company": company,
-        "title": title,
-        "days_since_applied": days_ago,
-        "draft_message": draft,
-        "suggested_subject": f"Follow-up: {title} Application at {company}",
-    }
-
-
-async def _recruiter_history() -> dict:
-    """Aggregate per-recruiter communication history from applications + inbox."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-
-    # Group by company
-    by_company: dict = {}
-    for a in apps:
-        co = a.get("company", "Unknown")
-        if co not in by_company:
-            by_company[co] = {
-                "company": co,
-                "applications": 0,
-                "statuses": [],
-                "first_applied": None,
-                "last_applied": None,
-                "has_response": False,
-            }
-        entry = by_company[co]
-        entry["applications"] += 1
-        entry["statuses"].append(a.get("status", "unknown"))
-
-        applied_at = a.get("applied_at", "")
-        if not entry["first_applied"] or applied_at < entry["first_applied"]:
-            entry["first_applied"] = applied_at
-        if not entry["last_applied"] or applied_at > entry["last_applied"]:
-            entry["last_applied"] = applied_at
-
-        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
-            entry["has_response"] = True
-
-    # Sort by most applications first
-    companies = sorted(by_company.values(), key=lambda x: -x["applications"])
-
-    return {
-        "status": "success",
-        "total_companies": len(companies),
-        "responsive_count": sum(1 for c in companies if c["has_response"]),
-        "unresponsive_count": sum(1 for c in companies if not c["has_response"]),
-        "companies": companies[:20],
-    }
-
 
 # ---------------------------------------------------------------------------
 # Application registry — maps action to handler(kwargs) -> dict
@@ -742,6 +743,77 @@ _VALID_PARAMS_PER_ACTION = {
     "interview_prep": {"job_id"},
 }
 
+async def _do_apply(**kw) -> dict:
+    """Wrap apply with duplicate check, composite lock, and optional reminder."""
+    from naukri_server.tools.apply import _apply_single
+    from naukri_server.tools.jobs import _extract_job_id
+
+    job_id = _extract_job_id(kw["job_id"])
+    # Check for duplicate application from local tracking
+    async with _applications_lock:
+        existing = _load_json(APPLICATIONS_FILE)
+        if any(str(a.get("job_id")) == str(job_id) for a in existing):
+            return {
+                "status": "already_applied",
+                "message": "You have already applied to this job (from local tracking).",
+                "job_id": job_id,
+            }
+
+    async with _tracking_composite_lock:
+        result = await _apply_single(job_id, kw.get("answers"), tracking_extra={"source": "single"})
+        # Auto-set reminder if requested and apply succeeded
+        set_reminder_days = kw.get("set_reminder_days")
+        if set_reminder_days and result.get("status") == "applied":
+            from naukri_server.tools.reminders import _set_reminder
+            try:
+                await _set_reminder(
+                    job_id=job_id,
+                    days=set_reminder_days,
+                    note=f"Follow up on application to {result.get('company', 'unknown')}",
+                )
+                result["reminder_set"] = True
+                result["reminder_days"] = set_reminder_days
+            except Exception as e:
+                result["reminder_set"] = False
+                result["reminder_error"] = str(e)
+    return result
+
+
+async def _do_batch_apply(**kw) -> dict:
+    """Wrap batch_apply with composite lock and optional reminders."""
+    from naukri_server.tools.apply import _batch_apply
+
+    async with _tracking_composite_lock:
+        result = await _batch_apply(
+            keywords=kw.get("keywords"), location=kw.get("location"), experience=kw.get("experience"),
+            salary_min=kw.get("salary_min"), salary_max=kw.get("salary_max"), sort_by=kw.get("sort_by"),
+            freshness=kw.get("freshness"), work_mode=kw.get("work_mode"), job_type=kw.get("job_type"),
+            company_type=kw.get("company_type"), limit=kw.get("limit", 50), answers=kw.get("answers"),
+            delay_ms=kw.get("delay_ms", BATCH_APPLY_DEFAULT_DELAY_MS),
+            max_concurrent=kw.get("max_concurrent", BATCH_APPLY_DEFAULT_CONCURRENCY),
+        )
+        # Auto-set reminders for successful batch applications
+        set_reminder_days = kw.get("set_reminder_days")
+        if set_reminder_days and result.get("results"):
+            from naukri_server.tools.reminders import _set_reminder
+            reminder_count = 0
+            for r in result["results"]:
+                if r.get("status") == "applied":
+                    try:
+                        await _set_reminder(
+                            job_id=r.get("job_id", ""),
+                            days=set_reminder_days,
+                            note=f"Follow up on application to {r.get('company', 'unknown')}",
+                        )
+                        reminder_count += 1
+                    except Exception as e:
+                        logger.debug("Failed to set reminder for job %s: %s", r.get("job_id", ""), e)
+            if reminder_count:
+                result["reminders_set"] = reminder_count
+                result["reminder_days"] = set_reminder_days
+    return result
+
+
 _APPLICATION_REGISTRY: dict[str, callable] = {
     "list": lambda **kw: _list_applications(status=kw.get("status"), date_from=kw.get("date_from"), date_to=kw.get("date_to"), limit=kw.get("limit", 50), page=kw.get("page", 1), filter_info=kw.get("filter_info")),
     "detail": lambda **kw: _get_application_detail(kw["job_id"]),
@@ -751,6 +823,8 @@ _APPLICATION_REGISTRY: dict[str, callable] = {
     "draft_follow_up": lambda **kw: _draft_follow_up(kw["job_id"]),
     "recruiter_history": lambda **kw: _recruiter_history(),
     "interview_prep": lambda **kw: _interview_prep(kw["job_id"]),
+    "apply": _do_apply,
+    "batch_apply": _do_batch_apply,
 }
 
 
@@ -890,77 +964,7 @@ async def naukri_applications(
             result["unused_params"] = _unused
         return result
 
-    # ── Special cases with composite lock / pre-validation logic ─────
-    if action == "apply":
-        from naukri_server.tools.apply import _apply_single
-        from naukri_server.tools.jobs import _extract_job_id
-        job_id = _extract_job_id(job_id)
-        # Check for duplicate application from local tracking
-        async with _applications_lock:
-            existing = _load_json(APPLICATIONS_FILE)
-            if any(str(a.get("job_id")) == str(job_id) for a in existing):
-                return _attach_unused({
-                    "status": "already_applied",
-                    "message": "You have already applied to this job (from local tracking).",
-                    "job_id": job_id,
-                })
-
-        async def _do_apply():
-            async with _tracking_composite_lock:
-                result = await _apply_single(job_id, answers, tracking_extra={"source": "single"})
-                # Auto-set reminder if requested and apply succeeded
-                if set_reminder_days and result.get("status") == "applied":
-                    from naukri_server.tools.reminders import _set_reminder
-                    try:
-                        await _set_reminder(
-                            job_id=job_id,
-                            days=set_reminder_days,
-                            note=f"Follow up on application to {result.get('company', 'unknown')}",
-                        )
-                        result["reminder_set"] = True
-                        result["reminder_days"] = set_reminder_days
-                    except Exception as e:
-                        result["reminder_set"] = False
-                        result["reminder_error"] = str(e)
-            return result
-
-        return _attach_unused(await handle_tool_action(_do_apply, "applications.apply"))
-
-    if action == "batch_apply":
-        from naukri_server.tools.apply import _batch_apply
-
-        async def _do_batch_apply():
-            async with _tracking_composite_lock:
-                result = await _batch_apply(
-                    keywords=keywords, location=location, experience=experience,
-                    salary_min=salary_min, salary_max=salary_max, sort_by=sort_by,
-                    freshness=freshness, work_mode=work_mode, job_type=job_type,
-                    company_type=company_type, limit=limit, answers=answers,
-                    delay_ms=delay_ms, max_concurrent=max_concurrent,
-                )
-                # Auto-set reminders for successful batch applications
-                if set_reminder_days and result.get("results"):
-                    from naukri_server.tools.reminders import _set_reminder
-                    reminder_count = 0
-                    for r in result["results"]:
-                        if r.get("status") == "applied":
-                            try:
-                                await _set_reminder(
-                                    job_id=r.get("job_id", ""),
-                                    days=set_reminder_days,
-                                    note=f"Follow up on application to {r.get('company', 'unknown')}",
-                                )
-                                reminder_count += 1
-                            except Exception as e:
-                                logger.debug("Failed to set reminder for job %s: %s", r.get("job_id", ""), e)
-                    if reminder_count:
-                        result["reminders_set"] = reminder_count
-                        result["reminder_days"] = set_reminder_days
-            return result
-
-        return _attach_unused(await handle_tool_action(_do_batch_apply, "applications.batch_apply"))
-
-    # ── Registry lookup for simple actions ────────────────────────────
+    # ── Registry lookup ──────────────────────────────────────────────
     handler = _APPLICATION_REGISTRY.get(action)
     if handler:
         kw = {
@@ -968,12 +972,18 @@ async def naukri_applications(
             "limit": limit, "page": page, "filter_info": filter_info,
             "job_id": job_id, "before_date": before_date, "dry_run": dry_run,
             "days_threshold": days_threshold, "min_stale_score": min_stale_score,
+            "answers": answers, "keywords": keywords, "location": location,
+            "experience": experience, "salary_min": salary_min, "salary_max": salary_max,
+            "sort_by": sort_by, "freshness": freshness, "work_mode": work_mode,
+            "job_type": job_type, "company_type": company_type,
+            "delay_ms": delay_ms, "max_concurrent": max_concurrent,
+            "set_reminder_days": set_reminder_days,
         }
         return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"applications.{action}"))
 
     return {
         "status": "error",
-        "message": f"Unknown action '{action}'. Use: {', '.join(list(_APPLICATION_REGISTRY) + ['apply', 'batch_apply'])}",
+        "message": f"Unknown action '{action}'. Use: {', '.join(_APPLICATION_REGISTRY)}",
         "error_code": "VALIDATION_ERROR",
     }
 

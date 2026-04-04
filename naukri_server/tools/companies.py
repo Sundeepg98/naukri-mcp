@@ -383,12 +383,27 @@ def _make_research_handler(**kw):
         timeout_seconds=kw.get("timeout_seconds", 120),
     )
 
+async def _do_follow_action(**kw) -> dict:
+    """Dispatch follow_status/follow/unfollow with multi-ID support."""
+    action = kw["_action"]
+    ids = kw.get("group_ids") or ([kw.get("group_id")] if kw.get("group_id") else [])
+    if not ids:
+        return {"status": "error", "message": "group_id or group_ids is required for follow actions.", "error_code": "VALIDATION_ERROR"}
+
+    if action == "follow_status":
+        return await (_batch_follow_status(ids) if len(ids) > 1 else _get_follow_status(ids))
+    return await _follow_or_unfollow(ids, action)
+
+
 _COMPANY_REGISTRY: dict[str, callable] = {
     "search": lambda **kw: _search_companies(keyword=kw["keyword"], page=kw.get("page", 1), limit=kw.get("limit", 20)),
     "jobs": lambda **kw: _get_company_jobs(group_id=kw["group_id"], page=kw.get("page", 1), limit=kw.get("limit", 20)),
     "slug": lambda **kw: _get_company_slug(group_id=kw["group_id"]),
     "batch_slugs": lambda **kw: _batch_get_slugs([g.strip() for g in kw["group_id"].split(",") if g.strip()]),
     "research": _make_research_handler,
+    "follow_status": _do_follow_action,
+    "follow": _do_follow_action,
+    "unfollow": _do_follow_action,
 }
 
 _VALID_PARAMS_PER_ACTION = {
@@ -486,25 +501,13 @@ async def naukri_company(
         if not ids:
             return {"status": "error", "message": "No valid group IDs provided.", "error_code": "VALIDATION_ERROR"}
 
-    # ── Follow actions (special — multi-ID + sub-dispatch) ────────────
-    if action in ("follow_status", "follow", "unfollow"):
-        ids = group_ids or ([group_id] if group_id else [])
-        if not ids:
-            return {"status": "error", "message": "group_id or group_ids is required for follow actions.", "error_code": "VALIDATION_ERROR"}
-
-        if action == "follow_status":
-            return _attach_unused(await handle_tool_action(
-                lambda: _batch_follow_status(ids) if len(ids) > 1 else _get_follow_status(ids),
-                "company.follow_status",
-            ))
-        else:
-            return _attach_unused(await handle_tool_action(lambda: _follow_or_unfollow(ids, action), f"company.{action}"))
-
     # ── Registry lookup ──────────────────────────────────────────────
     handler = _COMPANY_REGISTRY.get(action)
     if handler:
         kw = {
-            "keyword": keyword, "group_id": group_id, "page": page, "limit": limit,
+            "_action": action,
+            "keyword": keyword, "group_id": group_id, "group_ids": group_ids,
+            "page": page, "limit": limit,
             "include_jobs": include_jobs, "include_reviews": include_reviews,
             "include_interviews": include_interviews, "jobs_limit": jobs_limit,
             "timeout_seconds": timeout_seconds,
@@ -513,7 +516,7 @@ async def naukri_company(
 
     return {
         "status": "error",
-        "message": f"Unknown action '{action}'. Use: {', '.join(list(_COMPANY_REGISTRY) + ['follow_status', 'follow', 'unfollow'])}",
+        "message": f"Unknown action '{action}'. Use: {', '.join(_COMPANY_REGISTRY)}",
         "error_code": "VALIDATION_ERROR",
     }
 

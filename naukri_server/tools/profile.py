@@ -390,6 +390,47 @@ _VALID_PARAMS_PER_ACTION = {
 
 
 # ---------------------------------------------------------------------------
+# Profile registry — maps action to handler(kwargs) -> awaitable[dict]
+# ---------------------------------------------------------------------------
+
+async def _do_update(**kw) -> dict:
+    """Wrap browser_retry + wait_for for profile update."""
+    return await asyncio.wait_for(
+        browser_retry(
+            lambda: _update_profile(
+                fields=kw.get("fields") or {},
+                notice_period=kw.get("notice_period"),
+                expected_ctc=kw.get("expected_ctc"),
+                current_ctc=kw.get("current_ctc"),
+            ),
+            description="profile update",
+        ),
+        timeout=BROWSER_OPERATION_TIMEOUT,
+    )
+
+
+async def _do_boost(**kw) -> dict:
+    """Wrap browser_retry + wait_for for profile boost."""
+    return await asyncio.wait_for(
+        browser_retry(
+            lambda: _boost_visibility(randomize=kw.get("randomize", False)),
+            description="profile boost",
+        ),
+        timeout=BROWSER_OPERATION_TIMEOUT,
+    )
+
+
+_PROFILE_REGISTRY: dict[str, callable] = {
+    "get": lambda **kw: _get_profile(),
+    "update": _do_update,
+    "audit": lambda **kw: _audit_profile(),
+    "boost": _do_boost,
+    "dashboard": lambda **kw: _get_dashboard(),
+    "targeting": lambda **kw: _do_targeting(),
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
@@ -445,56 +486,21 @@ async def naukri_profile(
             result["unused_params"] = _unused
         return result
 
-    # ── get ─────────────────────────────────────────────────────────────
-    if action == "get":
-        return _attach_unused(await handle_tool_action(_get_profile, "profile.get"))
+    # ── Registry lookup ─────────────────────────────────────────────────
+    handler = _PROFILE_REGISTRY.get(action)
+    if handler:
+        kw = {
+            "fields": fields, "notice_period": notice_period,
+            "expected_ctc": expected_ctc, "current_ctc": current_ctc,
+            "randomize": randomize,
+        }
+        return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"profile.{action}"))
 
-    # ── update ──────────────────────────────────────────────────────────
-    elif action == "update":
-        return _attach_unused(await handle_tool_action(
-            lambda: asyncio.wait_for(
-                browser_retry(
-                    lambda: _update_profile(
-                        fields=fields or {},
-                        notice_period=notice_period,
-                        expected_ctc=expected_ctc,
-                        current_ctc=current_ctc,
-                    ),
-                    description="profile update",
-                ),
-                timeout=BROWSER_OPERATION_TIMEOUT,
-            ),
-            "profile.update",
-        ))
-
-    # ── audit ───────────────────────────────────────────────────────────
-    elif action == "audit":
-        return _attach_unused(await handle_tool_action(_audit_profile, "profile.audit"))
-
-    # ── boost ───────────────────────────────────────────────────────────
-    elif action == "boost":
-        return _attach_unused(await handle_tool_action(
-            lambda: asyncio.wait_for(
-                browser_retry(
-                    lambda: _boost_visibility(randomize=randomize),
-                    description="profile boost",
-                ),
-                timeout=BROWSER_OPERATION_TIMEOUT,
-            ),
-            "profile.boost",
-        ))
-
-    # ── dashboard ─────────────────────────────────────────────────────
-    elif action == "dashboard":
-        return _attach_unused(await handle_tool_action(_get_dashboard, "profile.dashboard"))
-
-    # ── targeting ───────────────────────────────────────────────────────
-    elif action == "targeting":
-        return _attach_unused(await handle_tool_action(_do_targeting, "profile.targeting"))
-
-    # ── unknown action ──────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, audit, boost, dashboard, targeting", "error_code": "VALIDATION_ERROR"}
+    return {
+        "status": "error",
+        "message": f"Unknown action '{action}'. Use: {', '.join(_PROFILE_REGISTRY)}",
+        "error_code": "VALIDATION_ERROR",
+    }
 
 
 async def _fetch_raw_dashboard() -> dict:
