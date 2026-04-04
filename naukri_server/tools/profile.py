@@ -102,7 +102,9 @@ async def naukri_profile(
     current_ctc: Optional[float] = None,
     randomize: bool = False,
 ) -> dict:
-    """Unified profile management — get, update, audit, boost, dashboard, or targeting.
+    """[Deprecated — use naukri_get_profile, naukri_update_profile, naukri_audit_profile, naukri_boost_profile, naukri_dashboard, naukri_profile_targeting.]
+
+    Unified profile management — get, update, audit, boost, dashboard, or targeting.
 
     Actions:
       - "get": Fetch full profile (skills, employment, education, CTC, etc.)
@@ -160,6 +162,85 @@ async def naukri_profile(
         "message": f"Unknown action '{action}'. Use: {', '.join(_PROFILE_REGISTRY)}",
         "error_code": "VALIDATION_ERROR",
     }
+
+
+# ---------------------------------------------------------------------------
+# Single-purpose profile tools (preferred over naukri_profile)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_get_profile() -> dict:
+    """Fetch full Naukri profile — skills, employment, education, CTC, etc.
+
+    Returns profile data including name, skills_with_experience, employment
+    history, education, current/expected CTC, and notice period.
+    """
+    return await handle_tool_action(lambda: _get_profile(), "profile.get")
+
+
+@mcp.tool()
+async def naukri_update_profile(
+    fields: Optional[dict] = None,
+    notice_period: Optional[str] = None,
+    expected_ctc: Optional[float] = None,
+    current_ctc: Optional[float] = None,
+) -> dict:
+    """Update profile fields via browser UI.
+
+    Args:
+        fields: Dict of fields to change (resumeHeadline, keySkills, noticePeriod, etc.)
+        notice_period: Shorthand — "Serving Notice Period", "15 Days or less", "1 Month", etc.
+        expected_ctc: Shorthand — expected CTC in lakhs (e.g., 15)
+        current_ctc: Shorthand — current CTC in lakhs (e.g., 12)
+    """
+    return await handle_tool_action(
+        lambda: _do_update(
+            fields=fields, notice_period=notice_period,
+            expected_ctc=expected_ctc, current_ctc=current_ctc,
+        ),
+        "profile.update",
+    )
+
+
+@mcp.tool()
+async def naukri_audit_profile() -> dict:
+    """Audit profile completeness and get improvement suggestions.
+
+    Returns completeness percentage, grade, strengths, gaps, and actionable tips.
+    """
+    return await handle_tool_action(lambda: _audit_profile(), "profile.audit")
+
+
+@mcp.tool()
+async def naukri_boost_profile(randomize: bool = False) -> dict:
+    """Re-save headline to appear as 'recently active' in recruiter searches.
+
+    Args:
+        randomize: If True, wait random 0-300s before refreshing (avoids patterns).
+    """
+    return await handle_tool_action(
+        lambda: _do_boost(randomize=randomize), "profile.boost",
+    )
+
+
+@mcp.tool()
+async def naukri_dashboard() -> dict:
+    """Get dashboard data — profile views, recruiter activity, completeness, notifications.
+
+    Returns profile_views, recruiter_activity_date, ctc_lpa, experience_years,
+    and other dashboard metrics.
+    """
+    return await handle_tool_action(lambda: _get_dashboard(), "profile.dashboard")
+
+
+@mcp.tool()
+async def naukri_profile_targeting() -> dict:
+    """How Naukri's ad system sees your profile — 35 targeting fields, completeness gaps.
+
+    Returns DFP targeting profile with CTC, experience, age, gender, location,
+    and identifies empty fields that reduce ad relevance.
+    """
+    return await handle_tool_action(lambda: _do_targeting(), "profile.targeting")
 
 
 # ---------------------------------------------------------------------------
