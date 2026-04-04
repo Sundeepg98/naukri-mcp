@@ -7,6 +7,7 @@ from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
 from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API, WIDGET_HEADERS
+from naukri_server.domain import safe_get
 from naukri_server.validation import validate_page
 
 # Valid filter values for recruiter activity (from activityBucketCount keys)
@@ -30,12 +31,12 @@ async def _get_search_impressions(days: int = 7) -> dict:
     return {
         "status": "success",
         "days": days,
-        "total_appearances": data.get("totalSearchAppearances"),
-        "recruiter_actions": data.get("recruiterActions"),
-        "daily_average": data.get("dayWiseSearchAppearance"),
-        "percentage_change": data.get("percentageChange"),
-        "timeline": data.get("searchAppearanceTimeline", {}),
-        "top_keywords": data.get("searchKeyWords", {}),
+        "total_appearances": safe_get(data, "totalSearchAppearances", default=None, field_name="total_appearances", warn=True, context="search_impressions"),
+        "recruiter_actions": safe_get(data, "recruiterActions", default=None, field_name="recruiter_actions", warn=True, context="search_impressions"),
+        "daily_average": safe_get(data, "dayWiseSearchAppearance", default=None),
+        "percentage_change": safe_get(data, "percentageChange", default=None),
+        "timeline": safe_get(data, "searchAppearanceTimeline", default={}),
+        "top_keywords": safe_get(data, "searchKeyWords", default={}),
     }
 
 
@@ -87,13 +88,13 @@ async def _get_recruiter_activity(
         if not isinstance(act, dict):
             continue
         activities.append({
-            "recruiter_name": act.get("recruiterName") or act.get("name", ""),
-            "company": act.get("companyName") or act.get("company", ""),
-            "action": act.get("activityType") or act.get("action", ""),
-            "date": act.get("activityDate") or act.get("date", ""),
-            "designation": act.get("designation", ""),
-            "location": act.get("city") or act.get("location", ""),
-            "recruiter_id": act.get("recruiterId") or act.get("recruiterProfileId", ""),
+            "recruiter_name": safe_get(act, "recruiterName", "name", default="", field_name="recruiter_name", warn=True, context="recruiter_activity"),
+            "company": safe_get(act, "companyName", "company", default="", field_name="company", warn=True, context="recruiter_activity"),
+            "action": safe_get(act, "activityType", "action", default="", field_name="activity_type", warn=True, context="recruiter_activity"),
+            "date": safe_get(act, "activityDate", "date", default="", field_name="activity_date", warn=True, context="recruiter_activity"),
+            "designation": safe_get(act, "designation", default=""),
+            "location": safe_get(act, "city", "location", default=""),
+            "recruiter_id": safe_get(act, "recruiterId", "recruiterProfileId", default=""),
             "previous_actions_count": act.get("previousActionCount", 0),
             "company_master_name": act.get("companyMasterName", ""),
             "is_new": bool(act.get("isNew", 0)),
@@ -135,10 +136,10 @@ async def _get_activity_level() -> dict:
     data = await api_client.get(ACTIVITY_LEVEL_API, extra_headers=WIDGET_HEADERS)
     return {
         "status": "success",
-        "level": data.get("level", "UNKNOWN"),
-        "logged_in": data.get("loggedInStatus", False),
-        "resume_updated": data.get("rmjStatus", False),
-        "profile_updated": data.get("updatedStatus", False),
+        "level": safe_get(data, "level", default="UNKNOWN", field_name="level", warn=True, context="activity_level"),
+        "logged_in": safe_get(data, "loggedInStatus", default=False),
+        "resume_updated": safe_get(data, "rmjStatus", default=False),
+        "profile_updated": safe_get(data, "updatedStatus", default=False),
     }
 
 

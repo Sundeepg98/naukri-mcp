@@ -7,6 +7,7 @@ from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API, INBOX_REST_API
+from naukri_server.domain import safe_get
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import validate_action_params
 from naukri_server.validation import validate_limit, validate_page
@@ -65,55 +66,55 @@ async def _fetch_inbox(
             continue
 
         # Extract sender name and vcardId from sender array
-        sender_raw = msg.get("sender") or msg.get("senderName") or ""
+        sender_raw = safe_get(msg, "sender", "senderName", default="", field_name="sender", warn=True, context="inbox")
         sender_name = ""
-        vcard_id = msg.get("vcardId") or msg.get("vCardId") or ""
+        vcard_id = safe_get(msg, "vcardId", "vCardId", default="", field_name="vcard_id", warn=True, context="inbox")
         if isinstance(sender_raw, list) and sender_raw:
-            sender_name = sender_raw[0].get("name", "")
+            sender_name = safe_get(sender_raw[0], "name", default="", field_name="sender_name", warn=True, context="inbox")
             if not vcard_id:
-                vcard_id = sender_raw[0].get("senderId", "")
+                vcard_id = safe_get(sender_raw[0], "senderId", default="", field_name="sender_id", warn=True, context="inbox")
         elif isinstance(sender_raw, str):
             sender_name = sender_raw
 
         # Extract job details from NVite messages
-        job_raw = msg.get("jobDetails") or {}
+        job_raw = safe_get(msg, "jobDetails", default={})
         job_details = None
         if job_raw:
-            job_exp = job_raw.get("jobExperience") or {}
-            job_ctc = job_raw.get("jobCtc") or {}
-            apply_url = job_raw.get("applyUrlData") or {}
+            job_exp = safe_get(job_raw, "jobExperience", default={})
+            job_ctc = safe_get(job_raw, "jobCtc", default={})
+            apply_url = safe_get(job_raw, "applyUrlData", default={})
             job_details = {
-                "job_title": job_raw.get("jobTitle", ""),
-                "experience_min": job_exp.get("min"),
-                "experience_max": job_exp.get("max"),
-                "ctc_min": job_ctc.get("minimum") or job_ctc.get("min"),
-                "ctc_max": job_ctc.get("maximum") or job_ctc.get("max"),
-                "location": job_raw.get("jobLocation", ""),
-                "work_mode": job_raw.get("workMode", ""),
-                "key_skills": job_raw.get("jobKeySkills", ""),
-                "nvite_job_id": apply_url.get("jobId", ""),
+                "job_title": safe_get(job_raw, "jobTitle", default="", field_name="job_title", warn=True, context="inbox.jobDetails"),
+                "experience_min": safe_get(job_exp, "min", default=None),
+                "experience_max": safe_get(job_exp, "max", default=None),
+                "ctc_min": safe_get(job_ctc, "minimum", "min", default=None),
+                "ctc_max": safe_get(job_ctc, "maximum", "max", default=None),
+                "location": safe_get(job_raw, "jobLocation", default=""),
+                "work_mode": safe_get(job_raw, "workMode", default=""),
+                "key_skills": safe_get(job_raw, "jobKeySkills", default=""),
+                "nvite_job_id": safe_get(apply_url, "jobId", default="", field_name="nvite_job_id", warn=True, context="inbox.applyUrlData"),
             }
 
         # Extract company details
-        company_raw = msg.get("companyDetails") or {}
+        company_raw = safe_get(msg, "companyDetails", default={})
         company_details = None
         if company_raw:
             company_details = {
-                "company_name": company_raw.get("companyName", ""),
-                "ambition_box_rating": company_raw.get("ambitionBoxRating"),
-                "ambition_box_reviews": company_raw.get("ambitionBoxReviews"),
+                "company_name": safe_get(company_raw, "companyName", default="", field_name="company_name", warn=True, context="inbox.companyDetails"),
+                "ambition_box_rating": safe_get(company_raw, "ambitionBoxRating", default=None),
+                "ambition_box_reviews": safe_get(company_raw, "ambitionBoxReviews", default=None),
             }
 
         messages.append({
-            "message_id": msg.get("messageId") or msg.get("id"),
-            "subject": msg.get("subject") or msg.get("title", ""),
+            "message_id": safe_get(msg, "messageId", "id", field_name="message_id", warn=True, context="inbox"),
+            "subject": safe_get(msg, "subject", "title", default="", field_name="subject", warn=True, context="inbox"),
             "sender": sender_name,
-            "date": msg.get("dateTime") or msg.get("date", ""),
+            "date": safe_get(msg, "dateTime", "date", default=""),
             "is_read": is_read,
-            "type": msg.get("messageType") or msg.get("type", ""),
-            "preview": msg.get("titleText") or msg.get("preview") or msg.get("snippet", ""),
+            "type": safe_get(msg, "messageType", "type", default=""),
+            "preview": safe_get(msg, "titleText", "preview", "snippet", default=""),
             "vcard_id": vcard_id,
-            "unique_id": msg.get("uniqueId") or msg.get("uid", ""),
+            "unique_id": safe_get(msg, "uniqueId", "uid", default=""),
             "power_nvite": bool(msg.get("powerNvite", 0)),
             "is_relevant": bool(msg.get("isRelevant", 0)),
             "is_applied": bool(msg.get("isApplied", False)),
@@ -156,18 +157,18 @@ async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
         "uniqueId": unique_id,
     })
 
-    mail = data.get("mail") or data
-    raw_content = mail.get("titleText") or mail.get("body") or mail.get("content", "")
+    mail = safe_get(data, "mail", default=data)
+    raw_content = safe_get(mail, "titleText", "body", "content", default="", field_name="content", warn=True, context="read_message")
     content = _strip_html(raw_content) if "<" in raw_content else raw_content
 
     return {
         "status": "success",
         "message_id": message_id,
-        "subject": mail.get("subject", ""),
+        "subject": safe_get(mail, "subject", default="", field_name="subject", warn=True, context="read_message"),
         "content": content,
-        "date": mail.get("dateTime") or mail.get("date", ""),
-        "type": mail.get("messageType") or mail.get("type", ""),
-        "conversation_id": mail.get("conversationId"),
+        "date": safe_get(mail, "dateTime", "date", default=""),
+        "type": safe_get(mail, "messageType", "type", default=""),
+        "conversation_id": safe_get(mail, "conversationId", default=None),
     }
 
 
