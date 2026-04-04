@@ -100,6 +100,111 @@ async def init_db():
         await db.close()
 
 
+async def list_applications(status=None, date_from=None, date_to=None, limit=50, offset=0):
+    """Query applications with optional filters."""
+    db = await get_db()
+    try:
+        query = "SELECT * FROM applications WHERE 1=1"
+        params = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if date_from:
+            query += " AND applied_at >= ?"
+            params.append(date_from)
+        if date_to:
+            query += " AND applied_at <= ?"
+            params.append(date_to)
+        query += " ORDER BY applied_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+
+        # Get total count (respecting same filters except pagination)
+        count_query = "SELECT COUNT(*) FROM applications WHERE 1=1"
+        count_params = []
+        if status:
+            count_query += " AND status = ?"
+            count_params.append(status)
+        if date_from:
+            count_query += " AND applied_at >= ?"
+            count_params.append(date_from)
+        if date_to:
+            count_query += " AND applied_at <= ?"
+            count_params.append(date_to)
+        count_cursor = await db.execute(count_query, count_params)
+        total = (await count_cursor.fetchone())[0]
+
+        return [dict(row) for row in rows], total
+    finally:
+        await db.close()
+
+
+async def get_application(job_id: str):
+    """Get a single application by job_id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def upsert_application(app: dict):
+    """Insert or update an application."""
+    db = await get_db()
+    try:
+        await db.execute("""
+            INSERT INTO applications (job_id, title, company, status, applied_at, source,
+                                      ars_score, star_rating, job_activity, company_rating,
+                                      is_open, view_count, follow_up_priority, last_synced)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                title=excluded.title, company=excluded.company, status=excluded.status,
+                ars_score=excluded.ars_score, star_rating=excluded.star_rating,
+                job_activity=excluded.job_activity, company_rating=excluded.company_rating,
+                is_open=excluded.is_open, view_count=excluded.view_count,
+                follow_up_priority=excluded.follow_up_priority, last_synced=excluded.last_synced
+        """, (
+            app.get("job_id"), app.get("title"), app.get("company"),
+            app.get("status", "applied"), app.get("applied_at"),
+            app.get("source", "manual"), app.get("ars_score"),
+            app.get("star_rating"), app.get("job_activity"),
+            json.dumps(app.get("company_rating")) if isinstance(app.get("company_rating"), dict) else app.get("company_rating"),
+            app.get("is_open"), app.get("view_count"),
+            app.get("follow_up_priority", 50), app.get("last_synced"),
+        ))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_applications_before(date: str) -> int:
+    """Delete applications older than date. Returns count deleted."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM applications WHERE applied_at < ?", (date,))
+        count = (await cursor.fetchone())[0]
+        await db.execute("DELETE FROM applications WHERE applied_at < ?", (date,))
+        await db.commit()
+        return count
+    finally:
+        await db.close()
+
+
+async def count_applications_by_status():
+    """Get application counts grouped by status."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT status, COUNT(*) as cnt FROM applications GROUP BY status")
+        rows = await cursor.fetchall()
+        return {row["status"]: row["cnt"] for row in rows}
+    finally:
+        await db.close()
+
+
 async def migrate_json_to_sqlite():
     """One-time migration: import existing JSON files into SQLite."""
     from naukri_server.utils import load_json_with_backup

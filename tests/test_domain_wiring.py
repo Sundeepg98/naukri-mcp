@@ -47,9 +47,11 @@ class TestListApplicationsEnrichment:
             },
         ]
 
-        with patch("naukri_server.tools.tracking._load_json", return_value=mock_apps), \
-             patch("naukri_server.tools.tracking._applications_lock",
-                   new_callable=asyncio.Lock):
+        by_status = {"applied": 1, "shortlisted": 1}
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(mock_apps, len(mock_apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=by_status):
             result = await _list_applications()
 
         assert result["status"] == "success"

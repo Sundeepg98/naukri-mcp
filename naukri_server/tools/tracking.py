@@ -35,31 +35,33 @@ def _save_json(path: Path, data: list):
 
 async def record_application(job_id: str, title: str = None, company: str = None,
                               status: str = "applied", extra: dict = None):
-    """Record or update a job application."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-        now = datetime.now(timezone.utc).isoformat()
-        existing = next((a for a in apps if a.get("job_id") == job_id), None)
-        if existing:
-            existing["status"] = status
-            existing["updated_at"] = now
-            if title:
-                existing["title"] = title
-            if company:
-                existing["company"] = company
-            if extra:
-                existing.update(extra)
-        else:
-            entry = {
-                "job_id": job_id,
-                "title": title,
-                "company": company,
-                "status": status,
-                "applied_at": now,
-                **(extra or {}),
-            }
-            apps.append(entry)
-        _save_json(APPLICATIONS_FILE, apps)
+    """Record or update a job application in SQLite."""
+    from naukri_server.database import get_application, upsert_application
+
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await get_application(str(job_id))
+
+    if existing:
+        # Update: preserve existing fields, only overwrite what's explicitly passed
+        existing["status"] = status
+        existing["updated_at"] = now
+        if title:
+            existing["title"] = title
+        if company:
+            existing["company"] = company
+        if extra:
+            existing.update(extra)
+        await upsert_application(existing)
+    else:
+        entry = {
+            "job_id": str(job_id),
+            "title": title,
+            "company": company,
+            "status": status,
+            "applied_at": now,
+            **(extra or {}),
+        }
+        await upsert_application(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -75,57 +77,55 @@ async def _list_applications(
     filter_info: Optional[int] = None,
 ) -> dict:
     """List tracked job applications with filtering and summary stats."""
+    from naukri_server.database import list_applications, count_applications_by_status
+    from naukri_server.models import Application
+
     limit = validate_limit(limit)
     page = validate_page(page)
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
 
-    if date_from:
-        apps = [a for a in apps if (a.get("applied_at") or "") >= date_from]
-    if date_to:
-        cutoff = date_to + "T23:59:59" if "T" not in date_to else date_to
-        apps = [a for a in apps if (a.get("applied_at") or "") <= cutoff]
+    # Adjust date_to for end-of-day if no time component
+    effective_date_to = date_to
+    if date_to and "T" not in date_to:
+        effective_date_to = date_to + "T23:59:59"
 
-    by_status = {}
-    for a in apps:
-        s = a.get("status", "unknown")
-        by_status[s] = by_status.get(s, 0) + 1
+    offset = (page - 1) * limit
 
-    if status:
-        filtered = [a for a in apps if a.get("status") == status]
-    else:
-        filtered = apps
+    # Query SQLite with status/date filters
+    apps, total = await list_applications(
+        status=status, date_from=date_from, date_to=effective_date_to,
+        limit=limit, offset=offset,
+    )
 
-    # Apply filter_info as local source/activity filter
+    # Apply filter_info as post-query filter (recruiter_active/source not all in SQL)
     if filter_info == 1:
         # Recruiter actions — apps where recruiter was active
-        filtered = [a for a in filtered if a.get("recruiter_active") or a.get("job_activity")]
+        apps = [a for a in apps if a.get("recruiter_active") or a.get("job_activity")]
     elif filter_info == 2:
         # Naukri-synced applications
-        filtered = [a for a in filtered if a.get("source") == "naukri_sync"]
+        apps = [a for a in apps if a.get("source") == "naukri_sync"]
     elif filter_info == 3:
         # External/manual applications
-        filtered = [a for a in filtered if a.get("source") != "naukri_sync"]
-
-    filtered.sort(key=lambda a: a.get("applied_at", ""), reverse=True)
-
-    pagination, page_items = paginate(filtered, page, limit)
+        apps = [a for a in apps if a.get("source") != "naukri_sync"]
 
     # Enrich with computed properties from Application entity
-    from naukri_server.models import Application
     enriched = []
-    for app_dict in page_items:
+    for app_dict in apps:
         app = Application.from_dict(app_dict)
-        enriched_dict = app_dict.copy()
-        enriched_dict["is_stale"] = app.is_stale
-        enriched_dict["days_since_applied"] = app.days_since_applied
-        enriched_dict["has_recruiter_interest"] = app.has_recruiter_interest
-        enriched.append(enriched_dict)
+        app_dict["is_stale"] = app.is_stale
+        app_dict["days_since_applied"] = app.days_since_applied
+        app_dict["has_recruiter_interest"] = app.has_recruiter_interest
+        enriched.append(app_dict)
+
+    # Status summary across all applications
+    by_status = await count_applications_by_status()
 
     return {
         "status": "success",
-        **pagination,
-        "summary": {"total_all_statuses": len(apps), "by_status": by_status},
+        "total": total,
+        "count": len(enriched),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "summary": {"total_all_statuses": sum(by_status.values()), "by_status": by_status},
         "applications": enriched,
     }
 
@@ -270,33 +270,31 @@ async def _get_application_detail(job_id: str) -> dict:
 
 
 async def _purge_applications(before_date: str, dry_run: bool = True) -> dict:
-    """Delete old applications from local tracking before a given date."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
-        if not apps:
-            return {"status": "success", "purged_count": 0, "remaining_count": 0, "dry_run": dry_run, "sample_purged": []}
+    """Delete old applications from SQLite before a given date."""
+    from naukri_server.database import list_applications, delete_applications_before
 
-        keep = []
-        purge = []
-        for a in apps:
-            applied_at = (a.get("applied_at") or a.get("appliedDate") or "")[:10]
-            if applied_at and applied_at < before_date:
-                purge.append(a)
-            else:
-                keep.append(a)
+    # Fetch apps that would be purged (for sample preview)
+    purge_candidates, purge_count = await list_applications(date_to=before_date, limit=5, offset=0)
+    # Get total count that would remain
+    _, total = await list_applications(limit=1, offset=0)
+    remaining_count = total - purge_count
 
-        if not dry_run and purge:
-            _save_json(APPLICATIONS_FILE, keep)
+    sample = [
+        {"job_id": a.get("job_id"), "title": a.get("title"), "applied_at": (a.get("applied_at") or "")[:10]}
+        for a in purge_candidates
+    ]
 
-        sample = [{"job_id": a.get("job_id"), "title": a.get("title"), "applied_at": a.get("applied_at", "")[:10]} for a in purge[:5]]
+    if not dry_run and purge_count > 0:
+        deleted = await delete_applications_before(before_date)
+        purge_count = deleted
 
-        return {
-            "status": "success",
-            "purged_count": len(purge),
-            "remaining_count": len(keep),
-            "dry_run": dry_run,
-            "sample_purged": sample,
-        }
+    return {
+        "status": "success",
+        "purged_count": purge_count,
+        "remaining_count": remaining_count,
+        "dry_run": dry_run,
+        "sample_purged": sample,
+    }
 
 
 def _compute_follow_up_priority(app: dict) -> int:

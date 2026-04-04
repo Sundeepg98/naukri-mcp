@@ -101,7 +101,10 @@ class TestEmptyResponses:
     @pytest.mark.asyncio
     async def test_applications_list_empty(self):
         from naukri_server.tools.tracking import naukri_applications
-        with patch("naukri_server.tools.tracking._load_json", return_value=[]):
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=([], 0)), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value={}):
             result = await naukri_applications(action="list")
             assert result["status"] == "success"
             assert result["total"] == 0

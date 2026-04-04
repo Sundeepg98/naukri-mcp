@@ -166,11 +166,16 @@ class TestFilterInfoLocal:
              "source": "manual"},
         ]
 
+    def _make_status_counts(self):
+        return {"applied": 3}
+
     @pytest.mark.asyncio
     async def test_filter_info_1_recruiter_active(self):
         apps = self._make_apps()
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._applications_lock", asyncio.Lock()):
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(apps, len(apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=self._make_status_counts()):
             from naukri_server.tools.tracking import _list_applications
             result = await _list_applications(filter_info=1)
         assert result["count"] == 2
@@ -182,8 +187,10 @@ class TestFilterInfoLocal:
     @pytest.mark.asyncio
     async def test_filter_info_2_naukri_sync(self):
         apps = self._make_apps()
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._applications_lock", asyncio.Lock()):
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(apps, len(apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=self._make_status_counts()):
             from naukri_server.tools.tracking import _list_applications
             result = await _list_applications(filter_info=2)
         assert result["count"] == 2
@@ -193,8 +200,10 @@ class TestFilterInfoLocal:
     @pytest.mark.asyncio
     async def test_filter_info_3_external(self):
         apps = self._make_apps()
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._applications_lock", asyncio.Lock()):
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(apps, len(apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=self._make_status_counts()):
             from naukri_server.tools.tracking import _list_applications
             result = await _list_applications(filter_info=3)
         assert result["count"] == 1
@@ -203,8 +212,10 @@ class TestFilterInfoLocal:
     @pytest.mark.asyncio
     async def test_filter_info_none_no_filter(self):
         apps = self._make_apps()
-        with patch("naukri_server.tools.tracking._load_json", return_value=apps), \
-             patch("naukri_server.tools.tracking._applications_lock", asyncio.Lock()):
+        with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
+                    return_value=(apps, len(apps))), \
+             patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
+                    return_value=self._make_status_counts()):
             from naukri_server.tools.tracking import _list_applications
             result = await _list_applications(filter_info=None)
         assert result["count"] == 3
