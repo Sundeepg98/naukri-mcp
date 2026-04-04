@@ -208,3 +208,36 @@ class TestResumeTailor:
             assert "Kubernetes" in suggestions["skills_to_add"]
             # Python is already in profile, should NOT be in skills_to_add
             assert "Python" not in suggestions["skills_to_add"]
+
+
+# =====================================================================
+# From test_consolidation.py — sync action routing & validation
+# =====================================================================
+
+class TestSyncConsolidation:
+    """Tests for naukri_server.tools.sync.naukri_sync."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_entity(self):
+        from naukri_server.tools.sync import naukri_sync
+        result = await naukri_sync(entity="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown entity" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_applications_routes_to_helper(self):
+        from naukri_server.tools.sync import naukri_sync
+        with patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "method": "api"}
+            result = await naukri_sync(entity="applications", days_back=30)
+            mock_helper.assert_awaited_once_with(force_browser=False, days_back=30)
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_saved_jobs_routes_to_helper(self):
+        from naukri_server.tools.sync import naukri_sync
+        with patch("naukri_server.tools.sync._sync_saved_jobs", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "method": "api"}
+            result = await naukri_sync(entity="saved_jobs")
+            mock_helper.assert_awaited_once_with(force_browser=False)

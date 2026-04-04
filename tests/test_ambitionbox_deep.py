@@ -784,3 +784,44 @@ class TestFetchFunctionsExtractCompanyId:
 
         assert result["status"] == "success"
         assert result["_ab_company_id"] == "10"
+
+
+# =====================================================================
+# From test_consolidation.py — company intel action routing & validation
+# =====================================================================
+
+class TestCompanyIntelConsolidation:
+    """Tests for naukri_server.tools.ambitionbox.naukri_company_intel."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_intel_type(self):
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        result = await naukri_company_intel(company="google", intel_type="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown intel_type" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_salary_routes_to_helper(self):
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        with patch("naukri_server.tools.ambitionbox._fetch_salary", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "salaries": []}
+            result = await naukri_company_intel(company="Google", intel_type="salary")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_reviews_routes_to_helper(self):
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        with patch("naukri_server.tools.ambitionbox._fetch_reviews", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "reviews": []}
+            result = await naukri_company_intel(company="google", intel_type="reviews", page=3)
+            mock_helper.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_interviews_routes_to_helper(self):
+        from naukri_server.tools.ambitionbox import naukri_company_intel
+        with patch("naukri_server.tools.ambitionbox._fetch_interviews", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "interview_experiences": []}
+            result = await naukri_company_intel(company="google", intel_type="interviews")
+            mock_helper.assert_awaited_once()

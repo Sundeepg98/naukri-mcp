@@ -633,3 +633,58 @@ class TestAllValidRoutingCombinations:
         result = await naukri_profile_media(media_type="photo", action="delete")
         mock_fn.assert_awaited_once()
         assert result["action"] == "deleted"
+
+
+# =====================================================================
+# From test_consolidation.py — profile media action routing & validation
+# =====================================================================
+
+class TestProfileMediaConsolidation:
+    """Tests for naukri_server.tools.resume_photo.naukri_profile_media."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_media_type(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="video")
+        assert result["status"] == "error"
+        assert "Unknown media_type" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_resume_invalid_action(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="resume", action="delete")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_photo_invalid_action(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="photo", action="download")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_resume_download_requires_save_path(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="resume", action="download")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "save_path" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_resume_upload_requires_file_path(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="resume", action="upload")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "file_path" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_photo_upload_requires_file_path(self):
+        from naukri_server.tools.resume_photo import naukri_profile_media
+        result = await naukri_profile_media(media_type="photo", action="upload")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "file_path" in result["message"]

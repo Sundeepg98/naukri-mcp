@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Any
 
@@ -20,12 +21,13 @@ class SagaExecutor:
     """Executes saga steps sequentially with compensation on failure.
 
     If step N fails, compensates steps N-1, N-2, ..., 1 in reverse order.
+    Each completed step records its elapsed time in milliseconds.
     """
 
     def __init__(self, name: str):
         self.name = name
         self.steps: list[SagaStep] = []
-        self.completed: list[tuple[str, Any]] = []
+        self.completed: list[tuple[str, Any, int]] = []  # (name, result, elapsed_ms)
         self.errors: list[str] = []
 
     def add_step(self, name: str, execute: Callable, compensate: Callable = None):
@@ -35,16 +37,19 @@ class SagaExecutor:
     async def run(self) -> dict:
         """Execute all steps. On failure, compensate completed steps in reverse."""
         for step in self.steps:
+            t0 = time.monotonic()
             try:
                 result = await step.execute()
-                self.completed.append((step.name, result))
-                logger.info("Saga '%s' step '%s' succeeded", self.name, step.name)
+                elapsed = int((time.monotonic() - t0) * 1000)
+                self.completed.append((step.name, result, elapsed))
+                logger.info("Saga '%s' step '%s' completed in %dms", self.name, step.name, elapsed)
             except Exception as e:
-                logger.error("Saga '%s' step '%s' failed: %s", self.name, step.name, e)
+                elapsed = int((time.monotonic() - t0) * 1000)
+                logger.error("Saga '%s' step '%s' failed after %dms: %s", self.name, step.name, elapsed, e)
                 self.errors.append(f"{step.name}: {type(e).__name__}: {e}")
 
                 # Compensate completed steps in reverse
-                for comp_name, _ in reversed(self.completed):
+                for comp_name, _, _ in reversed(self.completed):
                     comp_step = next((s for s in self.steps if s.name == comp_name), None)
                     if comp_step and comp_step.compensate:
                         try:
@@ -57,13 +62,15 @@ class SagaExecutor:
                     "status": "error",
                     "saga": self.name,
                     "failed_step": step.name,
-                    "completed_steps": [name for name, _ in self.completed],
+                    "completed_steps": [name for name, _, _ in self.completed],
+                    "step_timings": {name: ms for name, _, ms in self.completed},
                     "errors": self.errors,
                 }
 
         return {
             "status": "success",
             "saga": self.name,
-            "completed_steps": [name for name, _ in self.completed],
-            "results": {name: result for name, result in self.completed},
+            "completed_steps": [name for name, _, _ in self.completed],
+            "step_timings": {name: ms for name, _, ms in self.completed},
+            "results": {name: result for name, result, _ in self.completed},
         }

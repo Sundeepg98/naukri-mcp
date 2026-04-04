@@ -399,3 +399,36 @@ def test_detect_new_roles_all_seen_returns_empty_new(mock_save, mock_load):
     new_roles, total = _detect_new_roles(current_roles)
     assert total == 2
     assert new_roles == []
+
+
+# =====================================================================
+# From test_consolidation.py — early access action routing & validation
+# =====================================================================
+
+class TestEarlyAccessConsolidation:
+    """Tests for naukri_server.tools.early_access.naukri_early_access."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.early_access import naukri_early_access
+        result = await naukri_early_access(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_share_requires_job_id(self):
+        from naukri_server.tools.early_access import naukri_early_access
+        result = await naukri_early_access(action="share")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "job_id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_routes_to_helper(self):
+        from naukri_server.tools.early_access import naukri_early_access
+        with patch("naukri_server.tools.early_access._list_early_access_roles", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "roles": []}
+            result = await naukri_early_access(action="list", page=2, limit=10)
+            mock_helper.assert_awaited_once_with(page=2, limit=10)
+            assert result["status"] == "success"

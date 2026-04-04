@@ -417,3 +417,36 @@ class TestSalaryBenchmark:
             assert result["status"] == "partial_success"
             assert result["your_positioning"] is None
             assert "errors" in result
+
+
+# =====================================================================
+# From test_consolidation.py — company follow action routing & validation
+# =====================================================================
+
+class TestCompanyFollowConsolidation:
+    """Tests for follow actions in naukri_server.tools.companies.naukri_company."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.companies import naukri_company
+        result = await naukri_company(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_empty_group_ids(self):
+        from naukri_server.tools.companies import naukri_company
+        result = await naukri_company(action="follow_status")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "group_id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_follow_status_routes_to_helper(self):
+        from naukri_server.tools.companies import naukri_company
+        with patch("naukri_server.tools.companies._get_follow_status", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "followed": ["123"]}
+            result = await naukri_company(action="follow_status", group_id="123")
+            mock_helper.assert_awaited_once_with(["123"])
+            assert result["status"] == "success"

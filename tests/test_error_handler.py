@@ -13,7 +13,9 @@ async def test_success_passes_through():
     expected = {"status": "success", "data": [1, 2, 3]}
     handler = AsyncMock(return_value=expected)
     result = await handle_tool_action(handler, "test.success")
-    assert result == expected
+    assert result["status"] == "success"
+    assert result["data"] == [1, 2, 3]
+    assert "_request_id" in result
     handler.assert_awaited_once()
 
 

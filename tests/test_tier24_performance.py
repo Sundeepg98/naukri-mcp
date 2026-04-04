@@ -3,6 +3,8 @@
 Every test is PURE: no network, no browser, no file I/O.
 """
 
+import json
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock, call
 
@@ -299,3 +301,281 @@ class TestNaukriPerformanceRouting:
         result = await naukri_performance(metric="activity_level")
         assert result["status"] == "error"
         assert result["http_status"] == 401
+
+
+# =====================================================================
+# From test_consolidation.py — performance action routing & validation
+# =====================================================================
+
+class TestPerformanceConsolidation:
+    """Tests for naukri_server.tools.performance.naukri_performance."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_metric(self):
+        from naukri_server.tools.performance import naukri_performance
+        result = await naukri_performance(metric="invalid")
+        assert result["status"] == "error"
+        assert "Unknown metric" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_impressions_invalid_days(self):
+        from naukri_server.tools.performance import naukri_performance
+        result = await naukri_performance(metric="impressions", days=15)
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "7, 30, 90" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_impressions_valid_days_routes(self):
+        from naukri_server.tools.performance import naukri_performance
+        with patch("naukri_server.tools.performance._get_search_impressions", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "days": 30}
+            result = await naukri_performance(metric="impressions", days=30)
+            mock_helper.assert_awaited_once_with(days=30)
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_recruiter_activity_routes(self):
+        from naukri_server.tools.performance import naukri_performance
+        with patch("naukri_server.tools.performance._get_recruiter_activity", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "activities": []}
+            result = await naukri_performance(metric="recruiter_activity", page=2, limit=10, filter_by="VIEWED")
+            mock_helper.assert_awaited_once_with(page=2, size=10, filter_by="VIEWED")
+
+    @pytest.mark.asyncio
+    async def test_activity_level_routes(self):
+        from naukri_server.tools.performance import naukri_performance
+        with patch("naukri_server.tools.performance._get_activity_level", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "level": "HIGH"}
+            result = await naukri_performance(metric="activity_level")
+            mock_helper.assert_awaited_once()
+
+
+# =====================================================================
+# From test_consolidation.py — helper-level validation (performance)
+# =====================================================================
+
+class TestPerformanceHelperValidation:
+    """Validation inside performance helpers."""
+
+    @pytest.mark.asyncio
+    async def test_recruiter_activity_invalid_filter(self):
+        """_get_recruiter_activity rejects invalid filter_by values."""
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity(filter_by="INVALID_FILTER")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "INVALID_FILTER" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_recruiter_activity_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
+        from naukri_server.tools.performance import _get_recruiter_activity
+        with patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"successResponse": {"jobseekerActivityList": [], "activityBucketCount": {}, "count": 0}}
+            result = await _get_recruiter_activity(page=0)
+            mock_api.assert_awaited()
+            assert result["status"] == "success"
+
+
+# =====================================================================
+# From test_tier21.py — recruiter activity bucket & item parsing
+# =====================================================================
+
+class TestRecruiterActivityBuckets:
+    """Tests for bucket parsing in _get_recruiter_activity."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_bucket_has_label_and_is_new(self, mock_post):
+        """Bucket parsing includes label and is_new fields."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {
+                    "VIEWED": {
+                        "count": 10,
+                        "percentageChange": 5,
+                        "label": "Profile Views",
+                        "isNew": 1,
+                    },
+                    "DOWNLOADED": {
+                        "count": 3,
+                        "percentageChange": -2,
+                        "label": "Resume Downloads",
+                        "isNew": 0,
+                    },
+                },
+                "jobseekerActivityList": [],
+                "count": 0,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["status"] == "success"
+        viewed = result["buckets"]["VIEWED"]
+        assert viewed["label"] == "Profile Views"
+        assert viewed["is_new"] is True
+        assert viewed["count"] == 10
+        downloaded = result["buckets"]["DOWNLOADED"]
+        assert downloaded["label"] == "Resume Downloads"
+        assert downloaded["is_new"] is False
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_bucket_plain_int_fallback(self, mock_post):
+        """Bucket with plain int value (not dict) falls back to count-only."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {"CONTACTED": 7},
+                "jobseekerActivityList": [],
+                "count": 0,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["buckets"]["CONTACTED"] == {"count": 7}
+
+
+class TestRecruiterActivityItems:
+    """Tests for per-activity item parsing in _get_recruiter_activity."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_activity_has_company_master_name_and_is_new(self, mock_post):
+        """Per-activity items have company_master_name, is_new, activity_map, meta_job_id."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {
+                        "recruiterName": "Jane Doe",
+                        "companyName": "Acme Corp",
+                        "activityType": "VIEWED",
+                        "activityDate": "2025-12-01",
+                        "companyMasterName": "Acme Corporation Pvt Ltd",
+                        "isNew": 1,
+                        "activityMap": {"VIEWED": 2, "DOWNLOADED": 1},
+                        "metaData": json.dumps({"jobId": "99887766"}),
+                    }
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        act = result["activities"][0]
+        assert act["company_master_name"] == "Acme Corporation Pvt Ltd"
+        assert act["is_new"] is True
+        assert act["activity_map"] == {"VIEWED": 2, "DOWNLOADED": 1}
+        assert act["meta_job_id"] == "99887766"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_metadata_json_parsing_extracts_jobid(self, mock_post):
+        """metaData JSON string parsing extracts jobId."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {
+                        "metaData": '{"jobId": "12345", "source": "search"}',
+                    }
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["activities"][0]["meta_job_id"] == "12345"
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_malformed_metadata_does_not_crash(self, mock_post):
+        """Malformed metaData JSON doesn't crash — returns None for meta_job_id."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {"metaData": "not valid json {{{"},
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["activities"][0]["meta_job_id"] is None
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_empty_metadata_leaves_meta_job_id_none(self, mock_post):
+        """Empty metaData leaves meta_job_id as None."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {"metaData": ""},
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["activities"][0]["meta_job_id"] is None
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_missing_metadata_key_leaves_meta_job_id_none(self, mock_post):
+        """Activity with no metaData key at all leaves meta_job_id as None."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {"recruiterName": "Bob"},
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["activities"][0]["meta_job_id"] is None
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_metadata_dict_instead_of_string(self, mock_post):
+        """metaData that is already a dict (not JSON string) is handled."""
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    {"metaData": {"jobId": "77777"}},
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert result["activities"][0]["meta_job_id"] == "77777"
+
+
+class TestRecruiterActivityNonDictItemSkipped:
+    """Ensure non-dict items in jobseekerActivityList are skipped."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
+    async def test_non_dict_activity_item_skipped(self, mock_post):
+        mock_post.return_value = {
+            "successResponse": {
+                "activityBucketCount": {},
+                "jobseekerActivityList": [
+                    "not_a_dict",
+                    42,
+                    None,
+                    {"recruiterName": "Valid Item"},
+                ],
+                "count": 1,
+            }
+        }
+        from naukri_server.tools.performance import _get_recruiter_activity
+        result = await _get_recruiter_activity()
+        assert len(result["activities"]) == 1
+        assert result["activities"][0]["recruiter_name"] == "Valid Item"

@@ -257,3 +257,138 @@ class TestJobAlertsInvalidAction:
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "nonexistent" in result["message"]
+
+
+# =====================================================================
+# From test_tier21.py — settings consent fields
+# =====================================================================
+
+class TestSettingsConsentFields:
+    """Tests for consent fields in naukri_settings(action='get')."""
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
+    async def test_get_returns_consent_booleans(self, mock_get):
+        """GET returns naukri_auto_apply_consent, linkedin_auto_apply_consent,
+        whatsapp_apply_notification, whatsapp_profile_notification as booleans."""
+        async def side_effect(url, *args, **kwargs):
+            if "formattedsettings" in url:
+                return {"sections": []}
+            else:
+                # Raw settings API
+                return {
+                    "naukriAutoApplyConsent": 1,
+                    "linkedinAutoApplyConsent": 0,
+                    "applyWhatsAppNotification": 1,
+                    "profileWhatsAppNotification": 0,
+                }
+
+        mock_get.side_effect = side_effect
+        from naukri_server.tools.settings import naukri_settings
+        result = await naukri_settings(action="get")
+        assert result["status"] == "success"
+        assert result["naukri_auto_apply_consent"] is True
+        assert result["linkedin_auto_apply_consent"] is False
+        assert result["whatsapp_apply_notification"] is True
+        assert result["whatsapp_profile_notification"] is False
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
+    async def test_consent_fields_are_booleans(self, mock_get):
+        """Consent fields are always booleans even when API returns integers."""
+        async def side_effect(url, *args, **kwargs):
+            if "formattedsettings" in url:
+                return {"sections": []}
+            else:
+                return {
+                    "naukriAutoApplyConsent": 42,
+                    "linkedinAutoApplyConsent": 0,
+                    "applyWhatsAppNotification": 100,
+                    "profileWhatsAppNotification": 0,
+                }
+
+        mock_get.side_effect = side_effect
+        from naukri_server.tools.settings import naukri_settings
+        result = await naukri_settings(action="get")
+        assert isinstance(result["naukri_auto_apply_consent"], bool)
+        assert isinstance(result["linkedin_auto_apply_consent"], bool)
+        assert isinstance(result["whatsapp_apply_notification"], bool)
+        assert isinstance(result["whatsapp_profile_notification"], bool)
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
+    async def test_raw_settings_failure_still_returns_main_settings(self, mock_get):
+        """If raw settings fetch fails, consent_fields is empty but main settings still returned."""
+        call_count = 0
+
+        async def side_effect(url, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if "formattedsettings" in url:
+                return {
+                    "sections": [
+                        {
+                            "sectionName": "Job Search",
+                            "settings": [
+                                {
+                                    "settingId": "js_status",
+                                    "settingLabel": "Job search status",
+                                    "settingValue": "1",
+                                    "settingValueLabel": "Active",
+                                    "description": "",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            else:
+                # Simulate raw settings API failure
+                raise Exception("Network error")
+
+        mock_get.side_effect = side_effect
+        from naukri_server.tools.settings import naukri_settings
+        result = await naukri_settings(action="get")
+        assert result["status"] == "success"
+        assert result["count"] == 1
+        assert len(result["settings"]) == 1
+        # Consent fields should NOT be present
+        assert "naukri_auto_apply_consent" not in result
+        assert "linkedin_auto_apply_consent" not in result
+        assert "whatsapp_apply_notification" not in result
+        assert "whatsapp_profile_notification" not in result
+
+    @pytest.mark.asyncio
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
+    async def test_formatted_settings_parsing(self, mock_get):
+        """Formatted settings are parsed with section, id, label, value etc."""
+        async def side_effect(url, *args, **kwargs):
+            if "formattedsettings" in url:
+                return {
+                    "sections": [
+                        {
+                            "sectionName": "Notifications",
+                            "settings": [
+                                {
+                                    "settingId": "rec_notif",
+                                    "settingLabel": "Recruiter notification",
+                                    "settingValue": "enabled",
+                                    "settingValueLabel": "Enabled",
+                                    "description": "Get notified when recruiters view your profile",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            else:
+                return {}
+
+        mock_get.side_effect = side_effect
+        from naukri_server.tools.settings import naukri_settings
+        result = await naukri_settings(action="get")
+        s = result["settings"][0]
+        assert s["section"] == "Notifications"
+        assert s["id"] == "rec_notif"
+        assert s["label"] == "Recruiter notification"
+        assert s["value"] == "enabled"
+        assert s["value_label"] == "Enabled"
+        assert s["description"] == "Get notified when recruiters view your profile"

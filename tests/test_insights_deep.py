@@ -310,3 +310,52 @@ async def test_detect_status_changes_no_changes(mock_sync):
     assert result["positive_changes"] == 0
     assert result["positive"] == []
     assert result["neutral"] == []
+
+
+# =====================================================================
+# From test_consolidation.py — insights action routing & validation
+# =====================================================================
+
+class TestInsightsConsolidation:
+    """Tests for naukri_server.tools.insights.naukri_insights."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_insight_type(self):
+        from naukri_server.tools.insights import naukri_insights
+        result = await naukri_insights(insight_type="invalid")
+        assert result["status"] == "error"
+        assert "Unknown insight_type" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_cached_answers_update_requires_key(self):
+        """cached_answers update without key should fail validation inside _cached_answers."""
+        from naukri_server.tools.insights import _cached_answers
+        result = await _cached_answers(action="update")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "key" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_cached_answers_delete_requires_key(self):
+        from naukri_server.tools.insights import _cached_answers
+        result = await _cached_answers(action="delete")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "key" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_cached_answers_invalid_action(self):
+        from naukri_server.tools.insights import _cached_answers
+        result = await _cached_answers(action="purge")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_applications_routes_to_helper(self):
+        from naukri_server.tools.insights import naukri_insights
+        with patch("naukri_server.tools.insights._application_insights", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "total_applications": 10}
+            result = await naukri_insights(insight_type="applications", days=7)
+            mock_helper.assert_awaited_once_with(days=7)
+            assert result["status"] == "success"

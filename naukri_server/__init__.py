@@ -66,12 +66,15 @@ For debugging: naukri_health_check, naukri_debug
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import FastMCP
 
 from naukri_server.api import close_api_session
 from naukri_server.browser import browser
+
+logger = logging.getLogger(__name__)
 
 # Ref-counted lifespan: browser starts once, stops when last session ends.
 # Needed for dual transport where stdio + HTTP sessions share one browser.
@@ -86,6 +89,17 @@ async def lifespan(server):
         _lifespan_refs += 1
         if _lifespan_refs == 1:
             await browser.start()
+            # Startup health check — validates core services after browser is ready
+            logger.info("Running startup health check...")
+            try:
+                from naukri_server.tools.health import naukri_health_check
+                health = await naukri_health_check(include_browser=False)
+                if health.get("summary", {}).get("fail", 0) > 0:
+                    logger.warning("Startup health check has failures: %s", health.get("summary"))
+                else:
+                    logger.info("Startup health check passed: %s", health.get("summary"))
+            except Exception as e:
+                logger.warning("Startup health check failed: %s (continuing anyway)", e)
     try:
         yield
     finally:

@@ -60,3 +60,50 @@ class TestValidateReviewData:
     def test_count_mismatch(self):
         warnings = validate_review_data({"review_count": 5, "reviews": []})
         assert any("empty" in w for w in warnings)
+
+
+# =====================================================================
+# From test_consolidation.py — cross-cutting helper-level validation
+# =====================================================================
+
+import pytest
+from unittest.mock import AsyncMock, patch
+
+
+class TestConsolidationHelperValidation:
+    """Validation inside internal helpers that runs before any API/browser call."""
+
+    @pytest.mark.asyncio
+    async def test_application_insights_negative_days(self):
+        """_application_insights rejects days < 1."""
+        from naukri_server.tools.insights import _application_insights
+        result = await _application_insights(days=0)
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "days" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_set_reminder_invalid_days_zero(self):
+        """_set_reminder rejects days < 1."""
+        from naukri_server.tools.reminders import _set_reminder
+        result = await _set_reminder(job_id="123", days=0)
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "days" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_set_reminder_invalid_days_over_365(self):
+        """_set_reminder rejects days > 365."""
+        from naukri_server.tools.reminders import _set_reminder
+        result = await _set_reminder(job_id="123", days=400)
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_fetch_inbox_page_clamped(self):
+        """page=0 is silently clamped to 1 by validate_page."""
+        from naukri_server.tools.inbox import _fetch_inbox
+        with patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"successResponse": {"inbox": [], "total": 0, "unread": 0}}
+            result = await _fetch_inbox(page=0)
+            mock_api.assert_awaited()

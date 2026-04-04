@@ -843,3 +843,78 @@ class TestActionPrep:
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "job_id required" in result["message"]
+
+
+# =====================================================================
+# From test_consolidation.py — action routing & validation
+# =====================================================================
+
+class TestMockInterviewConsolidation:
+    """Tests for naukri_server.tools.mock_interview.naukri_mock_interview."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        result = await naukri_mock_interview(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_start_requires_job_id(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        result = await naukri_mock_interview(action="start")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "job_id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_start_with_empty_job_id(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        result = await naukri_mock_interview(action="start", job_id="")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_answer_requires_all_params(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        result = await naukri_mock_interview(action="answer")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "test_id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_answer_partial_params(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        result = await naukri_mock_interview(
+            action="answer", test_id="t1", topic_id="tp1",
+        )
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_topics_routes_to_helper(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        with patch("naukri_server.tools.mock_interview._get_topics", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "topics": []}
+            result = await naukri_mock_interview(action="topics")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_history_routes_to_helper(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        with patch("naukri_server.tools.mock_interview._get_history", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "interviews": []}
+            result = await naukri_mock_interview(action="history")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_start_routes_to_helper(self):
+        from naukri_server.tools.mock_interview import naukri_mock_interview
+        with patch("naukri_server.tools.mock_interview._start_interview", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "test_id": "123"}
+            result = await naukri_mock_interview(action="start", job_id="999")
+            mock_helper.assert_awaited_once_with("999")
+            assert result["status"] == "success"

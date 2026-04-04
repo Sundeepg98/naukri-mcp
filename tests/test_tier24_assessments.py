@@ -223,3 +223,37 @@ class TestAssessmentsDispatch:
         result = await _assessments_dispatch(action="completeness")
         assert result["status"] == "error"
         assert result["http_status"] == 401
+
+
+# =====================================================================
+# From test_consolidation.py — assessments action routing & validation
+# =====================================================================
+
+class TestAssessmentsConsolidation:
+    """Tests for naukri_server.tools.assessments._assessments_dispatch (via naukri_assessments alias)."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.assessments import naukri_assessments
+        result = await naukri_assessments(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_routes_to_helper(self):
+        from naukri_server.tools.assessments import naukri_assessments
+        with patch("naukri_server.tools.assessments._list_assessments", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "assessments": []}
+            result = await naukri_assessments(action="list")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_completeness_routes_to_helper(self):
+        from naukri_server.tools.assessments import naukri_assessments
+        with patch("naukri_server.tools.assessments._get_profile_completeness", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "completeness_percent": 85}
+            result = await naukri_assessments(action="completeness")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"

@@ -282,3 +282,36 @@ async def test_tailor_propagates_helper_error_as_internal_error(mock_tailor):
     assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
     assert "browser crashed" in result["message"]
+
+
+# =====================================================================
+# From test_consolidation.py — resume builder action routing & validation
+# =====================================================================
+
+class TestResumeBuilderConsolidation:
+    """Tests for naukri_server.tools.resume_builder.naukri_resume_builder."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.resume_builder import naukri_resume_builder
+        result = await naukri_resume_builder(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_templates_routes_to_helper(self):
+        from naukri_server.tools.resume_builder import naukri_resume_builder
+        with patch("naukri_server.tools.resume_builder._get_templates", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "templates": []}
+            result = await naukri_resume_builder(action="templates")
+            mock_helper.assert_awaited_once()
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_status_routes_to_helper(self):
+        from naukri_server.tools.resume_builder import naukri_resume_builder
+        with patch("naukri_server.tools.resume_builder._get_status", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "attempts_left": 3}
+            result = await naukri_resume_builder(action="status")
+            mock_helper.assert_awaited_once()

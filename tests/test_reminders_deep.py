@@ -550,3 +550,187 @@ class TestErrorPaths:
         assert result["status"] == "error"
         assert result["error_code"] == "INTERNAL_ERROR"
         assert "RuntimeError" in result["message"]
+
+
+# =====================================================================
+# From test_consolidation.py — reminders action routing & validation
+# =====================================================================
+
+class TestRemindersConsolidation:
+    """Tests for naukri_server.tools.reminders.naukri_reminders."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_action(self):
+        from naukri_server.tools.reminders import naukri_reminders
+        result = await naukri_reminders(action="invalid")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "Unknown action" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_set_requires_job_id(self):
+        from naukri_server.tools.reminders import naukri_reminders
+        result = await naukri_reminders(action="set")
+        assert result["status"] == "error"
+        assert result["error_code"] == "VALIDATION_ERROR"
+        assert "job_id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_routes_to_helper(self):
+        from naukri_server.tools.reminders import naukri_reminders
+        with patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "total": 0, "reminders": []}
+            result = await naukri_reminders(action="list")
+            mock_helper.assert_awaited_once_with(include_past=True, include_app_status=True)
+            assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_list_passes_include_app_status_false(self):
+        from naukri_server.tools.reminders import naukri_reminders
+        with patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_helper:
+            mock_helper.return_value = {"status": "success", "total": 0, "reminders": []}
+            result = await naukri_reminders(action="list", include_app_status=False)
+            mock_helper.assert_awaited_once_with(include_past=True, include_app_status=False)
+            assert result["status"] == "success"
+
+
+# =====================================================================
+# From test_consolidation.py — reminder enrichment with application status
+# =====================================================================
+
+class TestRemindersAppStatus:
+    """Tests for reminder enrichment with live application status."""
+
+    @pytest.mark.asyncio
+    async def test_list_reminders_with_app_status(self):
+        """Reminders include application_status when include_app_status=True."""
+        from datetime import datetime, timezone, timedelta
+        from naukri_server.tools.reminders import _list_reminders
+
+        future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        fake_reminders = [
+            {"job_id": "j1", "title": "Dev", "company": "Acme", "remind_at": future, "note": "follow up", "created_at": "2026-01-01T00:00:00+00:00"},
+            {"job_id": "j2", "title": "QA", "company": "Beta", "remind_at": future, "note": None, "created_at": "2026-01-02T00:00:00+00:00"},
+        ]
+        fake_detail_j1 = {"status": "success", "current_status": "Application Viewed", "view_count": 5, "ars_score": 72}
+        fake_detail_j2 = {"status": "success", "current_status": "Applied", "view_count": 0, "ars_score": 45}
+
+        async def mock_get_detail(jid):
+            return {"j1": fake_detail_j1, "j2": fake_detail_j2}[jid]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+             patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
+            result = await _list_reminders(include_app_status=True)
+
+        assert result["status"] == "success"
+        assert result["total"] == 2
+        reminders = result["reminders"]
+
+        # Both reminders should have application_status attached
+        j1_rem = next(r for r in reminders if r["job_id"] == "j1")
+        assert "application_status" in j1_rem
+        assert j1_rem["application_status"]["current_status"] == "Application Viewed"
+        assert j1_rem["application_status"]["view_count"] == 5
+        assert j1_rem["application_status"]["ars_score"] == 72
+
+        j2_rem = next(r for r in reminders if r["job_id"] == "j2")
+        assert "application_status" in j2_rem
+        assert j2_rem["application_status"]["current_status"] == "Applied"
+        assert j2_rem["application_status"]["view_count"] == 0
+        assert j2_rem["application_status"]["ars_score"] == 45
+
+    @pytest.mark.asyncio
+    async def test_list_reminders_without_app_status(self):
+        """Reminders don't fetch app status when include_app_status=False."""
+        from datetime import datetime, timezone, timedelta
+        from naukri_server.tools.reminders import _list_reminders
+
+        future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        fake_reminders = [
+            {"job_id": "j1", "title": "Dev", "company": "Acme", "remind_at": future, "note": None, "created_at": "2026-01-01T00:00:00+00:00"},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+             patch("naukri_server.tools.tracking._get_application_detail", new_callable=AsyncMock) as mock_detail:
+            result = await _list_reminders(include_app_status=False)
+
+        assert result["status"] == "success"
+        assert result["total"] == 1
+        # _get_application_detail should NOT have been called
+        mock_detail.assert_not_awaited()
+        # No application_status key on reminders
+        assert "application_status" not in result["reminders"][0]
+
+    @pytest.mark.asyncio
+    async def test_app_status_error_is_silently_skipped(self):
+        """If _get_application_detail raises for one job, that reminder has no application_status."""
+        from datetime import datetime, timezone, timedelta
+        from naukri_server.tools.reminders import _list_reminders
+
+        future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        fake_reminders = [
+            {"job_id": "j1", "title": "Dev", "company": "Acme", "remind_at": future, "note": None, "created_at": "2026-01-01T00:00:00+00:00"},
+            {"job_id": "j2", "title": "QA", "company": "Beta", "remind_at": future, "note": None, "created_at": "2026-01-02T00:00:00+00:00"},
+        ]
+
+        async def mock_get_detail(jid):
+            if jid == "j1":
+                raise ConnectionError("API down")
+            return {"status": "success", "current_status": "Applied", "view_count": 1, "ars_score": 50}
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+             patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
+            result = await _list_reminders(include_app_status=True)
+
+        assert result["status"] == "success"
+        j1_rem = next(r for r in result["reminders"] if r["job_id"] == "j1")
+        j2_rem = next(r for r in result["reminders"] if r["job_id"] == "j2")
+
+        # j1 had an error — no application_status
+        assert "application_status" not in j1_rem
+        # j2 succeeded
+        assert "application_status" in j2_rem
+        assert j2_rem["application_status"]["current_status"] == "Applied"
+
+    @pytest.mark.asyncio
+    async def test_app_status_error_response_is_skipped(self):
+        """If _get_application_detail returns status=error, that reminder has no application_status."""
+        from datetime import datetime, timezone, timedelta
+        from naukri_server.tools.reminders import _list_reminders
+
+        future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        fake_reminders = [
+            {"job_id": "j1", "title": "Dev", "company": "Acme", "remind_at": future, "note": None, "created_at": "2026-01-01T00:00:00+00:00"},
+        ]
+
+        async def mock_get_detail(jid):
+            return {"status": "error", "message": "Not found"}
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+             patch("naukri_server.tools.tracking._get_application_detail", side_effect=mock_get_detail):
+            result = await _list_reminders(include_app_status=True)
+
+        assert result["status"] == "success"
+        assert "application_status" not in result["reminders"][0]
+
+    @pytest.mark.asyncio
+    async def test_app_status_skips_reminders_without_job_id(self):
+        """Reminders without job_id don't trigger detail fetches."""
+        from datetime import datetime, timezone, timedelta
+        from naukri_server.tools.reminders import _list_reminders
+
+        future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        fake_reminders = [
+            {"job_id": None, "title": "Generic", "company": "Co", "remind_at": future, "note": None, "created_at": "2026-01-01T00:00:00+00:00"},
+            {"title": "No ID", "company": "Co2", "remind_at": future, "note": None, "created_at": "2026-01-02T00:00:00+00:00"},
+        ]
+
+        with patch("naukri_server.tools.reminders._load_reminders", return_value=fake_reminders), \
+             patch("naukri_server.tools.tracking._get_application_detail", new_callable=AsyncMock) as mock_detail:
+            result = await _list_reminders(include_app_status=True)
+
+        # No job_ids to fetch, so _get_application_detail should never be called
+        mock_detail.assert_not_awaited()
+        assert result["total"] == 2
+        for rem in result["reminders"]:
+            assert "application_status" not in rem
