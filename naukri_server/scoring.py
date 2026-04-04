@@ -4,140 +4,21 @@ import math
 import re
 from typing import Optional
 
-
-# ── Skill Alias Map ──────────────────────────────────────────────────────────
-# Canonical skill name → set of known aliases.
-# parse_skills() normalizes all inputs through this map.
-
-SKILL_ALIASES: dict[str, set[str]] = {
-    "javascript": {"js", "vanilla js", "es6", "es2015", "ecmascript"},
-    "typescript": {"ts"},
-    "python": {"py", "python3"},
-    "java": {"core java", "java8", "java11", "java17"},
-    "c#": {"csharp", "c sharp"},
-    "c++": {"cpp", "cplusplus"},
-    "golang": {"go lang", "go"},
-    "ruby": {"rb"},
-    "rust": {"rustlang"},
-    "react": {"reactjs", "react.js", "react js"},
-    "angular": {"angularjs", "angular.js", "angular js"},
-    "vue": {"vuejs", "vue.js", "vue js"},
-    "next.js": {"nextjs", "next"},
-    "node.js": {"nodejs", "node", "node js"},
-    "express": {"expressjs", "express.js"},
-    "django": {"django rest framework", "drf"},
-    "flask": {"flask api"},
-    "spring boot": {"springboot", "spring-boot", "spring"},
-    "fastapi": {"fast api"},
-    ".net": {"dotnet", "dot net", "asp.net"},
-    "kubernetes": {"k8s", "k8"},
-    "docker": {"containerization", "containers"},
-    "terraform": {"tf", "iac", "infrastructure as code"},
-    "ansible": {"configuration management"},
-    "jenkins": {"ci server"},
-    "postgresql": {"postgres", "psql", "pgsql"},
-    "mongodb": {"mongo", "mongo db"},
-    "mysql": {"my sql"},
-    "redis": {"redis cache"},
-    "elasticsearch": {"elastic", "elk", "elastic search"},
-    "apache kafka": {"kafka"},
-    "rabbitmq": {"rabbit mq", "amqp"},
-    "amazon web services": {"aws"},
-    "microsoft azure": {"azure"},
-    "google cloud platform": {"gcp", "google cloud"},
-    "ci/cd": {"cicd", "ci cd", "continuous integration", "continuous deployment"},
-    "rest api": {"rest", "restful", "restful api", "rest apis"},
-    "graphql": {"graph ql"},
-    "machine learning": {"ml"},
-    "deep learning": {"dl"},
-    "natural language processing": {"nlp"},
-    "computer vision": {"cv"},
-    "artificial intelligence": {"ai"},
-    "data science": {"data analytics"},
-    "microservices": {"micro services", "micro-services"},
-    "devops": {"dev ops", "dev-ops"},
-    "agile": {"scrum", "kanban"},
-    "html": {"html5"},
-    "css": {"css3", "scss", "sass", "less"},
-    "linux": {"unix", "ubuntu", "centos", "rhel"},
-    "git": {"version control"},
-    "sql": {"structured query language"},
-    "nosql": {"no sql", "non-relational"},
-    "power bi": {"powerbi"},
-    "tableau": {"data visualization"},
-    "apache spark": {"spark", "pyspark"},
-    "hadoop": {"hdfs", "mapreduce"},
-    "snowflake": {"snowflake db"},
-    "nestjs": {"nest", "nest.js", "nest js"},
-    "react native": {"reactnative", "react-native"},
-    "maven": {"apache maven"},
-    "gradle": {"gradle build"},
-    "pytest": {"py.test"},
-    "junit": {"junit5", "junit4"},
-    "k3s": {"k3"},
-    # Mobile
-    "kotlin": {"kt"},
-    "swift": {"swiftui"},
-    "flutter": {"dart"},
-    # ML/AI
-    "tensorflow": {"keras"},
-    "pytorch": {"torch"},
-    "scikit-learn": {"sklearn"},
-    # Testing
-    "selenium": {"webdriver"},
-    "cypress": {"cypress.io"},
-    "playwright": {"pw"},
-    # Data
-    "airflow": {"apache airflow"},
-    "dbt": {"data build tool"},
-    # Frontend
-    "svelte": {"sveltekit"},
-    "nuxt": {"nuxtjs", "nuxt.js"},
-    "remix": {"remix.run"},
-    # BaaS/Cloud
-    "supabase": {"supa"},
-    "firebase": {"firestore"},
-    # Observability
-    "datadog": {"dd"},
-    "grafana": {"grafana cloud"},
-    "prometheus": {"prom"},
-    "splunk": {"splunk cloud"},
-    # AWS Messaging
-    "sqs": {"amazon sqs", "aws sqs"},
-    "sns": {"amazon sns", "aws sns"},
-    # Design
-    "figma": {"figma design"},
-}
-
-# Reverse lookup built once at import time
-_ALIAS_LOOKUP: dict[str, str] = {}
-for _canonical, _aliases in SKILL_ALIASES.items():
-    _ALIAS_LOOKUP[_canonical] = _canonical
-    for _alias in _aliases:
-        _ALIAS_LOOKUP[_alias] = _canonical
+from naukri_server.domain.skill_taxonomy import SKILL_ALIASES, DEFAULT_TAXONOMY
 
 
 def normalize_skill(skill: str) -> str:
     """Normalize a skill string to its canonical form via alias lookup."""
-    s = skill.lower().strip()
-    return _ALIAS_LOOKUP.get(s, s)
+    return DEFAULT_TAXONOMY.normalize(skill)
 
 
 def parse_skills(raw) -> set:
     """Normalize skills from any format (string, list, set) to a canonical lowercase set.
 
     Handles comma-separated strings, lists, tuples, and sets.
-    All skills are normalized through SKILL_ALIASES (e.g., "JS" → "javascript").
+    All skills are normalized through SKILL_ALIASES (e.g., "JS" -> "javascript").
     """
-    if isinstance(raw, set):
-        items = {s for s in raw if s}
-    elif isinstance(raw, str):
-        items = {s.strip() for s in raw.split(",") if s.strip()}
-    elif isinstance(raw, (list, tuple)):
-        items = {s.strip() for s in raw if isinstance(s, str) and s.strip()}
-    else:
-        return set()
-    return {normalize_skill(s) for s in items}
+    return set(DEFAULT_TAXONOMY.parse_set(raw))
 
 
 # ── Bonus Scoring Helpers ────────────────────────────────────────────────────
