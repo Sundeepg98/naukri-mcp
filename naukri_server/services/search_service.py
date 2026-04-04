@@ -7,6 +7,7 @@ I/O-bound functions (API calls, browser automation) remain in the tool modules.
 import re
 
 from naukri_server.config import LAKHS_MULTIPLIER
+from naukri_server.domain import safe_get
 from naukri_server.domain.job import ParsedSalary
 
 __all__ = [
@@ -95,7 +96,7 @@ def parse_salary_data(job: dict) -> dict:
     Thin wrapper around ParsedSalary.from_api() — keeps the same return shape
     so callers (parse_job_detail, tests) don't need changes.
     """
-    salary_detail = job.get("salaryDetail", {})
+    salary_detail = safe_get(job, "salaryDetail", field_name="salary", warn=True, default={})
     parsed = ParsedSalary.from_api(salary_detail)
     # Pass through raw values from the API dict for backward compatibility
     sal_min = salary_detail.get("minimumSalary", 0) if isinstance(salary_detail, dict) else 0
@@ -109,7 +110,7 @@ def parse_salary_data(job: dict) -> dict:
 
 def parse_company_data(job: dict, details_data: dict) -> dict:
     """Extract company details + ambitionbox rating."""
-    company = job.get("companyDetail", {})
+    company = safe_get(job, "companyDetail", field_name="companyDetail", warn=True, default={})
     ambition = job.get("ambitionBoxData") or {}
     ab_details = details_data.get("ambitionBoxDetails", {})
     if not ambition and ab_details:
@@ -119,8 +120,8 @@ def parse_company_data(job: dict, details_data: dict) -> dict:
             "ReviewsCount": ci.get("reviewsCount"),
         }
     return {
-        "company_name": company.get("name"),
-        "company_rating": ambition.get("AggregateRating") or ambition.get("Rating"),
+        "company_name": safe_get(company, "name", field_name="company_name", warn=True),
+        "company_rating": safe_get(ambition, "AggregateRating", "Rating", field_name="company_rating", warn=False),
         "company_reviews_count": ambition.get("ReviewsCount"),
         "company_website": company.get("websiteUrl") if company else None,
         "group_id": company.get("groupId") if company else None,
@@ -168,34 +169,36 @@ def parse_job_detail(details_data: dict, job_id: str, page_url: str,
     """Parse job detail API response (v3 or v4 format) into a structured result dict."""
     from naukri_server.validation import validate_job_detail
 
-    job = details_data.get("jobDetails", details_data)
+    job = safe_get(details_data, "jobDetails", field_name="jobDetails", warn=True, default=details_data)
 
     salary_data = parse_salary_data(job)
     company_data = parse_company_data(job, details_data)
     match_data = parse_match_score(score_data)
 
+    ctx = f"job_id={job_id}"
     is_applied = job.get("isApplied", False)
     external = bool(job.get("applyRedirectUrl"))
+
+    exp_min = safe_get(job, "minimumExperience", field_name="experience_min", warn=True, context=ctx)
+    exp_max = safe_get(job, "maximumExperience", field_name="experience_max", warn=True, context=ctx)
 
     result = {
         "status": "success",
         "job_id": job_id,
-        "title": job.get("title"),
+        "title": safe_get(job, "title", field_name="title", warn=True, context=ctx),
         "company": company_data["company_name"],
         "company_rating": company_data["company_rating"],
         "company_reviews_count": company_data["company_reviews_count"],
         "salary": salary_data["salary"],
-        "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
-        "experience_min": job.get("minimumExperience"),
-        "experience_max": job.get("maximumExperience"),
+        "experience": f"{exp_min or '?'}-{exp_max or '?'} years",
+        "experience_min": exp_min,
+        "experience_max": exp_max,
         "candidates_count": job.get("candidatesCount"),
-        "location": (
-            job.get("cityName")
-            or job.get("citySuburb")
-            or extract_placeholder(job.get("placeholders", []), "location")
-            or job.get("location")
-        ),
-        "description": job.get("description", ""),
+        "location": safe_get(
+            job, "cityName", "citySuburb", "location",
+            field_name="location", warn=True, context=ctx,
+        ) or extract_placeholder(job.get("placeholders", []), "location"),
+        "description": safe_get(job, "description", field_name="description", warn=False, default=""),
         "skills": extract_skills(job.get("keySkills", [])),
         "match_score": match_data["match_score"],
         "match_details": match_data["match_details"],
@@ -204,28 +207,28 @@ def parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "can_apply": not is_applied and not external,
         "vacancies": job.get("vacany"),
         "apply_count": job.get("applyCount"),
-        "hr_name": job.get("contactPerson") or job.get("createdBy"),
+        "hr_name": safe_get(job, "contactPerson", "createdBy", field_name="hr_name", warn=False),
         "hr_email": job.get("contactEmail"),
         "external_apply_url": job.get("applyRedirectUrl"),
         "company_website": company_data["company_website"],
         "notice_period": job.get("noticePeriod"),
         "benefits": job.get("benefits"),
         "group_id": company_data["group_id"],
-        "work_mode": job.get("workMode") or job.get("wfhType"),
-        "posted_date": job.get("createdDate"),
-        "industry": (
-            job.get("industryType")
-            or (job.get("industryTypeGid", {}).get("label")
-                if isinstance(job.get("industryTypeGid"), dict) else None)
-        ),
+        "work_mode": safe_get(job, "workMode", "wfhType", field_name="work_mode", warn=False),
+        "posted_date": safe_get(job, "createdDate", field_name="posted_date", warn=False),
+        "industry": safe_get(
+            job, "industryType",
+            field_name="industry", warn=False,
+        ) or (job.get("industryTypeGid", {}).get("label")
+              if isinstance(job.get("industryTypeGid"), dict) else None),
         "role_category": job.get("roleCategory"),
         "education": format_education(job.get("education")) or job.get("qualification"),
         "job_role": job.get("jobRole"),
         "employment_type": job.get("employmentType"),
         "hybrid_detail": job.get("hybridWfhDetail"),
         "saved": bool(job.get("savedJobFlag")),
-        "valid_through": job.get("validThrough") or job.get("expiryDate"),
-        "department": job.get("department") or job.get("functionalArea"),
+        "valid_through": safe_get(job, "validThrough", "expiryDate", field_name="valid_through", warn=False),
+        "department": safe_get(job, "department", "functionalArea", field_name="department", warn=False),
         "url": page_url,
     }
     # AmbitionBox enrichment from top-level v4 response
@@ -266,8 +269,8 @@ def build_search_result(
     from naukri_server.tools.job_parsing import _parse_job_list
     from naukri_server.validation import validate_job_list
 
-    jobs = _parse_job_list(data.get("jobDetails", []), limit)
-    total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
+    jobs = _parse_job_list(safe_get(data, "jobDetails", field_name="jobDetails", warn=True, default=[]), limit)
+    total = safe_get(data, "noOfJobs", "totalCount", field_name="total_jobs", warn=True, default=len(jobs))
     result = {
         "status": "success",
         "keywords": keywords,
@@ -282,7 +285,7 @@ def build_search_result(
     }
     if search_path == "browser":
         result["clusters"] = data.get("clusters", {})
-    warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
+    warnings = validate_job_list(jobs, safe_get(data, "noOfJobs", field_name="noOfJobs", warn=False), "search")
     if warnings:
         result["warnings"] = warnings
     return result
@@ -295,9 +298,9 @@ def build_recommendations_result(
     from naukri_server.tools.job_parsing import _parse_job_list
     from naukri_server.validation import validate_job_list
 
-    job_details = data.get("jobDetails", [])
+    job_details = safe_get(data, "jobDetails", field_name="jobDetails", warn=True, default=[])
     all_jobs = _parse_job_list(job_details, len(job_details))
-    total = data.get("noOfJobs") or len(all_jobs)
+    total = safe_get(data, "noOfJobs", field_name="total_jobs", warn=True, default=len(all_jobs))
     offset = (page - 1) * limit
     jobs = all_jobs[offset:offset + limit]
     raw_clusters = data.get("clusters") or data.get("recommendedClusters", {})
@@ -336,10 +339,10 @@ def build_similar_jobs_result(
     from naukri_server.tools.job_parsing import _parse_job_list
     from naukri_server.validation import validate_job_list
 
-    sim = data.get("simJobDetails", {})
+    sim = safe_get(data, "simJobDetails", field_name="simJobDetails", warn=True, default={})
     job_details = sim.get("content", []) + sim.get("collaborative", [])
     all_jobs = _parse_job_list(job_details, len(job_details))
-    total = data.get("noOfJobs") or len(all_jobs)
+    total = safe_get(data, "noOfJobs", field_name="total_jobs", warn=True, default=len(all_jobs))
     offset = (page - 1) * limit
     jobs = all_jobs[offset:offset + limit]
     result = {

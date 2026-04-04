@@ -13,6 +13,7 @@ from naukri_server.config import (
     BATCH_FOLLOW_STATUS_API, INTERCEPT_WAIT_TIMEOUT, COMPANY_API_HEADERS,
     BROWSER_MODAL_APPEAR, logger,
 )
+from naukri_server.domain import safe_get
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
@@ -42,21 +43,21 @@ __all__ = [
 
 def parse_company(group: dict) -> dict:
     """Parse a company from the search response."""
-    tags = group.get("groupTags", {})
+    tags = safe_get(group, "groupTags", default={}, field_name="groupTags")
     if not isinstance(tags, dict):
         tags = {}
-    logo = group.get("groupLogo", {})
+    logo = safe_get(group, "groupLogo", default={}, field_name="groupLogo")
     return {
-        "group_id": group.get("groupId"),
-        "name": group.get("groupName"),
+        "group_id": safe_get(group, "groupId", field_name="group_id", warn=True),
+        "name": safe_get(group, "groupName", field_name="company_name", warn=True),
         "type": first(tags.get("businessSize")),
         "industry": first(tags.get("primaryIndustry")),
         "size": first(tags.get("employeesCount")),
         "ownership": first(tags.get("ownershipType")),
-        "rating": group.get("rating"),
-        "review_count": group.get("reviewsCount"),
+        "rating": safe_get(group, "rating", field_name="rating", warn=True),
+        "review_count": safe_get(group, "reviewsCount", field_name="review_count", warn=True),
         "logo_url": logo.get("desktop") if isinstance(logo, dict) else None,
-        "jobs_url": group.get("groupJobsURL"),
+        "jobs_url": safe_get(group, "groupJobsURL", field_name="jobs_url"),
     }
 
 
@@ -101,18 +102,19 @@ async def search_companies(keyword: str, page: int = 1, limit: int = 20) -> dict
         extra_headers=COMPANY_API_HEADERS,
     )
 
-    groups = data.get("groupDetails", [])
+    groups = safe_get(data, "groupDetails", default=[], field_name="groupDetails", warn=True, context=f"keyword={keyword}")
     companies = [parse_company(g) for g in groups]
 
+    total = safe_get(data, "noOfGroups", field_name="noOfGroups", warn=True, context=f"keyword={keyword}")
     result = {
         "status": "success",
         "keyword": keyword,
         "page": page,
-        "total": data.get("noOfGroups"),
+        "total": total,
         "count": len(companies),
         "companies": companies,
     }
-    warnings = validate_company_list(companies, data.get("noOfGroups"))
+    warnings = validate_company_list(companies, total)
     if warnings:
         result["warnings"] = warnings
     return result
@@ -134,18 +136,19 @@ async def get_company_jobs(group_id: str, page: int = 1, limit: int = 20) -> dic
             if not data:
                 return {"status": "error", "message": "Search API response not captured for company jobs.", "error_code": "BROWSER_ERROR"}
 
-            job_details = data.get("jobDetails", [])
+            job_details = safe_get(data, "jobDetails", default=[], field_name="jobDetails", warn=True, context=f"group_id={group_id}")
             jobs = _parse_job_list(job_details, limit)
 
+            total = safe_get(data, "noOfJobs", field_name="noOfJobs", warn=True, context=f"group_id={group_id}")
             result = {
                 "status": "success",
                 "group_id": group_id,
                 "page": page_no,
-                "total": data.get("noOfJobs"),
+                "total": total,
                 "count": len(jobs),
                 "jobs": jobs,
             }
-            warnings = validate_job_list(jobs, data.get("noOfJobs"), "company_jobs")
+            warnings = validate_job_list(jobs, total, "company_jobs")
             if warnings:
                 result["warnings"] = warnings
             return result
@@ -314,25 +317,25 @@ async def batch_follow_status(group_ids: list) -> dict:
         body={"groups": [int(gid) for gid in group_ids]},
     )
 
-    followed = data.get("followedGroups", [])
-    unfollowed = data.get("unfollowedGroups", [])
+    followed = safe_get(data, "followedGroups", default=[], field_name="followedGroups", warn=True)
+    unfollowed = safe_get(data, "unfollowedGroups", default=[], field_name="unfollowedGroups", warn=True)
 
     companies = []
     for g in followed:
         companies.append({
-            "group_id": g.get("id"),
-            "name": g.get("name"),
-            "follower_count": g.get("followerCount"),
+            "group_id": safe_get(g, "id", field_name="group_id", warn=True),
+            "name": safe_get(g, "name", field_name="company_name", warn=True),
+            "follower_count": safe_get(g, "followerCount", field_name="follower_count"),
             "is_followed": True,
-            "logo": g.get("groupLogo"),
+            "logo": safe_get(g, "groupLogo", field_name="logo"),
         })
     for g in unfollowed:
         companies.append({
-            "group_id": g.get("id"),
-            "name": g.get("name"),
-            "follower_count": g.get("followerCount"),
+            "group_id": safe_get(g, "id", field_name="group_id", warn=True),
+            "name": safe_get(g, "name", field_name="company_name", warn=True),
+            "follower_count": safe_get(g, "followerCount", field_name="follower_count"),
             "is_followed": False,
-            "logo": g.get("groupLogo"),
+            "logo": safe_get(g, "groupLogo", field_name="logo"),
         })
 
     return {
@@ -351,10 +354,10 @@ async def get_follow_status(group_ids: list[str]) -> dict:
         COMPANY_FOLLOW_STATUS_API,
         params={"query": query},
     )
-    followed_raw = data.get("followedGroups", [])
+    followed_raw = safe_get(data, "followedGroups", default=[], field_name="followedGroups", warn=True)
     followed_ids = set()
     for g in followed_raw:
-        gid = str(g.get("id", g) if isinstance(g, dict) else g)
+        gid = str(safe_get(g, "id", default=g, field_name="group_id") if isinstance(g, dict) else g)
         followed_ids.add(gid)
 
     followed = [gid for gid in group_ids if gid in followed_ids]
@@ -451,19 +454,19 @@ async def research_company(
                 company_result = await _search_companies(keyword=keyword)
                 group_id = None
                 if company_result.get("status") == "success":
-                    companies = company_result.get("companies", [])
+                    companies = safe_get(company_result, "companies", default=[], field_name="companies", warn=True, context=f"keyword={keyword}")
                     if companies:
-                        group_id = companies[0].get("group_id")
-                        result["company_name"] = companies[0].get("name") or keyword
+                        group_id = safe_get(companies[0], "group_id", field_name="group_id", warn=True, context=f"keyword={keyword}")
+                        result["company_name"] = safe_get(companies[0], "name", default=keyword, field_name="company_name", warn=True, context=f"keyword={keyword}")
 
                 if group_id:
                     # Step 2: Get company jobs by group_id (exact match)
                     jobs_result = await _get_company_jobs(group_id=str(group_id), limit=jobs_limit)
                     if jobs_result.get("status") == "success":
                         result["jobs"] = {
-                            "total": jobs_result.get("total", 0),
-                            "matching": jobs_result.get("count", 0),
-                            "sample": jobs_result.get("jobs", [])[:jobs_limit],
+                            "total": safe_get(jobs_result, "total", default=0, field_name="total", context=f"company_jobs:{keyword}"),
+                            "matching": safe_get(jobs_result, "count", default=0, field_name="count", context=f"company_jobs:{keyword}"),
+                            "sample": safe_get(jobs_result, "jobs", default=[], field_name="jobs", context=f"company_jobs:{keyword}")[:jobs_limit],
                         }
                     else:
                         errors.append(f"Jobs: {jobs_result.get('message', 'unknown error')}")
@@ -472,11 +475,11 @@ async def research_company(
                     from naukri_server.tools.search import naukri_search_jobs
                     jobs_result = await naukri_search_jobs(keywords=keyword, limit=jobs_limit)
                     if jobs_result.get("status") == "success":
-                        jobs = jobs_result.get("jobs", [])
+                        jobs = safe_get(jobs_result, "jobs", default=[], field_name="jobs", context=f"search_fallback:{keyword}")
                         keyword_lower = keyword.lower()
                         matching = [j for j in jobs if keyword_lower in (j.get("company") or "").lower()]
                         result["jobs"] = {
-                            "total": jobs_result.get("total"),
+                            "total": safe_get(jobs_result, "total", field_name="total", context=f"search_fallback:{keyword}"),
                             "matching": len(matching),
                             "sample": matching if matching else jobs[:jobs_limit],
                         }
