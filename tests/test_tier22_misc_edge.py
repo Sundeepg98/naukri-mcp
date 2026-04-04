@@ -28,7 +28,7 @@ class TestUnifiedNotifyEdgeCases:
     # 1a. "noti_description" and "status" fields are preserved
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_latest_field_preserved(self, mock_api):
         mock_api.return_value = {
             "recoJobs": {
@@ -49,7 +49,7 @@ class TestUnifiedNotifyEdgeCases:
     # 1b. total_count used as fallback when noti_count is absent
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_total_count_fallback(self, mock_api):
         # No noti_count — must fall through to total_count
         mock_api.return_value = {
@@ -68,7 +68,7 @@ class TestUnifiedNotifyEdgeCases:
     # 1c. bare "count" used as last-resort fallback
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_bare_count_fallback(self, mock_api):
         # No noti_count, no total_count — must fall through to count
         mock_api.return_value = {

@@ -55,7 +55,7 @@ class TestNotifications:
     async def test_notifications_count_routes(self):
         """count action should call api_get with NOTIFICATION_COUNT_API."""
         from naukri_server.tools.notifications import naukri_notifications
-        with patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"count": 5}
             result = await naukri_notifications(action="count")
             mock_api.assert_awaited_once()
@@ -190,7 +190,7 @@ class TestHelperValidation:
     async def test_fetch_notifications_page_clamped_zero(self):
         """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.notifications import _fetch_notifications
-        with patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"results": []}
             result = await _fetch_notifications(page=0)
             mock_api.assert_awaited()

@@ -18,7 +18,7 @@ class TestRecruiterActivityBuckets:
     """Tests for bucket parsing in _get_recruiter_activity."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_bucket_has_label_and_is_new(self, mock_post):
         """Bucket parsing includes label and is_new fields."""
         mock_post.return_value = {
@@ -53,7 +53,7 @@ class TestRecruiterActivityBuckets:
         assert downloaded["is_new"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_bucket_plain_int_fallback(self, mock_post):
         """Bucket with plain int value (not dict) falls back to count-only."""
         mock_post.return_value = {
@@ -72,7 +72,7 @@ class TestRecruiterActivityItems:
     """Tests for per-activity item parsing in _get_recruiter_activity."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_activity_has_company_master_name_and_is_new(self, mock_post):
         """Per-activity items have company_master_name, is_new, activity_map, meta_job_id."""
         mock_post.return_value = {
@@ -102,7 +102,7 @@ class TestRecruiterActivityItems:
         assert act["meta_job_id"] == "99887766"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_metadata_json_parsing_extracts_jobid(self, mock_post):
         """metaData JSON string parsing extracts jobId."""
         mock_post.return_value = {
@@ -121,7 +121,7 @@ class TestRecruiterActivityItems:
         assert result["activities"][0]["meta_job_id"] == "12345"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_malformed_metadata_does_not_crash(self, mock_post):
         """Malformed metaData JSON doesn't crash — returns None for meta_job_id."""
         mock_post.return_value = {
@@ -138,7 +138,7 @@ class TestRecruiterActivityItems:
         assert result["activities"][0]["meta_job_id"] is None
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_empty_metadata_leaves_meta_job_id_none(self, mock_post):
         """Empty metaData leaves meta_job_id as None."""
         mock_post.return_value = {
@@ -155,7 +155,7 @@ class TestRecruiterActivityItems:
         assert result["activities"][0]["meta_job_id"] is None
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_missing_metadata_key_leaves_meta_job_id_none(self, mock_post):
         """Activity with no metaData key at all leaves meta_job_id as None."""
         mock_post.return_value = {
@@ -172,7 +172,7 @@ class TestRecruiterActivityItems:
         assert result["activities"][0]["meta_job_id"] is None
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_metadata_dict_instead_of_string(self, mock_post):
         """metaData that is already a dict (not JSON string) is handled."""
         mock_post.return_value = {
@@ -1202,7 +1202,7 @@ class TestRecruiterActivityNonDictItemSkipped:
     """Ensure non-dict items in jobseekerActivityList are skipped."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_non_dict_activity_item_skipped(self, mock_post):
         mock_post.return_value = {
             "successResponse": {

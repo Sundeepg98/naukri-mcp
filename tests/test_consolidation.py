@@ -815,7 +815,7 @@ class TestHelperValidation:
     async def test_recruiter_activity_page_clamped(self):
         """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.performance import _get_recruiter_activity
-        with patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"successResponse": {"jobseekerActivityList": [], "activityBucketCount": {}, "count": 0}}
             result = await _get_recruiter_activity(page=0)
             mock_api.assert_awaited()

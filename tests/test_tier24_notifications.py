@@ -33,7 +33,7 @@ def _make_notif(nid="N1", title="Test", message="msg", ntype="JA",
 
 class TestFetchNotificationsListType:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_list_type_response(self, mock_get):
         """API returns a plain list — parsed correctly."""
         mock_get.return_value = [_make_notif("N1", ntype="JA"), _make_notif("N2", ntype="RA")]
@@ -47,7 +47,7 @@ class TestFetchNotificationsListType:
         assert result["notifications"][0]["is_read"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_dict_type_response_notifications_key(self, mock_get):
         """API returns dict with 'notifications' key."""
         mock_get.return_value = {
@@ -63,7 +63,7 @@ class TestFetchNotificationsListType:
         assert result["notifications"][0]["type"] == "SYSTEM"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_dict_type_response_feed_key(self, mock_get):
         """API returns dict with 'feed' key."""
         mock_get.return_value = {
@@ -82,7 +82,7 @@ class TestFetchNotificationsListType:
 
 class TestFetchNotificationsTypeFilter:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_notif_type_filter_case_insensitive(self, mock_get):
         """notif_type filter is case-insensitive substring match."""
         mock_get.return_value = [
@@ -98,7 +98,7 @@ class TestFetchNotificationsTypeFilter:
         assert result.get("filtered_by") == "ja"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_no_filter_returns_all(self, mock_get):
         """Without notif_type, all notifications are returned."""
         mock_get.return_value = [_make_notif("N1", ntype="JA"), _make_notif("N2", ntype="RA")]
@@ -115,7 +115,7 @@ class TestFetchNotificationsTypeFilter:
 
 class TestMarkSingleRead:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.post", new_callable=AsyncMock)
     async def test_mark_single_read_happy_path(self, mock_post):
         mock_post.return_value = {"status": "ok"}
         from naukri_server.tools.notifications import _mark_single_read
@@ -135,7 +135,7 @@ class TestMarkSingleRead:
 
 class TestGetUnifiedNotify:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_all_category_keys_parsed(self, mock_get):
         """All 8 category keys are extracted when present."""
         mock_get.return_value = {
@@ -161,7 +161,7 @@ class TestGetUnifiedNotify:
         assert "recruiterSearch" in result["categories"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_missing_categories_excluded(self, mock_get):
         """Empty/missing category dicts are not included."""
         mock_get.return_value = {
@@ -191,7 +191,7 @@ class TestNaukriNotificationsRouting:
         mock_fetch.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_count_action(self, mock_get):
         mock_get.return_value = {"count": 12}
         from naukri_server.tools.notifications import naukri_notifications
@@ -284,7 +284,7 @@ class TestMarkAllRead:
 
 class TestNaukriAPIErrorHandling:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_count_api_error(self, mock_get):
         mock_get.side_effect = NaukriAPIError(401, "Unauthorized")
         from naukri_server.tools.notifications import naukri_notifications

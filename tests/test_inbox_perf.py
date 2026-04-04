@@ -144,7 +144,7 @@ class TestPerformance:
     """Tests for naukri_server.tools.performance helpers and routing."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_get_search_impressions(self, mock_get):
         mock_get.return_value = {
             "totalSearchAppearances": 150,
@@ -161,7 +161,7 @@ class TestPerformance:
         assert result["days"] == 7
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_get_recruiter_activity(self, mock_post):
         mock_post.return_value = {
             "successResponse": {
@@ -188,7 +188,7 @@ class TestPerformance:
         assert result["buckets"]["VIEWED"]["count"] == 10
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_get_activity_level(self, mock_get):
         mock_get.return_value = {
             "level": "HIGH",

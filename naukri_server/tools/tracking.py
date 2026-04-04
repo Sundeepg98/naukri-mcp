@@ -10,7 +10,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.api import api_get, api_post, NaukriAPIError
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import paginate
+from naukri_server.models import paginate, validate_action_params
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.config import (
     logger, APPLICATION_STATUS_API,
@@ -725,6 +725,22 @@ async def _recruiter_history() -> dict:
 # Application registry — maps action to handler(kwargs) -> dict
 # ---------------------------------------------------------------------------
 
+_VALID_PARAMS_PER_ACTION = {
+    "list": {"status", "date_from", "date_to", "limit", "page", "filter_info"},
+    "detail": {"job_id"},
+    "purge": {"before_date", "dry_run"},
+    "stale": {"days_threshold", "min_stale_score", "limit", "page"},
+    "follow_up": {"days_threshold", "min_stale_score", "limit"},
+    "apply": {"job_id", "answers", "set_reminder_days"},
+    "batch_apply": {"keywords", "location", "experience", "salary_min", "salary_max",
+                    "freshness", "limit", "delay_ms", "max_concurrent",
+                    "set_reminder_days", "sort_by", "work_mode", "job_type",
+                    "company_type", "answers"},
+    "draft_follow_up": {"job_id"},
+    "recruiter_history": set(),
+    "interview_prep": {"job_id"},
+}
+
 _APPLICATION_REGISTRY: dict[str, callable] = {
     "list": lambda **kw: _list_applications(status=kw.get("status"), date_from=kw.get("date_from"), date_to=kw.get("date_to"), limit=kw.get("limit", 50), page=kw.get("page", 1), filter_info=kw.get("filter_info")),
     "detail": lambda **kw: _get_application_detail(kw["job_id"]),
@@ -842,6 +858,23 @@ async def naukri_applications(
                         already_applied, needs_input, errors, pending_questions, results}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ────────────
+    _provided = {
+        "job_id": job_id, "status": status, "date_from": date_from,
+        "date_to": date_to, "before_date": before_date, "dry_run": dry_run if not dry_run == True else None,
+        "days_threshold": days_threshold if days_threshold != 14 else None,
+        "min_stale_score": min_stale_score if min_stale_score != 40 else None,
+        "limit": limit if limit != 50 else None, "page": page if page != 1 else None,
+        "answers": answers, "keywords": keywords, "location": location,
+        "experience": experience, "salary_min": salary_min, "salary_max": salary_max,
+        "sort_by": sort_by, "freshness": freshness, "work_mode": work_mode,
+        "job_type": job_type, "company_type": company_type,
+        "delay_ms": delay_ms if delay_ms != BATCH_APPLY_DEFAULT_DELAY_MS else None,
+        "max_concurrent": max_concurrent if max_concurrent != BATCH_APPLY_DEFAULT_CONCURRENCY else None,
+        "set_reminder_days": set_reminder_days, "filter_info": filter_info,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
     # ── Pre-validation ──────────────────────────────────────────────────
     if action in ("detail", "draft_follow_up", "interview_prep", "apply") and not job_id:
         return {"status": "error", "message": f"{action} requires job_id.", "error_code": "VALIDATION_ERROR"}
@@ -849,6 +882,12 @@ async def naukri_applications(
         return {"status": "error", "message": "purge requires before_date (ISO YYYY-MM-DD).", "error_code": "VALIDATION_ERROR"}
     if action == "batch_apply" and not keywords:
         return {"status": "error", "message": "batch_apply requires keywords.", "error_code": "VALIDATION_ERROR"}
+
+    # ── Helper to attach unused_params to response ───────────────────
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
 
     # ── Special cases with composite lock / pre-validation logic ─────
     if action == "apply":
@@ -859,11 +898,11 @@ async def naukri_applications(
         async with _applications_lock:
             existing = _load_json(APPLICATIONS_FILE)
             if any(str(a.get("job_id")) == str(job_id) for a in existing):
-                return {
+                return _attach_unused({
                     "status": "already_applied",
                     "message": "You have already applied to this job (from local tracking).",
                     "job_id": job_id,
-                }
+                })
 
         async def _do_apply():
             async with _tracking_composite_lock:
@@ -884,7 +923,7 @@ async def naukri_applications(
                         result["reminder_error"] = str(e)
             return result
 
-        return await handle_tool_action(_do_apply, "applications.apply")
+        return _attach_unused(await handle_tool_action(_do_apply, "applications.apply"))
 
     if action == "batch_apply":
         from naukri_server.tools.apply import _batch_apply
@@ -918,7 +957,7 @@ async def naukri_applications(
                         result["reminder_days"] = set_reminder_days
             return result
 
-        return await handle_tool_action(_do_batch_apply, "applications.batch_apply")
+        return _attach_unused(await handle_tool_action(_do_batch_apply, "applications.batch_apply"))
 
     # ── Registry lookup for simple actions ────────────────────────────
     handler = _APPLICATION_REGISTRY.get(action)
@@ -929,7 +968,7 @@ async def naukri_applications(
             "job_id": job_id, "before_date": before_date, "dry_run": dry_run,
             "days_threshold": days_threshold, "min_stale_score": min_stale_score,
         }
-        return await handle_tool_action(lambda: handler(**kw), f"applications.{action}")
+        return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"applications.{action}"))
 
     return {
         "status": "error",

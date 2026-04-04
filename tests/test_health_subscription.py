@@ -205,7 +205,7 @@ class TestSubscriptionStatus:
             },
         }
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await naukri_get_subscription_status()
 
         assert result["status"] == "success"
@@ -221,7 +221,7 @@ class TestSubscriptionStatus:
         """401 NaukriAPIError should be caught by @api_tool and return AUTH_ERROR."""
         from naukri_server.tools.subscription import naukri_get_subscription_status
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock,
                     side_effect=NaukriAPIError(401, "Session expired")):
             result = await naukri_get_subscription_status()
 
@@ -235,7 +235,7 @@ class TestSubscriptionStatus:
         """Non-401 NaukriAPIError should return API_ERROR error_code."""
         from naukri_server.tools.subscription import naukri_get_subscription_status
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock,
                     side_effect=NaukriAPIError(500, "Internal server error")):
             result = await naukri_get_subscription_status()
 
@@ -248,7 +248,7 @@ class TestSubscriptionStatus:
         """Empty API response should return safe defaults (False, empty strings)."""
         from naukri_server.tools.subscription import naukri_get_subscription_status
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock, return_value={}):
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock, return_value={}):
             result = await naukri_get_subscription_status()
 
         assert result["status"] == "success"
@@ -264,7 +264,7 @@ class TestSubscriptionStatus:
         """Generic exceptions should be caught by @api_tool decorator and returned as error."""
         from naukri_server.tools.subscription import naukri_get_subscription_status
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock,
                     side_effect=ConnectionError("Network down")):
             result = await naukri_get_subscription_status()
 
@@ -293,7 +293,7 @@ class TestSubscriptionStatus:
             },
         }
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await naukri_get_subscription_status()
 
         assert result["status"] == "success"
@@ -313,7 +313,7 @@ class TestSubscriptionStatus:
             "servDetails": "not_a_dict",
         }
 
-        with patch("naukri_server.tools.subscription.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.subscription.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await naukri_get_subscription_status()
 
         assert result["status"] == "success"

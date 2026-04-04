@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API, BROWSER_DOM_SETTLE
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.validation import validate_limit, validate_page
@@ -27,7 +27,7 @@ async def _fetch_notifications(limit: int = 20, page: int = 1, notif_type: Optio
     """
     limit = validate_limit(limit)
     page = validate_page(page)
-    data = await api_get(NOTIFICATION_FEED_API, params={
+    data = await api_client.get(NOTIFICATION_FEED_API, params={
         "page": str(page),
         "limit": str(limit),
     })
@@ -66,7 +66,7 @@ async def _fetch_notifications(limit: int = 20, page: int = 1, notif_type: Optio
 
 async def _mark_single_read(notification_id: str, date: str) -> dict:
     """Mark a single notification as read via the API."""
-    await api_post(NOTIFICATION_READ_API, body={
+    await api_client.post(NOTIFICATION_READ_API, body={
         "notificationId": notification_id,
         "createdAt": date,
     })
@@ -82,7 +82,7 @@ async def _get_unified_notify() -> dict:
     Returns 8 notification categories with counts, latest status, and display metadata.
     Single call replaces multiple separate notification API calls.
     """
-    data = await api_get(RECOMMEND_NOTIFY_API)
+    data = await api_client.get(RECOMMEND_NOTIFY_API)
     status_obj = data.get("status", data)
     order = data.get("order", [
         "recoJobs", "appStatus", "criticalActions", "rmj",
@@ -167,7 +167,7 @@ async def naukri_notifications(
     # ── count ──────────────────────────────────────────────────────────
     elif action == "count":
         async def _count():
-            data = await api_get(NOTIFICATION_COUNT_API)
+            data = await api_client.get(NOTIFICATION_COUNT_API)
             return {
                 "status": "success",
                 "count": data.get("count", 0),

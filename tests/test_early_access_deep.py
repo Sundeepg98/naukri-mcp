@@ -61,7 +61,7 @@ async def test_share_with_empty_job_id_returns_validation_error():
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_naukri_api_error_returns_http_status(mock_api_get):
     from naukri_server.api import NaukriAPIError
     mock_api_get.side_effect = NaukriAPIError(status=503, message="Service Unavailable")
@@ -73,7 +73,7 @@ async def test_list_naukri_api_error_returns_http_status(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_generic_exception_returns_api_error(mock_api_get):
     mock_api_get.side_effect = RuntimeError("connection reset")
     from naukri_server.tools.early_access import naukri_early_access
@@ -88,7 +88,7 @@ async def test_list_generic_exception_returns_api_error(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_clamps_page_below_one(mock_api_get):
     """Page values below 1 should be clamped to 1."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
@@ -99,7 +99,7 @@ async def test_list_clamps_page_below_one(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_clamps_limit_above_max(mock_api_get):
     """Limit values above 50 should be clamped to 50."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
@@ -112,7 +112,7 @@ async def test_list_clamps_limit_above_max(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_clamps_limit_below_one(mock_api_get):
     """Limit values below 1 should be clamped to 1."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
@@ -128,7 +128,7 @@ async def test_list_clamps_limit_below_one(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_has_more_true_when_more_pages_exist(mock_api_get):
     """has_more should be True when page * limit < total."""
     mock_api_get.return_value = {
@@ -143,7 +143,7 @@ async def test_list_has_more_true_when_more_pages_exist(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_has_more_false_on_last_page(mock_api_get):
     """has_more should be False when page * limit >= total."""
     mock_api_get.return_value = {
@@ -160,7 +160,7 @@ async def test_list_has_more_false_on_last_page(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_parses_jobdetails_fields(mock_api_get):
     """All parsed job fields are correctly extracted from jobDetails."""
     mock_api_get.return_value = {
@@ -198,7 +198,7 @@ async def test_list_parses_jobdetails_fields(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_falls_back_to_jobs_key(mock_api_get):
     """Should read from 'jobs' key if 'jobDetails' is absent."""
     mock_api_get.return_value = {
@@ -213,7 +213,7 @@ async def test_list_falls_back_to_jobs_key(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_skips_malformed_non_dict_jobs(mock_api_get):
     """Non-dict entries in jobDetails should be silently skipped."""
     mock_api_get.return_value = {
@@ -238,7 +238,7 @@ async def test_list_skips_malformed_non_dict_jobs(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_success_with_quota(mock_api_post):
     """Successful share returns job_id, message, and quota details."""
     mock_api_post.return_value = {
@@ -255,7 +255,7 @@ async def test_share_success_with_quota(mock_api_post):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_success_quota_defaults_when_absent(mock_api_post):
     """Quota fields default to 0/50 when quotaDetails is missing."""
     mock_api_post.return_value = {
@@ -273,7 +273,7 @@ async def test_share_success_quota_defaults_when_absent(mock_api_post):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_non_200_status_returns_error(mock_api_post):
     """A non-200 job status in the response should return status=error."""
     mock_api_post.return_value = {
@@ -287,7 +287,7 @@ async def test_share_non_200_status_returns_error(mock_api_post):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_non_200_no_message_uses_fallback(mock_api_post):
     """If the API returns a non-200 status without a message, a fallback is generated."""
     mock_api_post.return_value = {
@@ -304,7 +304,7 @@ async def test_share_non_200_no_message_uses_fallback(mock_api_post):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_empty_jobs_returns_api_error(mock_api_post):
     """An empty 'jobs' list in the response should produce status=error."""
     mock_api_post.return_value = {"jobs": []}
@@ -320,7 +320,7 @@ async def test_share_empty_jobs_returns_api_error(mock_api_post):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.early_access.api_post", new_callable=AsyncMock)
+@patch("naukri_server.tools.early_access.api_client.post", new_callable=AsyncMock)
 async def test_share_naukri_api_error_returns_http_status(mock_api_post):
     """NaukriAPIError raised during share must be caught and expose http_status."""
     from naukri_server.api import NaukriAPIError

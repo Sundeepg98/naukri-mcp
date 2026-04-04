@@ -4,7 +4,8 @@ import json
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.config import SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API, WIDGET_HEADERS
 from naukri_server.validation import validate_page
 
@@ -21,7 +22,7 @@ VALID_DAYS = {7, 30, 90}
 
 async def _get_search_impressions(days: int = 7) -> dict:
     """Fetch search impression stats from the API and return structured result."""
-    data = await api_get(
+    data = await api_client.get(
         SEARCH_IMPRESSIONS_API,
         params={"days": str(days), "totalAppearances": "1"},
         extra_headers=WIDGET_HEADERS,
@@ -61,7 +62,7 @@ async def _get_recruiter_activity(
     if filter_by:
         body["filterBy"] = filter_by
 
-    data = await api_post(RECRUITER_ACTIVITY_API, body=body)
+    data = await api_client.post(RECRUITER_ACTIVITY_API, body=body)
 
     success = data.get("successResponse", data)
     activities_raw = success.get("jobseekerActivityList", [])
@@ -131,7 +132,7 @@ async def _get_recruiter_activity(
 
 async def _get_activity_level() -> dict:
     """Fetch profile activity level from the API and return structured result."""
-    data = await api_get(ACTIVITY_LEVEL_API, extra_headers=WIDGET_HEADERS)
+    data = await api_client.get(ACTIVITY_LEVEL_API, extra_headers=WIDGET_HEADERS)
     return {
         "status": "success",
         "level": data.get("level", "UNKNOWN"),

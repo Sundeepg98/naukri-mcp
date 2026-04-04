@@ -15,7 +15,7 @@ from naukri_server.api import NaukriAPIError
 
 class TestGetSearchImpressions:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_happy_path(self, mock_get):
         """Returns structured result with all expected keys."""
         mock_get.return_value = {
@@ -39,7 +39,7 @@ class TestGetSearchImpressions:
         assert result["top_keywords"] == {"python": 10, "django": 5}
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_widget_headers_passed(self, mock_get):
         """WIDGET_HEADERS (appid:109) must be passed as extra_headers."""
         mock_get.return_value = {}
@@ -58,7 +58,7 @@ class TestGetSearchImpressions:
 
 class TestGetRecruiterActivity:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_happy_path_with_activities(self, mock_post):
         """Returns activities list and bucket counts."""
         mock_post.return_value = {
@@ -101,7 +101,7 @@ class TestGetRecruiterActivity:
         assert result["buckets"]["VIEWED"]["count"] == 5
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_bucket_as_scalar(self, mock_post):
         """Bucket entries that are scalars (not dicts) are handled."""
         mock_post.return_value = {
@@ -127,7 +127,7 @@ class TestGetRecruiterActivity:
         assert "Invalid filter_by" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_filter_by_valid_uppercase(self, mock_post):
         """Valid filter_by 'viewed' is uppercased and accepted."""
         mock_post.return_value = {"successResponse": {"count": 0, "jobseekerActivityList": [], "activityBucketCount": {}}}
@@ -139,7 +139,7 @@ class TestGetRecruiterActivity:
         assert body.get("filterBy") == "VIEWED"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_metadata_json_parse(self, mock_post):
         """metaData JSON string is parsed to extract jobId."""
         mock_post.return_value = {
@@ -156,7 +156,7 @@ class TestGetRecruiterActivity:
         assert result["activities"][0]["meta_job_id"] == "J777"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_metadata_parse_failure_nonfatal(self, mock_post):
         """Malformed metaData JSON does not crash — meta_job_id stays None."""
         mock_post.return_value = {
@@ -174,7 +174,7 @@ class TestGetRecruiterActivity:
         assert result["activities"][0]["meta_job_id"] is None
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_has_more_computed(self, mock_post):
         """has_more is True when page*size < total."""
         mock_post.return_value = {
@@ -195,7 +195,7 @@ class TestGetRecruiterActivity:
 
 class TestGetActivityLevel:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_happy_path(self, mock_get):
         mock_get.return_value = {
             "level": "HIGH",
@@ -213,7 +213,7 @@ class TestGetActivityLevel:
         assert result["profile_updated"] is True
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_widget_headers_passed(self, mock_get):
         """WIDGET_HEADERS must be passed for activity_level endpoint."""
         mock_get.return_value = {}

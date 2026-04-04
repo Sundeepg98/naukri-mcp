@@ -10,6 +10,7 @@ from naukri_server.api import api_get
 from naukri_server.cache import _load_cache, _cache_lock
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE
+from naukri_server.models import validate_action_params
 from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
 from naukri_server.utils import TtlCache
 
@@ -593,6 +594,22 @@ def _make_salary_benchmark_handler(**kw):
         timeout_seconds=kw.get("timeout_seconds", 120),
     )
 
+_VALID_PARAMS_PER_INSIGHT = {
+    "applications": {"days"},
+    "salary": {"designation"},
+    "cached_answers": {"action", "key", "new_answer"},
+    "match_analytics": {"days"},
+    "match_quality": {"days"},
+    "skill_gap": {"keywords", "use_recommendations", "sample_size",
+                  "include_assessments", "timeout_seconds"},
+    "salary_benchmark": {"keywords", "location", "sample_size",
+                         "freshness", "timeout_seconds"},
+    "taxonomy": set(),
+    "profile_prompts": set(),
+    "conversion_funnel": {"days"},
+    "status_changes": {"days"},
+}
+
 _INSIGHT_REGISTRY: dict[str, callable] = {
     "applications":     lambda **kw: _application_insights(days=kw.get("days", 30)),
     "salary":           lambda **kw: _salary_position(designation=kw.get("designation")),
@@ -679,6 +696,18 @@ async def naukri_insights(
         - status_changes: {status, total_changes, positive_changes, positive: [{job_id, title, old_status, new_status, transition_type}], neutral: [...], sync_method, last_sync}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen insight_type ────
+    _provided = {
+        "action": action, "key": key, "new_answer": new_answer,
+        "days": days if days != 30 else None, "designation": designation,
+        "keywords": keywords, "use_recommendations": use_recommendations if not use_recommendations else None,
+        "sample_size": sample_size if sample_size != 20 else None,
+        "include_assessments": include_assessments if not include_assessments else None,
+        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
+        "location": location, "freshness": freshness,
+    }
+    _unused = validate_action_params(insight_type, _provided, _VALID_PARAMS_PER_INSIGHT)
+
     # ── Pre-validation ──────────────────────────────────────────────
     if insight_type == "salary_benchmark" and not keywords:
         return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
@@ -692,7 +721,7 @@ async def naukri_insights(
             "error_code": "VALIDATION_ERROR",
         }
 
-    return await handle_tool_action(
+    result = await handle_tool_action(
         lambda: handler(
             action=action, key=key, new_answer=new_answer,
             days=days, designation=designation, keywords=keywords,
@@ -702,3 +731,6 @@ async def naukri_insights(
         ),
         f"insights.{insight_type}",
     )
+    if _unused and isinstance(result, dict):
+        result["unused_params"] = _unused
+    return result

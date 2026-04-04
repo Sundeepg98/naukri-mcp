@@ -1,6 +1,7 @@
 """Subscription tools — Naukri 360 Pro status, promo codes, and login verification."""
 
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.config import N360_CONFIG_API
 
 
@@ -13,7 +14,7 @@ async def _get_subscription_status() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_get(N360_CONFIG_API)
+        data = await api_client.get(N360_CONFIG_API)
 
         # Extract user state
         user_state = data.get("user", data.get("userState", {}))

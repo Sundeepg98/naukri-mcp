@@ -18,7 +18,7 @@ class TestSearchImpressionsWidgetHeaders:
     """Tests for _get_search_impressions in performance.py."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_passes_widget_headers(self, mock_api):
         """_get_search_impressions passes extra_headers containing appid:109 and systemid:109."""
         mock_api.return_value = {}
@@ -30,7 +30,7 @@ class TestSearchImpressionsWidgetHeaders:
         assert extra_headers.get("systemid") == "109"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_keywords_extracted(self, mock_api):
         """_get_search_impressions extracts searchKeyWords into top_keywords."""
         mock_api.return_value = {
@@ -43,7 +43,7 @@ class TestSearchImpressionsWidgetHeaders:
         assert result["top_keywords"] == {"python": 73, "aws": 63}
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_days_param_passed(self, mock_api):
         """_get_search_impressions forwards days as a string param to api_get."""
         mock_api.return_value = {}
@@ -62,7 +62,7 @@ class TestActivityLevelWidgetHeaders:
     """Tests for _get_activity_level in performance.py."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_passes_widget_headers(self, mock_api):
         """_get_activity_level passes extra_headers containing appid:109 and systemid:109."""
         mock_api.return_value = {}
@@ -74,7 +74,7 @@ class TestActivityLevelWidgetHeaders:
         assert extra_headers.get("systemid") == "109"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_level_parsing(self, mock_api):
         """_get_activity_level parses all four fields from the API response."""
         mock_api.return_value = {
@@ -92,7 +92,7 @@ class TestActivityLevelWidgetHeaders:
         assert result["profile_updated"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_missing_level_defaults(self, mock_api):
         """_get_activity_level defaults level to 'UNKNOWN' when missing from response."""
         mock_api.return_value = {}
@@ -110,7 +110,7 @@ class TestRecruiterActivitySize100:
     """Tests for default and custom size in _get_recruiter_activity."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_default_size_100(self, mock_post):
         """_get_recruiter_activity called with no args sends size=100 in the POST body."""
         mock_post.return_value = {
@@ -128,7 +128,7 @@ class TestRecruiterActivitySize100:
         assert body.get("size") == 100
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_custom_size_respected(self, mock_post):
         """_get_recruiter_activity called with size=50 sends size=50 in the POST body."""
         mock_post.return_value = {
@@ -145,7 +145,7 @@ class TestRecruiterActivitySize100:
         assert body.get("size") == 50
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_all_activities_returned(self, mock_post):
         """_get_recruiter_activity returns all 95 activities from the response."""
         activities_raw = [
@@ -175,7 +175,7 @@ class TestUnifiedNotify:
     """Tests for _get_unified_notify in notifications.py."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_all_categories_parsed(self, mock_api):
         """_get_unified_notify parses all 8 known category keys when present."""
         mock_api.return_value = {
@@ -197,7 +197,7 @@ class TestUnifiedNotify:
             assert key in categories, f"Expected category '{key}' missing from result"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_empty_categories_skipped(self, mock_api):
         """_get_unified_notify skips categories with no data (empty dict or missing)."""
         mock_api.return_value = {
@@ -216,7 +216,7 @@ class TestUnifiedNotify:
         assert "rmj" not in result["categories"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_count_extraction(self, mock_api):
         """_get_unified_notify extracts noti_count correctly (e.g. 1368)."""
         mock_api.return_value = {
@@ -227,7 +227,7 @@ class TestUnifiedNotify:
         assert result["categories"]["recoJobs"]["count"] == 1368
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_has_new_logic(self, mock_api):
         """has_new is True when noti_count > 0, False when noti_count == 0."""
         mock_api.return_value = {
@@ -244,7 +244,7 @@ class TestUnifiedNotify:
         assert "recoJobs" in result["categories"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_status_preserved(self, mock_api):
         """_get_unified_notify preserves the 'status' field as 'latest_status'."""
         mock_api.return_value = {

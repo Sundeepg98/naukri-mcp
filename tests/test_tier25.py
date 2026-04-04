@@ -98,7 +98,7 @@ class TestRecruiterActivityExtraFields:
     """Verify new recruiter fields are extracted."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_extra_fields_present(self, mock_post):
         """New fields (domain_expertise, last_active, etc.) are extracted."""
         mock_post.return_value = {
@@ -140,7 +140,7 @@ class TestRecruiterActivityExtraFields:
         assert act["user_following"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_extra_fields_missing_graceful(self, mock_post):
         """Missing extra fields default to empty/False/0."""
         mock_post.return_value = {
@@ -169,7 +169,7 @@ class TestRecruiterActivityExtraFields:
         assert act["user_following"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.performance.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.performance.api_client.post", new_callable=AsyncMock)
     async def test_international_string_zero(self, mock_post):
         """isInternational='0' maps to False."""
         mock_post.return_value = {
@@ -204,7 +204,7 @@ class TestUnifiedNotifyEnrichment:
     """Verify enriched unified notify parsing."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_full_response_parsing(self, mock_get):
         """All category fields are extracted from full response."""
         mock_get.return_value = {
@@ -268,7 +268,7 @@ class TestUnifiedNotifyEnrichment:
         assert rs["count"] == 1368
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_empty_categories_skipped(self, mock_get):
         """Empty or non-dict categories are skipped."""
         mock_get.return_value = {
@@ -287,7 +287,7 @@ class TestUnifiedNotifyEnrichment:
         assert result["total_types"] == 0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_default_order_when_missing(self, mock_get):
         """Uses default order when response has no order field."""
         mock_get.return_value = {
@@ -305,7 +305,7 @@ class TestUnifiedNotifyEnrichment:
         assert len(result["display_order"]) == 8  # default 8 categories
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.notifications.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_show_on_gnb_filtering(self, mock_get):
         """total_types only counts categories with showOnGnb=True."""
         mock_get.return_value = {

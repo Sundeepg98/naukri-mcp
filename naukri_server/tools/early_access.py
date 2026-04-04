@@ -3,7 +3,7 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger, EARLY_ACCESS_TRACKING_FILE
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.utils import load_json_with_backup, save_json_atomic
@@ -63,7 +63,7 @@ async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
     """Fetch early access roles from the API and return structured result."""
     limit = validate_limit(limit)
     page = validate_page(page)
-    data = await api_get(
+    data = await api_client.get(
         EARLY_ACCESS_API,
         params={"pageNo": str(page), "noOfResults": str(limit)},
     )
@@ -101,7 +101,7 @@ async def _list_early_access_roles(page: int = 1, limit: int = 20) -> dict:
 
 async def _share_interest(job_id: str) -> dict:
     """Express interest in an early access role via the apply workflow API."""
-    data = await api_post(
+    data = await api_client.post(
         APPLY_WORKFLOW_API,
         body={
             "strJobsarr": [str(job_id)],
