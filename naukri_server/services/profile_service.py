@@ -1,6 +1,7 @@
 """Profile service — business logic for profile fetch, caching, dashboard, and audit."""
 
 from naukri_server.api import NaukriAPIError
+from naukri_server.domain.profile_completeness import CompletionReport
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
     DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API,
@@ -214,165 +215,28 @@ async def _get_profile() -> dict:
 
 
 async def _audit_profile() -> dict:
-    """Audit profile and return actionable improvement suggestions (internal helper)."""
+    """Audit profile and return actionable improvement suggestions (internal helper).
+
+    I/O: fetches profile + completeness percentage.
+    Pure computation delegated to CompletionReport.from_profile().
+    """
     try:
-        # Get profile data
+        # --- I/O: fetch profile data ---
         profile_result = await _get_profile()
         if profile_result.get("status") != "success":
             return profile_result
 
-        # Get completeness percentage
+        # --- I/O: fetch completeness percentage ---
         from naukri_server.tools.assessments import _get_profile_completeness
         completeness_result = await _get_profile_completeness()
         completeness_pct = None
         if completeness_result.get("status") == "success":
             completeness_pct = completeness_result.get("completeness_percent")
 
-        # Analyze sections
-        strengths = []
-        gaps = []
+        # --- Pure computation (domain object) ---
+        report = CompletionReport.from_profile(profile_result, completeness_pct)
 
-        # Check resume headline
-        # Note: headline is not directly in profile API but we can check key_skills
-        if profile_result.get("key_skills"):
-            skills = profile_result["key_skills"]
-            if isinstance(skills, str):
-                skill_count = len([s.strip() for s in skills.split(",") if s.strip()])
-            elif isinstance(skills, list):
-                skill_count = len(skills)
-            else:
-                skill_count = 0
-
-            if skill_count >= 10:
-                strengths.append(f"Good skill coverage ({skill_count} skills listed)")
-            elif skill_count > 0:
-                gaps.append({
-                    "section": "Key Skills",
-                    "action": f"Add more skills (currently {skill_count}, aim for 15+)",
-                    "impact": "high",
-                })
-        else:
-            gaps.append({
-                "section": "Key Skills",
-                "action": "Add relevant skills to your profile",
-                "impact": "high",
-            })
-
-        # Check employment history
-        employment = profile_result.get("employment", [])
-        if employment:
-            strengths.append(f"Employment history present ({len(employment)} entries)")
-            # Check if current job has end_date "Present"
-            current = [e for e in employment if e.get("end_date") == "Present"]
-            if not current:
-                gaps.append({
-                    "section": "Employment",
-                    "action": "Mark your current job (no entry shows 'Present')",
-                    "impact": "medium",
-                })
-        else:
-            gaps.append({
-                "section": "Employment",
-                "action": "Add your employment history",
-                "impact": "high",
-            })
-
-        # Check education
-        education = profile_result.get("education", [])
-        if education:
-            strengths.append(f"Education details present ({len(education)} entries)")
-        else:
-            gaps.append({
-                "section": "Education",
-                "action": "Add your educational qualifications",
-                "impact": "medium",
-            })
-
-        # Check CTC info
-        if profile_result.get("current_ctc"):
-            strengths.append("Current CTC specified")
-        else:
-            gaps.append({
-                "section": "Current CTC",
-                "action": "Add your current CTC for better job matching",
-                "impact": "medium",
-            })
-
-        if profile_result.get("expected_ctc"):
-            strengths.append("Expected CTC specified")
-        else:
-            gaps.append({
-                "section": "Expected CTC",
-                "action": "Add your expected CTC to filter relevant jobs",
-                "impact": "medium",
-            })
-
-        # Check notice period
-        if profile_result.get("notice_period"):
-            strengths.append(f"Notice period set: {profile_result['notice_period']}")
-        else:
-            gaps.append({
-                "section": "Notice Period",
-                "action": "Set your notice period — recruiters filter by availability",
-                "impact": "high",
-            })
-
-        # Check skills with experience
-        skills_exp = profile_result.get("skills_with_experience", [])
-        if skills_exp:
-            with_years = [s for s in skills_exp if s.get("experience_years", 0) > 0]
-            if with_years:
-                strengths.append(f"{len(with_years)} skills have experience years specified")
-            if len(skills_exp) > len(with_years):
-                gaps.append({
-                    "section": "IT Skills",
-                    "action": f"Add experience years for {len(skills_exp) - len(with_years)} skills missing them",
-                    "impact": "medium",
-                })
-
-        # Calculate grade
-        if completeness_pct is not None:
-            if completeness_pct >= 80:
-                grade = "A"
-            elif completeness_pct >= 60:
-                grade = "B"
-            elif completeness_pct >= 40:
-                grade = "C"
-            else:
-                grade = "D"
-        else:
-            # Estimate from gaps
-            if len(gaps) == 0:
-                grade = "A"
-            elif len(gaps) <= 2:
-                grade = "B"
-            elif len(gaps) <= 4:
-                grade = "C"
-            else:
-                grade = "D"
-
-        # Tips
-        tips = []
-        if grade in ("C", "D"):
-            tips.append("Profiles with 80%+ completeness get 3x more recruiter views")
-        if not any(g["section"] == "Key Skills" for g in gaps):
-            tips.append("Update your skills regularly to match trending job requirements")
-        else:
-            tips.append("Profiles with 15+ skills appear in more search results")
-        tips.append("Use naukri_profile(action='boost') daily to stay in 'recently active' searches")
-        if gaps:
-            high_impact = [g for g in gaps if g["impact"] == "high"]
-            if high_impact:
-                tips.append(f"Priority: Fix {len(high_impact)} high-impact gap(s) first")
-
-        return {
-            "status": "success",
-            "completeness_pct": completeness_pct,
-            "grade": grade,
-            "strengths": strengths,
-            "gaps": gaps,
-            "tips": tips,
-        }
+        return {"status": "success", **report.to_dict()}
     except Exception as e:
         return {"status": "error", "message": f"Profile audit failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
