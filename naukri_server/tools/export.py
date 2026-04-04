@@ -9,24 +9,10 @@ from typing import Optional
 
 from naukri_server.config import logger, EXPORTS_DIR
 
+# Re-export from service layer for backward compatibility
+from naukri_server.services.sync_service import _flatten_for_csv  # noqa: F401
+
 _EXPORTS_DIR = EXPORTS_DIR
-
-
-def _flatten_for_csv(records: list[dict]) -> list[dict]:
-    """Flatten nested dicts and lists for CSV output."""
-    flat = []
-    for rec in records:
-        row = {}
-        for k, v in rec.items():
-            if isinstance(v, list):
-                row[k] = ", ".join(str(i) for i in v)
-            elif isinstance(v, dict):
-                for sub_k, sub_v in v.items():
-                    row[f"{k}.{sub_k}"] = sub_v if not isinstance(sub_v, (list, dict)) else str(sub_v)
-            else:
-                row[k] = v
-        flat.append(row)
-    return flat
 
 
 async def _export_data(

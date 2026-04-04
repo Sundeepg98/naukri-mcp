@@ -18,15 +18,19 @@ from naukri_server.config import (
     AUTO_PURGE_DAYS,
 )
 from naukri_server.events import event_bus, ApplicationStatusChanged
-# _load_json, _save_json, _applications_lock removed — SQLite handles persistence & concurrency
+
+# Re-export pure business logic from service layer for backward compatibility.
+# Tests import these names from naukri_server.tools.sync — keep them importable.
+from naukri_server.services.sync_service import (  # noqa: F401
+    _parse_applied_jobs,
+    _parse_saved_jobs,
+    _map_naukri_status,
+)
 
 
-# URL patterns for browser interception (discovered)
-_APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
-_SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
-
+# ---------------------------------------------------------------------------
 # Sync state persistence — path comes from config.SYNC_STATE_FILE
-
+# ---------------------------------------------------------------------------
 
 def _load_sync_state() -> dict:
     if SYNC_STATE_FILE.exists():
@@ -55,6 +59,118 @@ async def _load_sync_state_async() -> dict:
 
 async def _save_sync_state_async(state: dict):
     await asyncio.to_thread(_save_sync_state, state)
+
+
+# ---------------------------------------------------------------------------
+# Merge logic
+# ---------------------------------------------------------------------------
+
+def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
+    """Merge remote applied jobs into local list. Mutates local_apps in place.
+
+    Rules:
+    - Existing job_id: update status/title/company from remote, preserve local fields.
+    - New job_id: add with source="naukri_sync".
+    - Local-only jobs are left untouched.
+    """
+    # Deduplicate local_apps by job_id (keep last entry per id)
+    local_by_id = {}
+    for a in local_apps:
+        jid = a.get("job_id")
+        if jid:
+            local_by_id[jid] = a
+    now = datetime.now(timezone.utc).isoformat()
+
+    new_added = 0
+    updated = 0
+    unchanged = 0
+    remote_ids = set()
+
+    for rj in remote_jobs:
+        rid = rj["job_id"]
+        remote_ids.add(rid)
+
+        if rid in local_by_id:
+            existing = local_by_id[rid]
+            changed = False
+            for field in ("title", "company", "status", "recruiter_active", "apply_type",
+              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
+                if rj.get(field) is not None and rj[field] != existing.get(field):
+                    existing[field] = rj[field]
+                    changed = True
+            for field in ("applied_date", "salary", "location", "url"):
+                if rj.get(field) is not None and field not in existing:
+                    existing[field] = rj[field]
+            if changed:
+                existing["last_synced"] = now
+                updated += 1
+            else:
+                unchanged += 1
+        else:
+            entry = {
+                "job_id": rid,
+                "title": rj.get("title"),
+                "company": rj.get("company"),
+                "status": rj.get("status", "applied"),
+                "applied_at": rj.get("applied_date") or now,
+                "source": "naukri_sync",
+                "last_synced": now,
+            }
+            for k, v in rj.items():
+                if k not in entry and v is not None:
+                    entry[k] = v
+            local_by_id[rid] = entry
+            new_added += 1
+
+    # Rebuild local_apps from deduplicated dict (preserves merge results)
+    local_apps.clear()
+    local_apps.extend(local_by_id.values())
+
+    local_only = sum(1 for a in local_apps
+                     if a.get("job_id") and a["job_id"] not in remote_ids)
+
+    return {"new_added": new_added, "updated": updated,
+            "unchanged": unchanged, "local_only": local_only}
+
+
+def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
+    """Merge remote saved jobs into local list. Mutates local_saved in place."""
+    local_ids = {j["job_id"] for j in local_saved if j.get("job_id")}
+    now = datetime.now(timezone.utc).isoformat()
+
+    new_added = 0
+    already_local = 0
+    remote_ids = set()
+
+    for rj in remote_jobs:
+        rid = rj["job_id"]
+        remote_ids.add(rid)
+
+        if rid in local_ids:
+            already_local += 1
+        else:
+            local_saved.append({
+                "job_id": rid,
+                "title": rj.get("title"),
+                "company": rj.get("company"),
+                "saved_at": rj.get("saved_date") or now,
+                "source": "naukri_sync",
+                "last_synced": now,
+                **{k: v for k, v in rj.items()
+                   if k not in ("job_id", "title", "company", "saved_date") and v is not None},
+            })
+            new_added += 1
+
+    local_only = sum(1 for j in local_saved
+                     if j.get("job_id") and j["job_id"] not in remote_ids)
+
+    return {"new_added": new_added, "already_local": already_local,
+            "local_only": local_only}
+
+
+# URL patterns for browser interception (discovered)
+_APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
+_SAVED_JOBS_URL_PATTERN = "savedJobs/detail"  # matches /jobapi/v3/user/savedJobs/detail
 
 
 # ---------------------------------------------------------------------------
@@ -324,239 +440,6 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 
         logger.info("HTML scrape: %d applied jobs across %d page(s)", len(all_jobs), current_page)
         return all_jobs
-
-
-# ---------------------------------------------------------------------------
-# Parsers (defensive multi-key lookups for unknown schemas)
-# ---------------------------------------------------------------------------
-
-def _parse_applied_jobs(data) -> list:
-    """Parse Naukri applied-jobs API response into normalized format.
-
-    Handles two schemas:
-    - History API (applyDetails): {jobId, jobTitle, company, appliedDate, location, ...}
-    - Generic fallback: {jobs, jobDetails, applications, data, ...}
-    """
-    items = []
-
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("applyDetails", "appliedJobs", "jobs", "jobDetails",
-                     "applications", "data", "appliedJobList", "results"):
-            if key in data and isinstance(data[key], list):
-                items = data[key]
-                break
-
-    jobs = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        job_id = str(item.get("jobId") or item.get("job_id") or item.get("id") or "")
-        if not job_id:
-            continue
-
-        # Extract status — history API uses statusMsg or nested status list
-        raw_status = item.get("statusMsg") or item.get("status") or item.get("applicationStatus")
-        status_list = []
-        if isinstance(raw_status, list):
-            status_list = raw_status
-            # History API: status is a list of {statusMsg, statusDate, ...}
-            raw_status = raw_status[0].get("statusMsg") if raw_status and isinstance(raw_status[0], dict) else raw_status
-
-        # Extract view count from status array (statusId=4 = "Viewed")
-        view_count = None
-        last_viewed = None
-        for s in status_list:
-            if isinstance(s, dict) and s.get("statusId") == 4:
-                view_count = s.get("count", 0)
-                last_viewed = s.get("modifiedDate")
-                break
-
-        jobs.append({
-            "job_id": job_id,
-            "title": item.get("jobTitle") or item.get("title") or item.get("designation"),
-            "company": item.get("company") or item.get("companyName"),
-            "status": _map_naukri_status(raw_status),
-            "applied_date": item.get("appliedDate") or item.get("applied_date") or item.get("createdDate"),
-            "salary": (item.get("salary")
-                       or (item.get("salaryDetail", {}).get("label")
-                           if isinstance(item.get("salaryDetail"), dict) else None)),
-            "location": item.get("location") or item.get("cityName"),
-            "url": item.get("jdUrl") or item.get("url"),
-            "apply_type": item.get("applyType"),
-            "recruiter_active": item.get("isRecruiterActive"),
-            "ars_score": item.get("arsScore"),
-            "star_rating": item.get("starRating"),
-            "is_open": item.get("isOpen") == "true" if item.get("isOpen") is not None else None,
-            "job_activity": item.get("jobActivity"),
-            "job_activity_date": item.get("jobActivityDate"),
-            "apply_flow_type": item.get("applyFlowType"),
-            "is_crawled": item.get("isCrawled", False),
-            "company_rating": item.get("companyRating"),
-            "view_count": view_count,
-            "last_viewed": last_viewed,
-        })
-    return jobs
-
-
-def _parse_saved_jobs(data) -> list:
-    """Parse Naukri saved-jobs API response into normalized format."""
-    items = []
-
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("savedJobs", "jobs", "jobDetails", "data",
-                     "savedJobList", "results", "bookmarks"):
-            if key in data and isinstance(data[key], list):
-                items = data[key]
-                break
-
-    jobs = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        job_id = str(item.get("jobId") or item.get("job_id") or item.get("id") or "")
-        if not job_id:
-            continue
-        jobs.append({
-            "job_id": job_id,
-            "title": item.get("title") or item.get("jobTitle") or item.get("designation"),
-            "company": item.get("companyName") or item.get("company"),
-            "saved_date": item.get("savedDate") or item.get("createdDate") or item.get("savedAt"),
-            "salary": item.get("salary"),
-            "location": item.get("location") or item.get("cityName"),
-            "url": item.get("url") or item.get("jdUrl"),
-        })
-    return jobs
-
-
-def _map_naukri_status(status) -> str:
-    """Map Naukri's internal status labels to our tracking statuses."""
-    if not status:
-        return "applied"
-    s = str(status).lower()
-    mapping = {
-        "applied": "applied",
-        "viewed": "viewed_by_recruiter",
-        "shortlisted": "shortlisted",
-        "rejected": "rejected",
-        "not interested": "rejected",
-        "interview": "interview",
-        "hired": "hired",
-    }
-    for pattern, local_status in mapping.items():
-        if pattern in s:
-            return local_status
-    return s
-
-
-# ---------------------------------------------------------------------------
-# Merge logic
-# ---------------------------------------------------------------------------
-
-def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
-    """Merge remote applied jobs into local list. Mutates local_apps in place.
-
-    Rules:
-    - Existing job_id: update status/title/company from remote, preserve local fields.
-    - New job_id: add with source="naukri_sync".
-    - Local-only jobs are left untouched.
-    """
-    # Deduplicate local_apps by job_id (keep last entry per id)
-    local_by_id = {}
-    for a in local_apps:
-        jid = a.get("job_id")
-        if jid:
-            local_by_id[jid] = a
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    updated = 0
-    unchanged = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_by_id:
-            existing = local_by_id[rid]
-            changed = False
-            for field in ("title", "company", "status", "recruiter_active", "apply_type",
-              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
-                if rj.get(field) is not None and rj[field] != existing.get(field):
-                    existing[field] = rj[field]
-                    changed = True
-            for field in ("applied_date", "salary", "location", "url"):
-                if rj.get(field) is not None and field not in existing:
-                    existing[field] = rj[field]
-            if changed:
-                existing["last_synced"] = now
-                updated += 1
-            else:
-                unchanged += 1
-        else:
-            entry = {
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "status": rj.get("status", "applied"),
-                "applied_at": rj.get("applied_date") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-            }
-            for k, v in rj.items():
-                if k not in entry and v is not None:
-                    entry[k] = v
-            local_by_id[rid] = entry
-            new_added += 1
-
-    # Rebuild local_apps from deduplicated dict (preserves merge results)
-    local_apps.clear()
-    local_apps.extend(local_by_id.values())
-
-    local_only = sum(1 for a in local_apps
-                     if a.get("job_id") and a["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "updated": updated,
-            "unchanged": unchanged, "local_only": local_only}
-
-
-def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
-    """Merge remote saved jobs into local list. Mutates local_saved in place."""
-    local_ids = {j["job_id"] for j in local_saved if j.get("job_id")}
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    already_local = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_ids:
-            already_local += 1
-        else:
-            local_saved.append({
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "saved_at": rj.get("saved_date") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-                **{k: v for k, v in rj.items()
-                   if k not in ("job_id", "title", "company", "saved_date") and v is not None},
-            })
-            new_added += 1
-
-    local_only = sum(1 for j in local_saved
-                     if j.get("job_id") and j["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "already_local": already_local,
-            "local_only": local_only}
 
 
 # ---------------------------------------------------------------------------
