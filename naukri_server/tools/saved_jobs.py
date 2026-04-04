@@ -161,7 +161,9 @@ async def naukri_saved_jobs(
     limit: int = 50,
     page: int = 1,
 ) -> dict:
-    """Unified saved/bookmarked jobs management — list, save, unsave, and sync.
+    """[Deprecated — use naukri_list_saved_jobs, naukri_save_job, naukri_unsave_job, naukri_sync_saved_jobs instead]
+
+    Unified saved/bookmarked jobs management — list, save, unsave, and sync.
 
     Actions:
       - "list": Get saved/bookmarked jobs (use limit/page for pagination)
@@ -224,3 +226,69 @@ async def naukri_saved_jobs(
     # -- unknown action -----------------------------------------------------
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave, sync", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Single-purpose MCP tools (preferred over the unified naukri_saved_jobs)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
+    """List your saved/bookmarked jobs with pagination.
+
+    Args:
+        limit: Max results per page (default 50)
+        page: Page number (default 1)
+
+    Returns:
+        {status, total, count, page, has_more, saved_jobs: [...]}
+    """
+    return await _list_saved_jobs(limit=limit, page=page)
+
+
+@mcp.tool()
+async def naukri_save_job(
+    job_id: str,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    notes: Optional[str] = None,
+    sync_to_naukri: bool = False,
+) -> dict:
+    """Save/bookmark a job for later review.
+
+    Args:
+        job_id: The Naukri job ID to save (required)
+        title: Job title for display (optional)
+        company: Company name for display (optional)
+        notes: Personal notes about this job (optional)
+        sync_to_naukri: If True, also save the job on Naukri's backend (default False)
+
+    Returns:
+        {status: "success", action: "saved", job_id, total_saved, synced_remote, already_applied}
+        or {status: "success", action: "already_saved", job_id}
+    """
+    return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
+
+
+@mcp.tool()
+async def naukri_unsave_job(job_id: str) -> dict:
+    """Unsave/unbookmark a previously saved job.
+
+    Args:
+        job_id: The Naukri job ID to unsave (required)
+
+    Returns:
+        {status: "success", action: "unsaved", job_id}
+        or {status: "error", message, error_code: "NOT_FOUND"}
+    """
+    return await _unsave_job(job_id)
+
+
+@mcp.tool()
+async def naukri_sync_saved_jobs() -> dict:
+    """Pull saved jobs from Naukri server and merge with local tracking.
+
+    Returns:
+        {status, total_remote, new_added, already_local, total_local}
+    """
+    return await _sync_saved_jobs_from_naukri()
