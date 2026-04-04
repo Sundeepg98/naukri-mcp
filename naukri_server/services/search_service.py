@@ -1,0 +1,355 @@
+"""Search service — pure domain logic for job parsing, scoring, and data transformation.
+
+Extracts business logic from tools/search.py and tools/jobs.py into a service layer.
+I/O-bound functions (API calls, browser automation) remain in the tool modules.
+"""
+
+import re
+
+from naukri_server.config import LAKHS_MULTIPLIER
+
+__all__ = [
+    "extract_job_id",
+    "extract_skills",
+    "format_education",
+    "extract_placeholder",
+    "parse_salary_data",
+    "parse_company_data",
+    "parse_match_score",
+    "parse_job_detail",
+    "build_search_result",
+    "build_recommendations_result",
+    "build_similar_jobs_result",
+]
+
+
+# ---------------------------------------------------------------------------
+# Job ID extraction
+# ---------------------------------------------------------------------------
+
+def extract_job_id(job_url_or_id: str) -> str:
+    """Extract numeric job ID from URL or pass through if already an ID.
+
+    Raises ValueError if no valid numeric job ID can be extracted.
+    """
+    if job_url_or_id.isdigit():
+        return job_url_or_id
+    # URL pattern: ...-<jobId> at the end
+    match = re.search(r'(\d{6,})', job_url_or_id)
+    if match:
+        return match.group(1)
+    raise ValueError(f"Invalid job ID or URL: {job_url_or_id}")
+
+
+# ---------------------------------------------------------------------------
+# Skill / education / placeholder parsing
+# ---------------------------------------------------------------------------
+
+def extract_skills(raw_skills) -> list:
+    """Extract skill labels from keySkills — handles both list and dict formats."""
+    if isinstance(raw_skills, dict):
+        # v3 format: {"preferred": [{label: "Python"}, ...], "other": [...]}
+        skills = []
+        for category_skills in raw_skills.values():
+            if isinstance(category_skills, list):
+                for s in category_skills:
+                    label = s.get("label", s) if isinstance(s, dict) else s
+                    if label and isinstance(label, str):
+                        skills.append(label)
+        return skills
+    elif isinstance(raw_skills, list):
+        return [s.get("label", s) if isinstance(s, dict) else s for s in raw_skills]
+    return []
+
+
+def format_education(edu) -> str | None:
+    """Format the v4 education object into a readable string."""
+    if not edu or not isinstance(edu, dict):
+        return None
+    parts = []
+    ug = edu.get("ugQualification") or edu.get("ug")
+    pg = edu.get("pgQualification") or edu.get("pg")
+    if ug:
+        parts.append(f"UG: {ug}")
+    if pg:
+        parts.append(f"PG: {pg}")
+    return ", ".join(parts) if parts else None
+
+
+def extract_placeholder(placeholders: list, ptype: str) -> str | None:
+    """Extract a label from Naukri's placeholders array by type."""
+    for p in placeholders:
+        if isinstance(p, dict) and p.get("type") == ptype:
+            return p.get("label")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Salary / company / match-score parsing
+# ---------------------------------------------------------------------------
+
+def parse_salary_data(job: dict) -> dict:
+    """Extract salary info from job data."""
+    salary = job.get("salaryDetail", {})
+    sal_label = salary.get("label", "")
+    sal_min = salary.get("minimumSalary", 0)
+    sal_max = salary.get("maximumSalary", 0)
+    salary_str = sal_label if sal_label else (
+        f"{sal_min/LAKHS_MULTIPLIER:.1f}-{sal_max/LAKHS_MULTIPLIER:.1f} LPA" if sal_max else "Not Disclosed"
+    )
+    return {
+        "salary": salary_str,
+        "salary_min": sal_min,
+        "salary_max": sal_max,
+    }
+
+
+def parse_company_data(job: dict, details_data: dict) -> dict:
+    """Extract company details + ambitionbox rating."""
+    company = job.get("companyDetail", {})
+    ambition = job.get("ambitionBoxData") or {}
+    ab_details = details_data.get("ambitionBoxDetails", {})
+    if not ambition and ab_details:
+        ci = ab_details.get("companyInfo") or {}
+        ambition = {
+            "AggregateRating": ci.get("rating"),
+            "ReviewsCount": ci.get("reviewsCount"),
+        }
+    return {
+        "company_name": company.get("name"),
+        "company_rating": ambition.get("AggregateRating") or ambition.get("Rating"),
+        "company_reviews_count": ambition.get("ReviewsCount"),
+        "company_website": company.get("websiteUrl") if company else None,
+        "group_id": company.get("groupId") if company else None,
+    }
+
+
+def parse_match_score(score_data: dict) -> dict:
+    """Build normalized match_score dict from job scoring data (browser or REST)."""
+    if not score_data:
+        return {"match_score": None, "match_details": None}
+
+    skill_mismatch_str = score_data.get("skillMismatch") or ""
+    # Normalize to consistent dict format (same shape as _fetch_match_score REST path)
+    match_score = {
+        "education": (score_data.get("education", {}).get("userMatching", False)
+                      if isinstance(score_data.get("education"), dict)
+                      else score_data.get("education")),
+        "functional_area": (score_data.get("functionalArea", {}).get("userMatching", False)
+                            if isinstance(score_data.get("functionalArea"), dict)
+                            else score_data.get("functionalArea")),
+        "key_skills": score_data.get("Keyskills"),
+        "work_experience": (score_data.get("Experience", {}).get("userMatching", False)
+                            if isinstance(score_data.get("Experience"), dict)
+                            else score_data.get("workExperience")),
+        "industry": (score_data.get("Industry", {}).get("userMatching", False)
+                     if isinstance(score_data.get("Industry"), dict)
+                     else score_data.get("industry")),
+        "location": (score_data.get("Location", {}).get("userMatching", False)
+                     if isinstance(score_data.get("Location"), dict)
+                     else score_data.get("location")),
+        "early_applicant": score_data.get("earlyApplicant", False),
+    }
+    match_details = {
+        "skill_mismatch": [s.strip() for s in skill_mismatch_str.split(",") if s.strip()],
+    }
+    return {"match_score": match_score, "match_details": match_details}
+
+
+# ---------------------------------------------------------------------------
+# Job detail assembly
+# ---------------------------------------------------------------------------
+
+def parse_job_detail(details_data: dict, job_id: str, page_url: str,
+                     score_data: dict = None) -> dict:
+    """Parse job detail API response (v3 or v4 format) into a structured result dict."""
+    from naukri_server.validation import validate_job_detail
+
+    job = details_data.get("jobDetails", details_data)
+
+    salary_data = parse_salary_data(job)
+    company_data = parse_company_data(job, details_data)
+    match_data = parse_match_score(score_data)
+
+    is_applied = job.get("isApplied", False)
+    external = bool(job.get("applyRedirectUrl"))
+
+    result = {
+        "status": "success",
+        "job_id": job_id,
+        "title": job.get("title"),
+        "company": company_data["company_name"],
+        "company_rating": company_data["company_rating"],
+        "company_reviews_count": company_data["company_reviews_count"],
+        "salary": salary_data["salary"],
+        "experience": f"{job.get('minimumExperience', '?')}-{job.get('maximumExperience', '?')} years",
+        "experience_min": job.get("minimumExperience"),
+        "experience_max": job.get("maximumExperience"),
+        "candidates_count": job.get("candidatesCount"),
+        "location": (
+            job.get("cityName")
+            or job.get("citySuburb")
+            or extract_placeholder(job.get("placeholders", []), "location")
+            or job.get("location")
+        ),
+        "description": job.get("description", ""),
+        "skills": extract_skills(job.get("keySkills", [])),
+        "match_score": match_data["match_score"],
+        "match_details": match_data["match_details"],
+        "is_applied": is_applied,
+        "external_apply": external,
+        "can_apply": not is_applied and not external,
+        "vacancies": job.get("vacany"),
+        "apply_count": job.get("applyCount"),
+        "hr_name": job.get("contactPerson") or job.get("createdBy"),
+        "hr_email": job.get("contactEmail"),
+        "external_apply_url": job.get("applyRedirectUrl"),
+        "company_website": company_data["company_website"],
+        "notice_period": job.get("noticePeriod"),
+        "benefits": job.get("benefits"),
+        "group_id": company_data["group_id"],
+        "work_mode": job.get("workMode") or job.get("wfhType"),
+        "posted_date": job.get("createdDate"),
+        "industry": (
+            job.get("industryType")
+            or (job.get("industryTypeGid", {}).get("label")
+                if isinstance(job.get("industryTypeGid"), dict) else None)
+        ),
+        "role_category": job.get("roleCategory"),
+        "education": format_education(job.get("education")) or job.get("qualification"),
+        "job_role": job.get("jobRole"),
+        "employment_type": job.get("employmentType"),
+        "hybrid_detail": job.get("hybridWfhDetail"),
+        "saved": bool(job.get("savedJobFlag")),
+        "valid_through": job.get("validThrough") or job.get("expiryDate"),
+        "department": job.get("department") or job.get("functionalArea"),
+        "url": page_url,
+    }
+    # AmbitionBox enrichment from top-level v4 response
+    ab = details_data.get("ambitionBoxDetails", {})
+    if ab:
+        salaries = ab.get("salaries", {})
+        if salaries:
+            result["salary_benchmarks"] = {
+                "average": salaries.get("averageSalary"),
+                "min": salaries.get("minSalary"),
+                "max": salaries.get("maxSalary"),
+            }
+        benefits_data = ab.get("benefits", {})
+        if isinstance(benefits_data, dict) and benefits_data.get("benefitsList"):
+            result["benefits_list"] = benefits_data["benefitsList"]
+        reviews_list = ab.get("reviews", [])
+        if reviews_list:
+            result["top_reviews"] = [
+                {"rating": r.get("rating"), "role": r.get("role"), "title": r.get("title")}
+                for r in reviews_list[:3] if isinstance(r, dict)
+            ]
+
+    warnings = validate_job_detail(result)
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Search result builders
+# ---------------------------------------------------------------------------
+
+def build_search_result(
+    data: dict, keywords: str, location: str | None, page_no: int, limit: int,
+    filters: dict, search_path: str,
+) -> dict:
+    """Build a standardized search result dict from raw API data."""
+    from naukri_server.tools.job_parsing import _parse_job_list
+    from naukri_server.validation import validate_job_list
+
+    jobs = _parse_job_list(data.get("jobDetails", []), limit)
+    total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
+    result = {
+        "status": "success",
+        "keywords": keywords,
+        "location": location,
+        "page": page_no,
+        "total": total,
+        "count": len(jobs),
+        "has_more": (page_no * limit) < total if isinstance(total, int) else len(jobs) == limit,
+        "filters": {k: v for k, v in filters.items() if v is not None},
+        "jobs": jobs,
+        "search_path": search_path,
+    }
+    if search_path == "browser":
+        result["clusters"] = data.get("clusters", {})
+    warnings = validate_job_list(jobs, data.get("noOfJobs"), "search")
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def build_recommendations_result(
+    data: dict, page: int, limit: int,
+) -> dict:
+    """Build a standardized recommendations result dict from raw API data."""
+    from naukri_server.tools.job_parsing import _parse_job_list
+    from naukri_server.validation import validate_job_list
+
+    job_details = data.get("jobDetails", [])
+    all_jobs = _parse_job_list(job_details, len(job_details))
+    total = data.get("noOfJobs") or len(all_jobs)
+    offset = (page - 1) * limit
+    jobs = all_jobs[offset:offset + limit]
+    raw_clusters = data.get("clusters") or data.get("recommendedClusters", {})
+    cluster_info = {}
+    if isinstance(raw_clusters, dict):
+        for cluster_type, cluster_data in raw_clusters.items():
+            if isinstance(cluster_data, dict):
+                cluster_info[cluster_type] = {
+                    "count": cluster_data.get("count", 0),
+                    "title": cluster_data.get("title") or cluster_type,
+                }
+            elif isinstance(cluster_data, (int, float)):
+                cluster_info[cluster_type] = {"count": int(cluster_data), "title": cluster_type}
+    result = {
+        "status": "success",
+        "source": "recommendations",
+        "total": total,
+        "count": len(jobs),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "jobs": jobs,
+    }
+    result["agent_eligible_exists"] = data.get("agentEligibleJobExists", False)
+    result["cluster_split_date"] = data.get("clusterSplitDate")
+    result["clusters"] = cluster_info
+    warnings = validate_job_list(jobs, total, "recommendations")
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def build_similar_jobs_result(
+    data: dict, job_id: str, page: int, limit: int,
+) -> dict:
+    """Build a standardized similar-jobs result dict from raw API data."""
+    from naukri_server.tools.job_parsing import _parse_job_list
+    from naukri_server.validation import validate_job_list
+
+    sim = data.get("simJobDetails", {})
+    job_details = sim.get("content", []) + sim.get("collaborative", [])
+    all_jobs = _parse_job_list(job_details, len(job_details))
+    total = data.get("noOfJobs") or len(all_jobs)
+    offset = (page - 1) * limit
+    jobs = all_jobs[offset:offset + limit]
+    result = {
+        "status": "success",
+        "job_id": job_id,
+        "source": "similar",
+        "total": total,
+        "count": len(jobs),
+        "page": page,
+        "has_more": (offset + limit) < total,
+        "jobs": jobs,
+    }
+    warnings = validate_job_list(jobs, total, "similar_jobs")
+    if warnings:
+        result["warnings"] = warnings
+    return result

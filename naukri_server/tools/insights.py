@@ -1,25 +1,40 @@
-"""Intelligence layer — application insights, cached answer review, salary analysis."""
+"""Intelligence layer — application insights, cached answer review, salary analysis.
 
-import re
-from collections import Counter
-from datetime import datetime, timezone, timedelta
+Business logic lives in naukri_server.services.insights_service.
+Functions that can be cleanly delegated are re-exported from the service.
+_get_taxonomy and _cached_answers remain defined here because tests
+patch module-level state (_taxonomy_cache, _cache_lock, _load_cache).
+"""
+
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.interfaces import api_client
-from naukri_server.cache import _load_cache, _cache_lock
+from naukri_server.interfaces import api_client  # noqa: F401 — test patch target
+from naukri_server.cache import _load_cache, _cache_lock  # noqa: F401 — test patch target
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE
+from naukri_server.config import ENTITY_TAXONOMY_API
 from naukri_server.models import validate_action_params
 
 from naukri_server.utils import TtlCache
+
+# Re-exports from service layer (preserves import and patch paths)
+from naukri_server.services.insights_service import (  # noqa: F401
+    conversion_funnel as _conversion_funnel,
+    application_insights as _application_insights,
+    salary_position as _salary_position,
+    match_quality as _match_quality,
+    detect_status_changes as _detect_status_changes,
+    get_profile_prompts as _get_profile_prompts,
+    parse_salary_str as _parse_salary_str,
+)
 
 
 _taxonomy_cache = TtlCache(86400)  # 24 hours — taxonomy data is static
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers (not MCP tools — used by the unified tool)
+# _get_taxonomy and _cached_answers stay here — tests patch _taxonomy_cache,
+# _cache_lock, _load_cache on this module.
 # ---------------------------------------------------------------------------
 
 async def _get_taxonomy() -> dict:
@@ -69,140 +84,6 @@ async def _get_taxonomy() -> dict:
         }
 
     return await _taxonomy_cache.get(_fetch)
-
-
-async def _conversion_funnel(days: int = 30) -> dict:
-    """Analyze the application-to-interview conversion funnel.
-
-    Counts total applications, breaks down by status, identifies which
-    companies respond most and which are "dead zones" (3+ applies, 0 responses).
-
-    Args:
-        days: Number of days to analyze (default 30)
-
-    Returns:
-        {status, days, total_applied, funnel, conversion_rate,
-         top_responsive_companies, dead_zones}
-    """
-    if days < 1:
-        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    from naukri_server.database import list_all_applications
-    apps = await list_all_applications()
-
-    # Filter by date
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    recent = [a for a in apps if a.get("applied_at", "") >= cutoff]
-
-    total = len(recent)
-    if total == 0:
-        return {
-            "status": "success",
-            "days": days,
-            "total_applied": 0,
-            "funnel": {},
-            "conversion_rate": 0,
-            "top_responsive_companies": [],
-            "dead_zones": [],
-        }
-
-    by_status = Counter(a.get("status", "unknown") for a in recent)
-
-    # Company response rates
-    by_company: dict[str, dict] = {}
-    for a in recent:
-        co = a.get("company", "Unknown")
-        if co not in by_company:
-            by_company[co] = {"applied": 0, "responded": 0}
-        by_company[co]["applied"] += 1
-        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
-            by_company[co]["responded"] += 1
-
-    # Sort by response rate
-    responsive = sorted(
-        [{"company": k, **v, "rate": round(v["responded"] / v["applied"] * 100)}
-         for k, v in by_company.items() if v["applied"] >= 2],
-        key=lambda x: -x["rate"]
-    )
-
-    interviews = by_status.get("interview", 0)
-
-    return {
-        "status": "success",
-        "days": days,
-        "total_applied": total,
-        "funnel": dict(by_status),
-        "conversion_rate": round(interviews / total * 100, 1) if total else 0,
-        "top_responsive_companies": responsive[:10],
-        "dead_zones": [c for c in responsive if c["rate"] == 0 and c["applied"] >= 3],
-    }
-
-
-async def _application_insights(days: int = 30) -> dict:
-    """Analyze application history for patterns and insights."""
-    if days < 1:
-        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    from naukri_server.database import list_all_applications
-    apps = await list_all_applications()
-
-    if not apps:
-        return {"status": "error", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
-
-    # Filter by date range
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    recent = [a for a in apps if (a.get("applied_at") or "") >= cutoff]
-
-    if not recent:
-        return {
-            "status": "error",
-            "message": f"No applications in the last {days} days. Total tracked: {len(apps)}.",
-            "total_all_time": len(apps),
-            "error_code": "NOT_FOUND",
-        }
-
-    # Status breakdown
-    status_counts = Counter(a.get("status", "unknown") for a in recent)
-
-    # Company distribution
-    company_counts = Counter(a.get("company", "Unknown") for a in recent)
-    top_companies = [{"company": c, "count": n} for c, n in company_counts.most_common(10)]
-
-    # Location distribution
-    location_counts = Counter()
-    for a in recent:
-        loc = a.get("location") or (a.get("extra", {}).get("location") if isinstance(a.get("extra"), dict) else None)
-        if loc:
-            location_counts[loc] += 1
-    top_locations = [{"location": l, "count": n} for l, n in location_counts.most_common(10)]
-
-    # Velocity
-    actual_days = max(days, 1)
-    per_day = round(len(recent) / actual_days, 1)
-    per_week = round(per_day * 7, 1)
-
-    # Generate insights
-    insights = []
-    if len(recent) > 0:
-        insights.append(f"{len(recent)} applications in {days} days ({per_day}/day)")
-    if status_counts.get("already_applied", 0) > 0:
-        dup_pct = round(status_counts["already_applied"] / len(recent) * 100)
-        insights.append(f"{dup_pct}% were duplicate applications (already applied)")
-    if top_companies and top_companies[0]["count"] > 2:
-        insights.append(f"Most-applied company: {top_companies[0]['company']} ({top_companies[0]['count']} times)")
-    if status_counts.get("error", 0) > 0:
-        err_pct = round(status_counts["error"] / len(recent) * 100)
-        insights.append(f"{err_pct}% of applications had errors")
-
-    return {
-        "status": "success",
-        "period_days": days,
-        "total_applications": len(recent),
-        "total_all_time": len(apps),
-        "status_breakdown": dict(status_counts),
-        "velocity": {"per_day": per_day, "per_week": per_week},
-        "top_companies": top_companies,
-        "top_locations": top_locations if top_locations else None,
-        "insights": insights,
-    }
 
 
 async def _cached_answers(action: str = "list", key: Optional[str] = None, new_answer: Optional[str] = None) -> dict:
@@ -271,303 +152,6 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
 
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, update, delete", "error_code": "VALIDATION_ERROR"}
-
-
-def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
-    """Parse salary strings like '10-15 Lacs', '₹10L - ₹15L', 'Not disclosed' into (min, max) in LPA."""
-    if not salary_str or not isinstance(salary_str, str):
-        return None, None
-    s = salary_str.lower().strip()
-    if "not disclosed" in s or "confidential" in s:
-        return None, None
-
-    # Match patterns like "10-15", "10.5 - 15.5", "₹10L - ₹15L"
-    nums = re.findall(r'(\d+(?:\.\d+)?)', s)
-    if not nums:
-        return None, None
-
-    vals = [float(n) for n in nums[:2]]
-
-    # If values are in thousands (e.g., 1000000), convert to LPA
-    factor = 1
-    if any(v > 200 for v in vals):
-        factor = 1 / LAKHS_MULTIPLIER  # Convert to lakhs
-
-    if len(vals) == 2:
-        return round(vals[0] * factor, 1), round(vals[1] * factor, 1)
-    elif len(vals) == 1:
-        return round(vals[0] * factor, 1), round(vals[0] * factor, 1)
-    return None, None
-
-
-async def _salary_position(designation: Optional[str] = None) -> dict:
-    """Analyze salary positioning across applied jobs."""
-    from naukri_server.database import list_all_applications
-    apps = await list_all_applications()
-
-    if not apps:
-        return {"status": "error", "message": "No applications tracked yet.", "error_code": "NOT_FOUND"}
-
-    if designation:
-        keyword = designation.lower()
-        apps = [a for a in apps if keyword in (a.get("title") or "").lower()]
-
-    # Extract salary midpoints
-    salaries = []
-    for app in apps:
-        sal_str = app.get("salary") or app.get("salary_range") or ""
-        s_min, s_max = _parse_salary_str(sal_str)
-        if s_min is not None and s_max is not None:
-            midpoint = (s_min + s_max) / 2
-            salaries.append({"min": s_min, "max": s_max, "mid": midpoint, "raw": sal_str})
-
-    if not salaries:
-        return {
-            "status": "error",
-            "message": f"No salary data found in {len(apps)} applications. Most jobs may have 'Not disclosed' salary.",
-            "error_code": "NOT_FOUND",
-        }
-
-    # Sort by midpoint
-    salaries.sort(key=lambda s: s["mid"])
-    mids = [s["mid"] for s in salaries]
-    median = mids[len(mids) // 2]
-
-    # Distribution buckets (5 LPA intervals)
-    buckets = Counter()
-    for s in salaries:
-        bucket_start = int(s["mid"] // 5) * 5
-        bucket_label = f"{bucket_start}-{bucket_start + 5} LPA"
-        buckets[bucket_label] += 1
-
-    distribution = [{"range": r, "count": c} for r, c in sorted(buckets.items(), key=lambda x: x[0])]
-
-    # Insights
-    insights = []
-    all_mins = [s["min"] for s in salaries]
-    all_maxs = [s["max"] for s in salaries]
-    insights.append(f"Salary range across applications: {min(all_mins)}-{max(all_maxs)} LPA")
-    insights.append(f"Median target: {median} LPA")
-    if distribution:
-        top_bucket = max(distribution, key=lambda d: d["count"])
-        insights.append(f"Most applications target {top_bucket['range']} ({top_bucket['count']} jobs)")
-
-    return {
-        "status": "success",
-        "total_with_salary": len(salaries),
-        "total_applications": len(apps),
-        "salary_range": {
-            "min": min(all_mins),
-            "max": max(all_maxs),
-            "median": median,
-        },
-        "distribution": distribution,
-        "insights": insights,
-    }
-
-
-async def _match_quality(days: int = 7) -> dict:
-    """Aggregate apply-match quality — how well recent applications matched your profile.
-
-    Args:
-        days: Number of days to analyze (default 7)
-
-    Returns:
-        - {status: "success", days, total_applies, complete_match, high_match, medium_match,
-           low_match, field_breakdown}
-        - {status: "error", message}
-    """
-    if days < 1:
-        return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    data = await api_client.get(f"{APPLY_MATCH_SCORE_API}?days={days}")
-
-    field_breakdown = data.get("relevantFieldMatch", {})
-    formatted_fields = {}
-    for field_name, field_data in field_breakdown.items():
-        if isinstance(field_data, dict):
-            formatted_fields[field_name] = {
-                "count": field_data.get("count"),
-                "percent": field_data.get("percent"),
-            }
-        else:
-            formatted_fields[field_name] = field_data
-
-    return {
-        "status": "success",
-        "days": days,
-        "total_applies": data.get("totalApplies"),
-        "complete_match": data.get("completeMatch"),
-        "high_match": data.get("highMatch"),
-        "medium_match": data.get("mediumMatch"),
-        "low_match": data.get("lowMatch"),
-        "field_breakdown": formatted_fields,
-    }
-
-
-def _get_browser():
-    """Lazy import to avoid circular imports and enable test patching."""
-    from naukri_server.browser import browser
-    return browser
-
-
-async def _get_profile_prompts() -> dict:
-    """Fetch CCS widget state keys by intercepting Naukri's dashboard CCS call.
-
-    Navigates to the homepage and captures the CCS response that Naukri's
-    own JavaScript makes (with proper cookies/headers). This avoids the
-    issue of page.evaluate(fetch) not having the right auth context.
-    """
-    import asyncio
-    from naukri_server.browser import page_goto
-    ccs_pattern = CCS_PAGE_API
-    captured = {}
-
-    async def _on_response(response):
-        if ccs_pattern in response.url and response.status == 200:
-            try:
-                captured["data"] = await response.json()
-            except Exception:
-                pass
-
-    async with _get_browser().page_pool.acquire() as page:
-        page.on("response", _on_response)
-        try:
-            await page_goto(page, f"{NAUKRI_BASE}/mnjuser/homepage")
-            # Wait briefly for CCS call to complete
-            for _ in range(10):
-                if captured.get("data"):
-                    break
-                await asyncio.sleep(BROWSER_DOM_SETTLE)
-        finally:
-            page.remove_listener("response", _on_response)
-
-    data = captured.get("data", {})
-
-    if not data or data.get("error"):
-        return {
-            "status": "error",
-            "message": f"CCS fetch failed: {data.get('error', 'empty response') if data else 'empty response'}",
-            "error_code": "BROWSER_ERROR",
-        }
-
-    states = data.get("states", {})
-
-    # Map state keys to actionable prompts
-    PROMPT_MAP = {
-        "t2536_click_add_salary_breakup": {
-            "field": "salary_breakup",
-            "action": "Add detailed salary breakup",
-            "impact": "high",
-            "reason": "Recruiters filter heavily by CTC range",
-        },
-        "t2906_click_add_locality": {
-            "field": "preferred_locations",
-            "action": "Add preferred work locations",
-            "impact": "high",
-            "reason": "Location-filtered searches will miss you",
-        },
-        "t2772_click_complete": {
-            "field": "profile_completion",
-            "action": "Complete remaining profile sections",
-            "impact": "medium",
-            "reason": "Higher completeness = better ranking",
-        },
-        "t4170_click_submit": {
-            "field": "profile_data",
-            "action": "Submit pending profile updates",
-            "impact": "medium",
-            "reason": "Unsaved changes aren't visible to recruiters",
-        },
-        "t2683_view": {
-            "field": "iti_trades",
-            "action": "Add ITI/trades data if applicable",
-            "impact": "low",
-            "reason": "Relevant for apprenticeship/trades roles only",
-        },
-    }
-
-    pending = []
-    completed = []
-    for key, value in states.items():
-        prompt_info = PROMPT_MAP.get(key)
-        if prompt_info:
-            if value == 0:
-                pending.append(prompt_info)
-            else:
-                completed.append({"field": prompt_info["field"], "status": "done"})
-
-    # Sort pending by impact priority
-    impact_order = {"high": 0, "medium": 1, "low": 2}
-    pending.sort(key=lambda p: impact_order.get(p.get("impact", "low"), 3))
-
-    return {
-        "status": "success",
-        "source": "ccs_widget",
-        "pending_count": len(pending),
-        "completed_count": len(completed),
-        "pending_prompts": pending,
-        "completed_prompts": completed,
-        "all_state_keys": states,
-        "cache_ttl_seconds": data.get("ttl"),
-        "widget_sections_count": len(data.get("sections", [])),
-    }
-
-
-async def _detect_status_changes(days_back: int = 30) -> dict:
-    """Detect application status changes by syncing with Naukri and comparing.
-
-    Runs a quick sync to get latest statuses, then categorizes any detected
-    transitions as positive (forward movement) or neutral.
-
-    Args:
-        days_back: Number of days to sync (default 30)
-
-    Returns:
-        {status, total_changes, positive_changes, positive, neutral, sync_method, last_sync}
-    """
-    from naukri_server.tools.sync import _sync_applications
-
-    # Run a quick sync to get latest statuses
-    sync_result = await _sync_applications(days_back=days_back)
-
-    if sync_result.get("status") == "error":
-        return sync_result
-
-    changes = sync_result.get("status_changes", [])
-
-    # Categorize changes
-    positive = []  # applied -> viewed, viewed -> interview, etc.
-    neutral = []
-
-    POSITIVE_TRANSITIONS = {
-        ("applied", "viewed"), ("applied", "viewed_by_recruiter"),
-        ("applied", "interview"), ("applied", "shortlisted"),
-        ("viewed", "interview"), ("viewed", "shortlisted"),
-        ("viewed_by_recruiter", "interview"), ("viewed_by_recruiter", "shortlisted"),
-        ("interview", "offered"), ("interview", "hired"),
-        ("shortlisted", "offered"), ("shortlisted", "hired"),
-        ("shortlisted", "interview"),
-    }
-
-    for change in changes:
-        old = (change.get("old_status") or "").lower()
-        new = (change.get("new_status") or "").lower()
-        if (old, new) in POSITIVE_TRANSITIONS:
-            change["transition_type"] = "positive"
-            positive.append(change)
-        else:
-            change["transition_type"] = "neutral"
-            neutral.append(change)
-
-    return {
-        "status": "success",
-        "total_changes": len(changes),
-        "positive_changes": len(positive),
-        "positive": positive,
-        "neutral": neutral,
-        "sync_method": sync_result.get("method"),
-        "last_sync": sync_result.get("last_sync"),
-    }
 
 
 # ---------------------------------------------------------------------------
