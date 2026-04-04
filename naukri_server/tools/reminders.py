@@ -176,7 +176,7 @@ async def naukri_reminders(
     include_past: bool = True,
     include_app_status: bool = True,
 ) -> dict:
-    """Unified reminder management — list reminders or set a follow-up.
+    """[Deprecated — use naukri_list_reminders or naukri_set_reminder instead] Unified reminder management.
 
     Actions:
       - "list": Get all reminders with is_due flag (use include_past to filter)
@@ -233,3 +233,62 @@ async def naukri_reminders(
     # -- unknown action -----------------------------------------------------
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: list, set", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Single-purpose MCP tools (preferred over the unified tool above)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_reminders(
+    include_past: bool = True,
+    include_app_status: bool = True,
+) -> dict:
+    """List all follow-up reminders with due status.
+
+    Shows all reminders sorted by urgency — due reminders first, then upcoming.
+    Optionally enriches each reminder with live application status from Naukri.
+
+    Args:
+        include_past: Include already-due reminders (default True)
+        include_app_status: Enrich each reminder with live application
+            status (current_status, view_count, ars_score). Default True.
+
+    Returns:
+        {status, total, due_count, reminders: [{job_id, title, company,
+         remind_at, note, is_due, days_until_due, created_at,
+         application_status?: {current_status, view_count, ars_score}}]}
+    """
+    return await handle_tool_action(
+        lambda: _list_reminders(include_past=include_past, include_app_status=include_app_status),
+        "reminders.list",
+    )
+
+
+@mcp.tool()
+async def naukri_set_reminder(
+    job_id: str,
+    days: int = 7,
+    note: Optional[str] = None,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+) -> dict:
+    """Set or update a follow-up reminder for a job application.
+
+    Creates a reminder that triggers after N days. If a reminder already
+    exists for this job, it updates the due date and note.
+
+    Args:
+        job_id: The job ID to set reminder for
+        days: Remind after N days from now (default 7, range 1-365)
+        note: Optional note (e.g., "Follow up with recruiter")
+        title: Job title (for display)
+        company: Company name (for display)
+
+    Returns:
+        {status, job_id, remind_at, note, message}
+    """
+    return await handle_tool_action(
+        lambda: _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company),
+        "reminders.set",
+    )
