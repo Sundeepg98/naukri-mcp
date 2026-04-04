@@ -638,6 +638,9 @@ async def naukri_sync(
 ) -> dict:
     """Unified sync & export — pull data from Naukri.com or export local data to files.
 
+    DEPRECATED: Use individual tools instead — naukri_sync_applications(),
+    naukri_sync_saved(), naukri_export_data().
+
     Note: Uses 'entity' instead of 'action' because the dispatch selects a data source
     to synchronize (applications, saved_jobs) or an export target, not an operation to
     perform on a single resource. Each entity triggers a full sync pipeline.
@@ -700,3 +703,86 @@ async def naukri_sync(
     # ── unknown entity ────────────────────────────────────────────────
     else:
         return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs, export", "error_code": "VALIDATION_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Individual tools (preferred over naukri_sync)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def naukri_sync_applications(
+    force_browser: bool = False,
+    days_back: Optional[int] = None,
+) -> dict:
+    """Sync applied jobs from Naukri.com into local tracking.
+
+    Uses 3-tier fallback: REST API -> browser intercept -> HTML scrape.
+    Merges with local applications, preserves local-only fields.
+
+    Args:
+        force_browser: If True, skip REST API and use browser strategies.
+        days_back: Fetch from last N days (default 365). Use smaller values
+                   (e.g., 7 or 30) for faster incremental syncs.
+
+    Returns:
+        {status, method, total_remote, new_added, updated, unchanged, local_only,
+         days_back, last_sync, applications: [...first 20...]}
+    """
+    try:
+        return await _sync_applications(
+            force_browser=force_browser,
+            days_back=days_back if days_back is not None else 365,
+        )
+    except Exception as e:
+        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+
+
+@mcp.tool()
+async def naukri_sync_saved(force_browser: bool = False) -> dict:
+    """Sync saved/bookmarked jobs from Naukri.com into local tracking.
+
+    Uses 2-tier fallback: REST API -> browser intercept.
+    Merges with local saved jobs list.
+
+    Args:
+        force_browser: If True, skip REST API and use browser strategy.
+
+    Returns:
+        {status, method, total_remote, new_added, already_local, local_only,
+         last_sync, saved_jobs: [...first 20...]}
+    """
+    try:
+        return await _sync_saved_jobs(force_browser=force_browser)
+    except Exception as e:
+        return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+
+
+@mcp.tool()
+async def naukri_export_data(
+    data_type: str,
+    export_format: str = "json",
+    keywords: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> dict:
+    """Export applications, saved jobs, or search results to a file.
+
+    Args:
+        data_type: What to export — "applications", "saved_jobs", or "search_results".
+        export_format: Output format — "json" or "csv" (default "json").
+        keywords: Required when data_type is "search_results" — the search query.
+        output_path: Custom file path (default: exports/<type>_<date>.<ext>).
+
+    Returns:
+        {status, file_path, record_count, data_type, format}
+    """
+    from naukri_server.tools.export import _export_data
+    try:
+        return await _export_data(
+            data_type=data_type,
+            format=export_format,
+            keywords=keywords,
+            output_path=output_path,
+        )
+    except Exception as e:
+        return {"status": "error", "message": f"Export failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

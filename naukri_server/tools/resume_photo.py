@@ -38,6 +38,9 @@ async def naukri_profile_media(
     then 'action' selects the operation (info, upload, download, delete). This avoids
     combinatorial explosion of action values like "resume_info", "photo_upload", etc.
 
+    DEPRECATED: Use individual tools instead — naukri_resume_info(), naukri_upload_resume(),
+    naukri_download_resume(), naukri_photo_info(), naukri_upload_photo().
+
     Combines former naukri_resume + naukri_photo into one tool.
 
     media_type="resume" actions:
@@ -479,3 +482,86 @@ async def _photo_delete() -> dict:
             }
         except Exception as e:
             return {"status": "error", "message": f"Photo deletion failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Individual tools (preferred over naukri_profile_media)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def naukri_resume_info() -> dict:
+    """Get resume metadata — filename, upload date, download URL, cv_id.
+
+    Returns:
+        {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}
+    """
+    return await _resume_info()
+
+
+@mcp.tool()
+async def naukri_upload_resume(file_path: str) -> dict:
+    """Upload a new resume to Naukri profile (PDF/DOC/DOCX, max 5MB).
+
+    Uses browser automation to upload the file via the profile page.
+
+    Args:
+        file_path: Local path to the resume file.
+
+    Returns:
+        {status, file, size_mb, message}
+    """
+    try:
+        return await asyncio.wait_for(
+            _resume_upload(file_path),
+            timeout=BROWSER_OPERATION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Resume upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
+
+
+@mcp.tool()
+async def naukri_download_resume(save_path: Optional[str] = None) -> dict:
+    """Download current resume from Naukri profile.
+
+    Args:
+        save_path: Local path to save the downloaded resume file.
+                   If not provided, returns an error prompting for a path.
+
+    Returns:
+        {status, file_path, file_size_bytes, message}
+    """
+    if not save_path:
+        return {"status": "error", "message": "save_path is required — provide a local file path to save the resume.", "error_code": "VALIDATION_ERROR"}
+    return await _resume_download(save_path)
+
+
+@mcp.tool()
+async def naukri_photo_info() -> dict:
+    """Get profile photo metadata — URL, format, upload date.
+
+    Returns:
+        {status, has_photo, photo_url, format, status_label, upload_date, download_api}
+    """
+    return await _photo_info()
+
+
+@mcp.tool()
+async def naukri_upload_photo(file_path: str) -> dict:
+    """Upload a new profile photo to Naukri (PNG/JPG/JPEG/GIF).
+
+    Uses browser automation to upload the file via the profile page photo cropper.
+
+    Args:
+        file_path: Local path to the photo file.
+
+    Returns:
+        {status, file, message}
+    """
+    try:
+        return await asyncio.wait_for(
+            _photo_upload(file_path),
+            timeout=BROWSER_OPERATION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Photo upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
