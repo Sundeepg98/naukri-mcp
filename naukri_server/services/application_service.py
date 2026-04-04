@@ -122,115 +122,12 @@ async def list_applications(
 
 async def get_application_detail(job_id: str) -> dict:
     """Get detailed status for a specific job application from Naukri API."""
+    from naukri_server.domain.application_detail import from_api_response
+
     data = await api_client.get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
+    result = from_api_response(data, job_id)
 
-    job_details = data.get("jobDetails") or {}
-    status_steps = data.get("status") or []
-    matching = data.get("matchingResults")
-
-    timeline = []
-    for step in status_steps:
-        entry = {"status": step.get("status") or step.get("label", "")}
-        if step.get("date"):
-            entry["date"] = step["date"]
-        if step.get("description"):
-            entry["description"] = step["description"]
-        if step.get("isCompleted") is not None:
-            entry["is_completed"] = step["isCompleted"]
-        if step.get("isCurrent") is not None:
-            entry["is_current"] = step["isCurrent"]
-        if step.get("stepOrder") is not None:
-            entry["step_order"] = step["stepOrder"]
-        if step.get("subStatus"):
-            entry["sub_status"] = step["subStatus"]
-        timeline.append(entry)
-
-    screening_questions = []
-    raw_screening = data.get("screeningQuestions") or data.get("questionnaire") or data.get("screeningResponses") or []
-    for sq in raw_screening:
-        q_entry = {
-            "question": sq.get("question") or sq.get("questionText") or sq.get("title", ""),
-            "answer": sq.get("answer") or sq.get("response") or sq.get("answerText"),
-        }
-        if sq.get("questionId"):
-            q_entry["question_id"] = sq["questionId"]
-        if sq.get("questionType"):
-            q_entry["question_type"] = sq["questionType"]
-        if sq.get("isMandatory") is not None:
-            q_entry["is_mandatory"] = sq["isMandatory"]
-        screening_questions.append(q_entry)
-
-    raw_recruiter = data.get("recruiterDetails") or data.get("recruiter") or job_details.get("recruiterDetails") or job_details.get("recruiter") or {}
-    recruiter = None
-    if isinstance(raw_recruiter, dict) and raw_recruiter:
-        recruiter = {
-            "name": raw_recruiter.get("name") or raw_recruiter.get("recruiterName"),
-            "designation": raw_recruiter.get("designation") or raw_recruiter.get("title"),
-            "company": raw_recruiter.get("company") or raw_recruiter.get("companyName"),
-            "profile_url": raw_recruiter.get("profileUrl") or raw_recruiter.get("recruiterProfileUrl"),
-            "image_url": raw_recruiter.get("imageUrl") or raw_recruiter.get("photoUrl"),
-            "last_active": raw_recruiter.get("lastActive") or raw_recruiter.get("lastActiveDate"),
-        }
-        recruiter = {k: v for k, v in recruiter.items() if v is not None}
-        if not recruiter:
-            recruiter = None
-
-    result = {
-        "status": "success",
-        "job_id": job_id,
-        "title": job_details.get("jobTitle"),
-        "company": job_details.get("company"),
-        "location": job_details.get("location"),
-        "is_open": job_details.get("isOpen"),
-        "total_applicants": data.get("totalApplicants"),
-        "recruiter_activity": job_details.get("jobActivity"),
-        "recruiter_activity_date": job_details.get("jobActivityDate"),
-        "match_rating": data.get("starRating"),
-        "feedback_stored": data.get("feedbackStored"),
-        "status_timeline": timeline,
-        "matching_results": matching,
-    }
-
-    result["application_date"] = data.get("applicationDate") or data.get("appliedDate") or data.get("applyDate")
-    result["current_status"] = data.get("currentStatus") or data.get("applicationStatus")
-    result["apply_type"] = data.get("applyType") or data.get("applicationMode")
-
-    result["job_url"] = job_details.get("jobUrl") or job_details.get("url") or data.get("jobUrl")
-    result["salary_range"] = job_details.get("salaryRange") or job_details.get("salary") or job_details.get("ctcRange")
-    result["experience_range"] = job_details.get("experienceRange") or job_details.get("experience")
-    result["job_description_snippet"] = job_details.get("jobDescription") or job_details.get("snippet")
-    result["job_type"] = job_details.get("jobType") or job_details.get("employmentType")
-    result["industry"] = job_details.get("industry")
-    result["functional_area"] = job_details.get("functionalArea")
-    result["role_category"] = job_details.get("roleCategory")
-    result["posted_date"] = job_details.get("postedDate") or job_details.get("createdDate")
-    result["expiry_date"] = job_details.get("expiryDate") or job_details.get("validTill")
-
-    if screening_questions:
-        result["screening_questions"] = screening_questions
-    if recruiter:
-        result["recruiter"] = recruiter
-
-    result["view_count"] = data.get("viewCount") or data.get("applicationViewCount")
-    result["shortlisted"] = data.get("shortlisted") or data.get("isShortlisted")
-    result["rejected"] = data.get("rejected") or data.get("isRejected")
-    result["ars_score"] = data.get("arsScore") or data.get("ars")
-    result["star_rating"] = data.get("starRating")
-    result["apply_flow_type"] = data.get("applyFlowType")
-    result["job_activity"] = data.get("jobActivity")
-    result["job_activity_date"] = data.get("jobActivityDate")
-    result["is_crawled"] = data.get("isCrawled")
-    company_rating = data.get("companyRating") or data.get("ambitionBoxData")
-    if isinstance(company_rating, dict):
-        result["company_rating"] = {
-            "rating": company_rating.get("Rating") or company_rating.get("rating"),
-            "reviews": company_rating.get("ReviewsCount") or company_rating.get("reviewsCount"),
-        }
-
-    result["apply_source"] = data.get("applySource") or data.get("source")
-    result["resume_used"] = data.get("resumeUsed") or data.get("resumeName")
-    result["cover_letter_used"] = data.get("coverLetterUsed") or data.get("hasCoverLetter")
-
+    # Merge local tracking data if available
     from naukri_server.database import get_application
     local_app = await get_application(str(job_id))
     if local_app:
@@ -240,8 +137,6 @@ async def get_application_detail(job_id: str) -> dict:
             "fit_score": local_app.get("fit_score"),
         }
 
-    result = {k: v for k, v in result.items() if v is not None}
-    result["status"] = "success"
     return result
 
 
