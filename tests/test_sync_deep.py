@@ -17,13 +17,14 @@ class TestAutoPurge:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock)
-    @patch("naukri_server.tools.sync._save_json")
-    @patch("naukri_server.tools.sync._load_json")
+    @patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock)
+    @patch("naukri_server.database.upsert_application", new_callable=AsyncMock)
+    @patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock)
-    async def test_old_apps_purged_during_sync(self, mock_fetch, mock_load, mock_save, mock_load_state, mock_save_state):
+    async def test_old_apps_purged_during_sync(self, mock_fetch, mock_list_all, mock_upsert, mock_delete, mock_load_state, mock_save_state):
         old_date = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
         recent_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-        mock_load.return_value = [
+        mock_list_all.return_value = [
             {"job_id": "old1", "applied_at": old_date, "status": "applied", "source": "naukri_sync"},
             {"job_id": "recent1", "applied_at": recent_date, "status": "applied", "source": "naukri_sync"},
         ]
@@ -33,21 +34,22 @@ class TestAutoPurge:
         from naukri_server.tools.sync import _sync_applications
         result = await _sync_applications()
         assert result["status"] == "success"
-        saved_apps = mock_save.call_args[0][1]
-        job_ids = [a["job_id"] for a in saved_apps]
-        assert "old1" not in job_ids
-        assert "recent1" in job_ids
+        # Check that only "recent1" was upserted (old1 was purged)
+        upserted_ids = [call.args[0]["job_id"] for call in mock_upsert.call_args_list]
+        assert "old1" not in upserted_ids
+        assert "recent1" in upserted_ids
         assert result["purged"] >= 1
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock)
-    @patch("naukri_server.tools.sync._save_json")
-    @patch("naukri_server.tools.sync._load_json")
+    @patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock)
+    @patch("naukri_server.database.upsert_application", new_callable=AsyncMock)
+    @patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock)
-    async def test_manual_apps_not_purged(self, mock_fetch, mock_load, mock_save, mock_load_state, mock_save_state):
+    async def test_manual_apps_not_purged(self, mock_fetch, mock_list_all, mock_upsert, mock_delete, mock_load_state, mock_save_state):
         old_date = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
-        mock_load.return_value = [
+        mock_list_all.return_value = [
             {"job_id": "manual1", "applied_at": old_date, "status": "applied", "source": "manual"},
             {"job_id": "synced1", "applied_at": old_date, "status": "applied", "source": "naukri_sync"},
         ]
@@ -56,23 +58,23 @@ class TestAutoPurge:
 
         from naukri_server.tools.sync import _sync_applications
         result = await _sync_applications()
-        saved_apps = mock_save.call_args[0][1]
-        job_ids = [a["job_id"] for a in saved_apps]
-        assert "manual1" in job_ids
-        assert "synced1" not in job_ids
+        upserted_ids = [call.args[0]["job_id"] for call in mock_upsert.call_args_list]
+        assert "manual1" in upserted_ids
+        assert "synced1" not in upserted_ids
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock)
-    @patch("naukri_server.tools.sync._save_json")
-    @patch("naukri_server.tools.sync._load_json")
+    @patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock)
+    @patch("naukri_server.database.upsert_application", new_callable=AsyncMock)
+    @patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock)
-    async def test_recent_apps_kept(self, mock_fetch, mock_load, mock_save, mock_load_state, mock_save_state):
+    async def test_recent_apps_kept(self, mock_fetch, mock_list_all, mock_upsert, mock_delete, mock_load_state, mock_save_state):
         dates = [
             (datetime.now(timezone.utc) - timedelta(days=d)).isoformat()
             for d in (1, 30, 90, 179)
         ]
-        mock_load.return_value = [
+        mock_list_all.return_value = [
             {"job_id": f"app{i}", "applied_at": d, "status": "applied", "source": "naukri_sync"}
             for i, d in enumerate(dates)
         ]
@@ -81,8 +83,7 @@ class TestAutoPurge:
 
         from naukri_server.tools.sync import _sync_applications
         result = await _sync_applications()
-        saved_apps = mock_save.call_args[0][1]
-        assert len(saved_apps) == 4
+        assert mock_upsert.call_count == 4
         assert result.get("purged", 0) == 0
 
 

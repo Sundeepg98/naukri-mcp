@@ -14,14 +14,11 @@ from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
     BROWSER_MODAL_APPEAR,
-    APPLICATIONS_FILE, SAVED_JOBS_FILE, SYNC_STATE_FILE,
+    SYNC_STATE_FILE,
     AUTO_PURGE_DAYS,
 )
 from naukri_server.events import event_bus, ApplicationStatusChanged
-from naukri_server.tools.tracking import (
-    _load_json, _save_json, _applications_lock,
-)
-# _saved_jobs_lock removed — SQLite handles concurrency via WAL mode
+# _load_json, _save_json, _applications_lock removed — SQLite handles persistence & concurrency
 
 
 # URL patterns for browser interception (discovered)
@@ -620,33 +617,39 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         else:
             job["status"] = "applied"
 
-    async with _applications_lock:
-        local_apps = _load_json(APPLICATIONS_FILE)
-        # Snapshot old statuses for change detection
-        old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
-        stats = _merge_applications(local_apps, remote_jobs)
-        # Auto-purge applications older than AUTO_PURGE_DAYS
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
-        before_count = len(local_apps)
-        local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
-        purged = before_count - len(local_apps)
-        if purged:
-            logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
-        # Detect status changes
-        status_changes = []
-        for app in local_apps:
-            jid = app.get("job_id")
-            old_s = old_status_map.get(jid)
-            new_s = app.get("status")
-            if old_s and new_s and old_s != new_s:
-                status_changes.append({
-                    "job_id": jid,
-                    "title": app.get("title"),
-                    "company": app.get("company"),
-                    "old_status": old_s,
-                    "new_status": new_s,
-                })
-        _save_json(APPLICATIONS_FILE, local_apps)
+    from naukri_server.database import list_all_applications, upsert_application, delete_applications_before
+
+    local_apps = await list_all_applications()
+    # Snapshot old statuses for change detection
+    old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
+    stats = _merge_applications(local_apps, remote_jobs)
+    # Auto-purge applications older than AUTO_PURGE_DAYS
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+    before_count = len(local_apps)
+    local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
+    purged = before_count - len(local_apps)
+    if purged:
+        logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
+    # Detect status changes
+    status_changes = []
+    for app in local_apps:
+        jid = app.get("job_id")
+        old_s = old_status_map.get(jid)
+        new_s = app.get("status")
+        if old_s and new_s and old_s != new_s:
+            status_changes.append({
+                "job_id": jid,
+                "title": app.get("title"),
+                "company": app.get("company"),
+                "old_status": old_s,
+                "new_status": new_s,
+            })
+    # Persist merged + purged results to SQLite
+    for app in local_apps:
+        await upsert_application(app)
+    # Delete purged entries from SQLite (those older than cutoff and not manual)
+    if purged:
+        await delete_applications_before(cutoff)
 
     # Emit events for status changes (outside the lock)
     for change in status_changes:
@@ -710,9 +713,12 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
 
     remote_jobs = _parse_saved_jobs(remote_data)
 
-    local_saved = _load_json(SAVED_JOBS_FILE)
+    from naukri_server.database import list_all_saved_jobs, upsert_saved_job
+
+    local_saved = await list_all_saved_jobs()
     stats = _merge_saved_jobs(local_saved, remote_jobs)
-    _save_json(SAVED_JOBS_FILE, local_saved)
+    for sj in local_saved:
+        await upsert_saved_job(sj)
 
     # Record sync metadata
     async with _sync_state_lock:

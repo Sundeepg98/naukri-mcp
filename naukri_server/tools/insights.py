@@ -11,7 +11,7 @@ from naukri_server.cache import _load_cache, _cache_lock
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE
 from naukri_server.models import validate_action_params
-from naukri_server.tools.tracking import _load_json, _applications_lock, APPLICATIONS_FILE
+
 from naukri_server.utils import TtlCache
 
 
@@ -86,8 +86,8 @@ async def _conversion_funnel(days: int = 30) -> dict:
     """
     if days < 1:
         return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
+    from naukri_server.database import list_all_applications
+    apps = await list_all_applications()
 
     # Filter by date
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -141,8 +141,8 @@ async def _application_insights(days: int = 30) -> dict:
     """Analyze application history for patterns and insights."""
     if days < 1:
         return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
+    from naukri_server.database import list_all_applications
+    apps = await list_all_applications()
 
     if not apps:
         return {"status": "error", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
@@ -302,8 +302,8 @@ def _parse_salary_str(salary_str: str) -> tuple[float | None, float | None]:
 
 async def _salary_position(designation: Optional[str] = None) -> dict:
     """Analyze salary positioning across applied jobs."""
-    async with _applications_lock:
-        apps = _load_json(APPLICATIONS_FILE)
+    from naukri_server.database import list_all_applications
+    apps = await list_all_applications()
 
     if not apps:
         return {"status": "error", "message": "No applications tracked yet.", "error_code": "NOT_FOUND"}

@@ -121,14 +121,14 @@ class TestEmptyResponses:
     @pytest.mark.asyncio
     async def test_insights_no_applications(self):
         from naukri_server.tools.insights import naukri_insights
-        with patch("naukri_server.tools.insights._load_json", return_value=[]):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await naukri_insights(insight_type="applications")
             assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_insights_salary_no_applications(self):
         from naukri_server.tools.insights import naukri_insights
-        with patch("naukri_server.tools.insights._load_json", return_value=[]):
+        with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
             result = await naukri_insights(insight_type="salary")
             assert result["status"] == "error"
 

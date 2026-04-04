@@ -58,8 +58,7 @@ def test_parse_salary_single_value():
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_application_insights_basic(mock_load):
     now = datetime.now(timezone.utc).isoformat()
     mock_load.return_value = [
@@ -79,8 +78,7 @@ async def test_application_insights_basic(mock_load):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_application_insights_no_data(mock_load):
     mock_load.return_value = []
     from naukri_server.tools.insights import _application_insights
@@ -93,8 +91,7 @@ async def test_application_insights_no_data(mock_load):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_salary_position_basic(mock_load):
     mock_load.return_value = [
         {"title": "SDE", "salary": "10-15 LPA"},
@@ -173,8 +170,7 @@ async def test_insights_salary_benchmark_requires_keywords():
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_conversion_funnel_mixed_statuses(mock_load):
     """Conversion funnel with mixed statuses should compute correct counts and rate."""
     now = datetime.now(timezone.utc).isoformat()
@@ -206,8 +202,7 @@ async def test_conversion_funnel_mixed_statuses(mock_load):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_conversion_funnel_dead_zones(mock_load):
     """Dead zones: companies with 3+ applies and 0 responses."""
     now = datetime.now(timezone.utc).isoformat()
@@ -237,8 +232,7 @@ async def test_conversion_funnel_dead_zones(mock_load):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.insights._applications_lock", new=_MockAsyncLock())
-@patch("naukri_server.tools.insights._load_json")
+@patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
 async def test_conversion_funnel_empty_applications(mock_load):
     """Empty applications should return zeroed-out funnel."""
     mock_load.return_value = []

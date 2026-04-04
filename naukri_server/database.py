@@ -205,6 +205,39 @@ async def count_applications_by_status():
         await db.close()
 
 
+async def get_applied_job_ids() -> set:
+    """Return set of all job_id strings in applications table. Efficient for duplicate checking."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT job_id FROM applications")
+        rows = await cursor.fetchall()
+        return {row["job_id"] for row in rows}
+    finally:
+        await db.close()
+
+
+async def list_all_applications():
+    """Return all applications (no pagination). For analytics/export."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM applications ORDER BY applied_at DESC")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def list_all_saved_jobs():
+    """Return all saved jobs (no pagination). For export."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM saved_jobs ORDER BY saved_at DESC")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
 # ---------------------------------------------------------------------------
 # Saved jobs CRUD
 # ---------------------------------------------------------------------------

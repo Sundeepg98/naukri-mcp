@@ -87,10 +87,8 @@ async def naukri_auto_hunt(
 
         # Cross-reference with local applications tracking
         try:
-            from naukri_server.tools.tracking import _load_json, APPLICATIONS_FILE, _applications_lock
-            async with _applications_lock:
-                local_apps = _load_json(APPLICATIONS_FILE)
-                local_applied_ids = {str(a.get("job_id")) for a in local_apps}
+            from naukri_server.database import get_applied_job_ids
+            local_applied_ids = await get_applied_job_ids()
             jobs = [j for j in jobs if str(j.get("job_id")) not in local_applied_ids]
         except Exception as e:
             logger.warning("Job cross-ref failed — duplicate detection may be incomplete: %s", e)

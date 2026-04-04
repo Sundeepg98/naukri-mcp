@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from naukri_server.config import logger, APPLICATIONS_FILE, SAVED_JOBS_FILE, EXPORTS_DIR
+from naukri_server.config import logger, EXPORTS_DIR
 
 _EXPORTS_DIR = EXPORTS_DIR
 
@@ -62,24 +62,16 @@ async def _export_data(
     # Load data
     records = []
     if data_type == "applications":
-        apps_file = APPLICATIONS_FILE
-        if not apps_file.exists():
+        from naukri_server.database import list_all_applications
+        records = await list_all_applications()
+        if not records:
             return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
-        try:
-            records = json.loads(apps_file.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.error("Failed to read applications for export: %s", e)
-            return {"status": "error", "message": f"Failed to read applications: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "saved_jobs":
-        saved_file = SAVED_JOBS_FILE
-        if not saved_file.exists():
+        from naukri_server.database import list_all_saved_jobs
+        records = await list_all_saved_jobs()
+        if not records:
             return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first.", "error_code": "NOT_FOUND"}
-        try:
-            records = json.loads(saved_file.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.error("Failed to read saved jobs for export: %s", e)
-            return {"status": "error", "message": f"Failed to read saved jobs: {e}", "error_code": "API_ERROR"}
 
     elif data_type == "search_results":
         if not keywords:

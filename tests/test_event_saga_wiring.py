@@ -42,8 +42,9 @@ class TestSyncEmitsStatusChangedEvents:
 
         with (
             patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock, return_value=remote_rest_data),
-            patch("naukri_server.tools.sync._load_json", return_value=list(local_apps)),
-            patch("naukri_server.tools.sync._save_json"),
+            patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=list(local_apps)),
+            patch("naukri_server.database.upsert_application", new_callable=AsyncMock),
+            patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock),
             patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock, return_value={}),
             patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock),
             patch("naukri_server.tools.sync.event_bus", test_bus),
@@ -94,8 +95,9 @@ class TestSyncEmitsStatusChangedEvents:
 
         with (
             patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock, return_value=remote_rest_data),
-            patch("naukri_server.tools.sync._load_json", return_value=list(local_apps)),
-            patch("naukri_server.tools.sync._save_json"),
+            patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=list(local_apps)),
+            patch("naukri_server.database.upsert_application", new_callable=AsyncMock),
+            patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock),
             patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock, return_value={}),
             patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock),
             patch("naukri_server.tools.sync.event_bus", test_bus),
