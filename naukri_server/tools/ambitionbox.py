@@ -17,6 +17,7 @@ from naukri_server.browser import browser, page_goto, page_evaluate_safe
 from naukri_server.config import (
     AMBITIONBOX_BASE, AMBITIONBOX_FALLBACK_SLEEP, AMBITIONBOX_WAIT_TIMEOUT,
 )
+from naukri_server.domain import safe_get
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_salary_data, validate_review_data, validate_page
 
@@ -42,18 +43,18 @@ def _extract_company_id(page_props: dict) -> str | None:
     if not page_props:
         return None
     # Primary: metaData.companyId
-    meta = page_props.get("metaData") or {}
-    cid = meta.get("companyId")
+    meta = safe_get(page_props, "metaData", field_name="metaData", warn=True, context="company_id") or {}
+    cid = safe_get(meta, "companyId", field_name="companyId", warn=True, context="company_id")
     if cid:
         return str(cid)
     # Fallback: companyData / companyHeaderData / companyInfo
     for key in ("companyData", "companyHeaderData", "companyInfo", "company"):
-        container = page_props.get(key)
+        container = safe_get(page_props, key)
         if isinstance(container, dict):
-            for id_key in ("CompanyId", "companyId", "id"):
-                val = container.get(id_key)
-                if val is not None:
-                    return str(val)
+            val = safe_get(container, "CompanyId", "companyId", "id",
+                           field_name="company_id", warn=True, context=f"fallback_{key}")
+            if val is not None:
+                return str(val)
     return None
 
 
@@ -284,7 +285,8 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                     "error_code": "BROWSER_ERROR",
                 }
 
-            page_props = next_data.get("props", {}).get("pageProps", {})
+            props = safe_get(next_data, "props", field_name="props", warn=True, context=company_slug) or {}
+            page_props = safe_get(props, "pageProps", field_name="pageProps", warn=True, context=company_slug) or {}
             if not page_props:
                 return {
                     "status": "error",
@@ -294,33 +296,33 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
 
             # Extract company info — check multiple possible keys
             company_data = (
-                page_props.get("companyData", {})
-                or page_props.get("companyMetaData", {})
-                or page_props.get("companyInfo", {})
-                or page_props.get("company", {})
+                safe_get(page_props, "companyData", "companyMetaData", "companyInfo", "company",
+                         field_name="company_data", warn=True, context=company_slug)
                 or {}
             )
             company_name = (
-                company_data.get("CompanyName")
-                or company_data.get("companyName")
-                or company_data.get("name")
-                or page_props.get("companyName")
+                safe_get(company_data, "CompanyName", "companyName", "name",
+                         field_name="company_name", warn=True, context=company_slug)
+                or safe_get(page_props, "companyName")
                 or company_slug
             )
 
             # New structure (2026): salaryData.data.summaryData + latestSalaries.latestSalaries
             # Old structure: flat keys like salaryOverview, salaries, experienceWiseSalary
-            salary_container = page_props.get("salaryData") or {}
-            salary_data = salary_container.get("data", {}) if isinstance(salary_container, dict) else {}
-            summary = salary_data.get("summaryData", {}) or {}
-            insights = salary_data.get("profileInsights", {}) or {}
+            salary_container = safe_get(page_props, "salaryData",
+                                        field_name="salaryData", warn=True, context=company_slug) or {}
+            salary_data = safe_get(salary_container, "data") or {} if isinstance(salary_container, dict) else {}
+            summary = safe_get(salary_data, "summaryData",
+                               field_name="summaryData", warn=True, context=company_slug) or {}
+            insights = safe_get(salary_data, "profileInsights") or {}
 
             # Extract salary overview — try new nested structure first, then old flat keys
+            salary_overview = safe_get(page_props, "salaryOverview") or {}
             avg_salary = (
-                summary.get("totalSalaryAverage")
-                or insights.get("averageCtc")
-                or page_props.get("salaryOverview", {}).get("avgSalary")
-                or page_props.get("salaryOverview", {}).get("averageSalary")
+                safe_get(summary, "totalSalaryAverage",
+                         field_name="avg_salary", warn=True, context=company_slug)
+                or safe_get(insights, "averageCtc")
+                or safe_get(salary_overview, "avgSalary", "averageSalary")
             )
             # Convert string values to float if needed
             if isinstance(avg_salary, str):
@@ -329,9 +331,10 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 except (ValueError, TypeError):
                     pass
             min_salary = (
-                summary.get("minCtc")
-                or insights.get("minCtc")
-                or page_props.get("salaryOverview", {}).get("minSalary")
+                safe_get(summary, "minCtc",
+                         field_name="min_salary", warn=True, context=company_slug)
+                or safe_get(insights, "minCtc")
+                or safe_get(salary_overview, "minSalary")
             )
             if isinstance(min_salary, str):
                 try:
@@ -339,9 +342,10 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 except (ValueError, TypeError):
                     pass
             max_salary = (
-                summary.get("maxCtc")
-                or insights.get("maxCtc")
-                or page_props.get("salaryOverview", {}).get("maxSalary")
+                safe_get(summary, "maxCtc",
+                         field_name="max_salary", warn=True, context=company_slug)
+                or safe_get(insights, "maxCtc")
+                or safe_get(salary_overview, "maxSalary")
             )
             if isinstance(max_salary, str):
                 try:
@@ -349,8 +353,9 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                 except (ValueError, TypeError):
                     pass
             total_salaries = (
-                summary.get("totalSalaryDataPoints")
-                or page_props.get("salaryOverview", {}).get("totalSalaries")
+                safe_get(summary, "totalSalaryDataPoints",
+                         field_name="total_salaries", warn=True, context=company_slug)
+                or safe_get(salary_overview, "totalSalaries")
             )
             if isinstance(total_salaries, str):
                 try:
@@ -359,16 +364,15 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                     pass
 
             # Extract percentiles if available (new structure)
-            percentiles = summary.get("percentiles")
+            percentiles = safe_get(summary, "percentiles")
 
             # Extract individual salary entries — latestSalaries is {latestSalaries: [...]}
-            latest_container = page_props.get("latestSalaries") or {}
+            latest_container = safe_get(page_props, "latestSalaries",
+                                        field_name="latestSalaries", warn=True, context=company_slug) or {}
             raw_salaries = (
-                (latest_container.get("latestSalaries") if isinstance(latest_container, dict) else None)
+                (safe_get(latest_container, "latestSalaries") if isinstance(latest_container, dict) else None)
                 or (latest_container if isinstance(latest_container, list) else None)
-                or page_props.get("salaries")
-                or page_props.get("salaryList")
-                or page_props.get("designationSalaries")
+                or safe_get(page_props, "salaries", "salaryList", "designationSalaries")
                 or []
             )
             salaries = []
@@ -377,25 +381,20 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                     if not isinstance(entry, dict):
                         continue
                     salaries.append({
-                        "designation": (
-                            entry.get("jobProfileName")
-                            or entry.get("Designation")
-                            or entry.get("designation")
-                            or entry.get("title")
-                        ),
+                        "designation": safe_get(
+                            entry, "jobProfileName", "Designation", "designation", "title",
+                            field_name="salary_designation", warn=True, context=company_slug),
                         "ctc": entry.get("ctc"),
-                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary") or entry.get("ctc"),
-                        "experience": entry.get("experience") or entry.get("avgExperience"),
+                        "avg_salary": safe_get(entry, "avgSalary", "averageSalary", "ctc"),
+                        "experience": safe_get(entry, "experience", "avgExperience"),
                         "experience_unit": entry.get("experienceUnit"),
-                        "reported": entry.get("timeElapse") or entry.get("timeStamp"),
+                        "reported": safe_get(entry, "timeElapse", "timeStamp"),
                     })
 
             # Extract experience-wise breakdown — new: salaryData.data.experienceLevels
             exp_breakdown_raw = (
-                salary_data.get("experienceLevels")
-                or salary_data.get("bucketedExperienceLevels")
-                or page_props.get("experienceWiseSalary")
-                or page_props.get("experienceBreakdown")
+                safe_get(salary_data, "experienceLevels", "bucketedExperienceLevels")
+                or safe_get(page_props, "experienceWiseSalary", "experienceBreakdown")
                 or []
             )
             experience_breakdown = []
@@ -404,19 +403,15 @@ async def _fetch_salary(company_slug: str, designation: str = "") -> dict:
                     if not isinstance(entry, dict):
                         continue
                     # Build experience range from minExp/maxExp if no label
-                    exp_range = (
-                        entry.get("experienceRange")
-                        or entry.get("bucketLabel")
-                        or entry.get("label")
-                    )
+                    exp_range = safe_get(entry, "experienceRange", "bucketLabel", "label")
                     if not exp_range and entry.get("minExp") is not None and entry.get("maxExp") is not None:
                         exp_range = f"{entry['minExp']}-{entry['maxExp']} years"
                     experience_breakdown.append({
                         "experience_range": exp_range,
-                        "avg_salary": entry.get("avgSalary") or entry.get("averageSalary") or entry.get("avgCtc"),
-                        "min_salary": entry.get("minSalary") or entry.get("lowSalary") or entry.get("minCtc"),
-                        "max_salary": entry.get("maxSalary") or entry.get("highSalary") or entry.get("maxCtc"),
-                        "count": entry.get("count") or entry.get("salaryCount") or entry.get("dataPoints"),
+                        "avg_salary": safe_get(entry, "avgSalary", "averageSalary", "avgCtc"),
+                        "min_salary": safe_get(entry, "minSalary", "lowSalary", "minCtc"),
+                        "max_salary": safe_get(entry, "maxSalary", "highSalary", "maxCtc"),
+                        "count": safe_get(entry, "count", "salaryCount", "dataPoints"),
                     })
 
             result = {
@@ -490,7 +485,8 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                     "error_code": "BROWSER_ERROR",
                 }
 
-            page_props = next_data.get("props", {}).get("pageProps", {})
+            props = safe_get(next_data, "props", field_name="props", warn=True, context=company_slug) or {}
+            page_props = safe_get(props, "pageProps", field_name="pageProps", warn=True, context=company_slug) or {}
             if not page_props:
                 return {
                     "status": "error",
@@ -499,22 +495,24 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                 }
 
             # Extract company info — actual keys: companyName, companyHeaderData
+            header_data = safe_get(page_props, "companyHeaderData") or {}
             company_name = (
-                page_props.get("companyName")
-                or (page_props.get("companyHeaderData") or {}).get("CompanyName")
+                safe_get(page_props, "companyName")
+                or safe_get(header_data, "CompanyName",
+                            field_name="company_name", warn=True, context=company_slug)
                 or company_slug
             )
 
             # Overall rating — ratingsData.overallCompanyRating (float like 3.8)
-            rating_data = page_props.get("ratingsData", {}) or {}
-            overall_rating = rating_data.get("overallCompanyRating")
-            review_count = (
-                page_props.get("fixedReviewCount")
-                or page_props.get("reviewCount")
-            )
+            rating_data = safe_get(page_props, "ratingsData",
+                                   field_name="ratingsData", warn=True, context=company_slug) or {}
+            overall_rating = safe_get(rating_data, "overallCompanyRating",
+                                      field_name="overall_rating", warn=True, context=company_slug)
+            review_count = safe_get(page_props, "fixedReviewCount", "reviewCount",
+                                    field_name="review_count", warn=True, context=company_slug)
 
             # Rating distribution — ratingDistribution is dict {"5": 281, "4": 130, ...}
-            rating_dist_raw = page_props.get("ratingDistribution", {})
+            rating_dist_raw = safe_get(page_props, "ratingDistribution") or {}
             rating_distribution = rating_dist_raw if isinstance(rating_dist_raw, dict) and rating_dist_raw else None
 
             # Category ratings — ratingsData has float ratings, ratingCounts has counts
@@ -535,22 +533,25 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                     category_ratings[label] = val
 
             # Individual reviews — reviewsData is list of review dicts
-            raw_reviews = page_props.get("reviewsData") or page_props.get("detailedReviews") or []
+            raw_reviews = safe_get(page_props, "reviewsData", "detailedReviews",
+                                   field_name="reviewsData", warn=True, context=company_slug) or []
             reviews = []
             if isinstance(raw_reviews, list):
                 for rev in raw_reviews:
                     if not isinstance(rev, dict):
                         continue
                     # Extract designation from nested jobProfile object
-                    job_profile = rev.get("jobProfile") or {}
-                    designation = job_profile.get("name") if isinstance(job_profile, dict) else None
+                    job_profile = safe_get(rev, "jobProfile") or {}
+                    designation = safe_get(job_profile, "name") if isinstance(job_profile, dict) else None
                     # Extract location from nested jobLocation object
-                    job_location = rev.get("jobLocation") or {}
-                    location = job_location.get("name") if isinstance(job_location, dict) else None
+                    job_location = safe_get(rev, "jobLocation") or {}
+                    location = safe_get(job_location, "name") if isinstance(job_location, dict) else None
 
                     reviews.append({
-                        "title": rev.get("reviewTitle"),
-                        "rating": rev.get("overallCompanyRating"),
+                        "title": safe_get(rev, "reviewTitle",
+                                          field_name="review_title", warn=True, context=company_slug),
+                        "rating": safe_get(rev, "overallCompanyRating",
+                                           field_name="review_rating", warn=True, context=company_slug),
                         "designation": designation,
                         "location": location,
                         "department": rev.get("division"),
@@ -565,11 +566,11 @@ async def _fetch_reviews(company_slug: str, page: int = 1) -> dict:
                     })
 
             # Pagination — detailedReviewPagination or pagination
-            pagination = page_props.get("detailedReviewPagination") or page_props.get("pagination") or {}
-            total_pages = pagination.get("totalPages") or pagination.get("lastPage")
+            pagination = safe_get(page_props, "detailedReviewPagination", "pagination") or {}
+            total_pages = safe_get(pagination, "totalPages", "lastPage")
 
             # Review summary (AI-generated)
-            review_summary = page_props.get("reviewSummary")
+            review_summary = safe_get(page_props, "reviewSummary")
 
             result = {
                 "status": "success",
@@ -648,37 +649,36 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
 
                 return {"status": "error", "message": "Could not extract interview data (no __NEXT_DATA__ and DOM scraping yielded no results).", "error_code": "NOT_FOUND"}
 
-            page_props = next_data.get("props", {}).get("pageProps", {})
+            props = safe_get(next_data, "props", field_name="props", warn=True, context=company_slug) or {}
+            page_props = safe_get(props, "pageProps", field_name="pageProps", warn=True, context=company_slug) or {}
 
             # Company info
             company_data = (
-                page_props.get("companyData", {})
-                or page_props.get("companyInfo", {})
+                safe_get(page_props, "companyData", "companyInfo",
+                         field_name="company_data", warn=True, context=company_slug)
                 or {}
             )
             company_name = (
-                company_data.get("CompanyName")
-                or company_data.get("companyName")
+                safe_get(company_data, "CompanyName", "companyName",
+                         field_name="company_name", warn=True, context=company_slug)
                 or company_slug
             )
 
             # Interview overview
-            overview = page_props.get("interviewOverview", {}) or page_props.get("overview", {}) or {}
+            overview = safe_get(page_props, "interviewOverview", "overview",
+                                field_name="interview_overview", warn=True, context=company_slug) or {}
             total_interviews = (
-                overview.get("totalInterviews")
-                or overview.get("interviewCount")
-                or page_props.get("totalInterviews")
+                safe_get(overview, "totalInterviews", "interviewCount",
+                         field_name="total_interviews", warn=True, context=company_slug)
+                or safe_get(page_props, "totalInterviews")
             )
-            overall_difficulty = (
-                overview.get("difficultyPercentage")
-                or overview.get("difficulty")
-            )
+            overall_difficulty = safe_get(overview, "difficultyPercentage", "difficulty",
+                                          field_name="overall_difficulty", warn=True, context=company_slug)
 
             # Individual experiences
             raw_interviews = (
-                page_props.get("interviewReviews")
-                or page_props.get("interviews")
-                or page_props.get("interviewExperiences")
+                safe_get(page_props, "interviewReviews", "interviews", "interviewExperiences",
+                         field_name="interview_experiences", warn=True, context=company_slug)
                 or []
             )
 
@@ -686,25 +686,26 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
             for iv in raw_interviews:
                 if not isinstance(iv, dict):
                     continue
-                questions = iv.get("interviewQuestions") or iv.get("questions") or []
+                questions = safe_get(iv, "interviewQuestions", "questions") or []
                 if isinstance(questions, str):
                     questions = [q.strip() for q in questions.split("\n") if q.strip()]
 
+                job_profile = safe_get(iv, "jobProfile")
                 experiences.append({
                     "designation": (
-                        iv.get("jobProfile", {}).get("name")
-                        if isinstance(iv.get("jobProfile"), dict)
-                        else iv.get("jobProfile") or iv.get("designation")
+                        safe_get(job_profile, "name")
+                        if isinstance(job_profile, dict)
+                        else job_profile or safe_get(iv, "designation")
                     ),
-                    "difficulty": iv.get("difficultyLevel") or iv.get("difficulty"),
-                    "outcome": iv.get("offerStatus") or iv.get("outcome") or iv.get("result"),
-                    "experience_type": iv.get("experienceType") or iv.get("interviewType"),
-                    "duration": iv.get("duration") or iv.get("interviewDuration"),
-                    "rounds": iv.get("rounds") or iv.get("interviewRounds"),
+                    "difficulty": safe_get(iv, "difficultyLevel", "difficulty"),
+                    "outcome": safe_get(iv, "offerStatus", "outcome", "result"),
+                    "experience_type": safe_get(iv, "experienceType", "interviewType"),
+                    "duration": safe_get(iv, "duration", "interviewDuration"),
+                    "rounds": safe_get(iv, "rounds", "interviewRounds"),
                     "questions": questions[:10],
-                    "date": iv.get("created") or iv.get("date"),
-                    "likes": iv.get("likesText") or iv.get("positives"),
-                    "dislikes": iv.get("disLikesText") or iv.get("negatives"),
+                    "date": safe_get(iv, "created", "date"),
+                    "likes": safe_get(iv, "likesText", "positives"),
+                    "dislikes": safe_get(iv, "disLikesText", "negatives"),
                 })
 
             result = {
@@ -721,7 +722,7 @@ async def _fetch_interviews(company_slug: str, page: int = 1) -> dict:
             if ab_cid:
                 result["_ab_company_id"] = ab_cid
 
-            difficulty_data = overview.get("difficultyBreakdown") or overview.get("difficultyDistribution")
+            difficulty_data = safe_get(overview, "difficultyBreakdown", "difficultyDistribution")
             if difficulty_data:
                 result["difficulty_breakdown"] = difficulty_data
 
