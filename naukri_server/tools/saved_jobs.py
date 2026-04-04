@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.config import (
     logger, SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
     APPLICATIONS_FILE, SAVED_JOBS_FILE,
 )
-from naukri_server.models import paginate
+from naukri_server.models import paginate, validate_action_params
 from naukri_server.validation import validate_limit, validate_page
 from naukri_server.tools.tracking import _load_json, _save_json
 
@@ -23,7 +23,7 @@ async def _push_save_to_naukri(job_id: str) -> bool:
         logger.info("SAVE_JOB_API not configured, skipping remote sync")
         return False
     try:
-        await api_post(f"{SAVE_JOB_API}{job_id}", {})
+        await api_client.post(f"{SAVE_JOB_API}{job_id}", {})
         return True
     except Exception as e:
         logger.warning("Failed to sync save to Naukri: %s", e)
@@ -82,7 +82,7 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
 async def _sync_saved_jobs_from_naukri() -> dict:
     """Pull saved jobs from Naukri server and merge with local tracking."""
     try:
-        data = await api_get(SAVED_JOBS_API, params={"start": "0", "limit": "100"})
+        data = await api_client.get(SAVED_JOBS_API, params={"start": "0", "limit": "100"})
     except Exception as e:
         return {"status": "error", "message": f"Failed to fetch saved jobs: {e}", "error_code": "API_ERROR"}
 
@@ -122,7 +122,7 @@ async def _unsave_job(job_id: str) -> dict:
     """Unsave/unbookmark a job locally and on Naukri."""
     # Always attempt the remote unsave regardless of local state
     try:
-        await api_post(UNSAVE_JOB_API + job_id, body={})
+        await api_client.post(UNSAVE_JOB_API + job_id, body={})
     except Exception as e:
         logger.warning("Failed to unsave job on Naukri: %s", e)
 
@@ -136,6 +136,18 @@ async def _unsave_job(job_id: str) -> dict:
             return {"status": "success", "action": "unsaved", "job_id": job_id}
         else:
             return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}
+
+
+# ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "list": {"limit", "page"},
+    "save": {"job_id", "title", "company", "notes", "sync_to_naukri"},
+    "unsave": {"job_id"},
+    "sync": set(),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -179,25 +191,39 @@ async def naukri_saved_jobs(
                   or {status: "not_found", job_id}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id, "title": title, "company": company, "notes": notes,
+        "sync_to_naukri": sync_to_naukri if sync_to_naukri else None,
+        "limit": limit if limit != 50 else None,
+        "page": page if page != 1 else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # -- list ---------------------------------------------------------------
     if action == "list":
-        return await _list_saved_jobs(limit=limit, page=page)
+        return _attach_unused(await _list_saved_jobs(limit=limit, page=page))
 
     # -- save ---------------------------------------------------------------
     elif action == "save":
         if not job_id:
             return {"status": "error", "message": "save requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
+        return _attach_unused(await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri))
 
     # -- unsave -------------------------------------------------------------
     elif action == "unsave":
         if not job_id:
             return {"status": "error", "message": "unsave requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await _unsave_job(job_id)
+        return _attach_unused(await _unsave_job(job_id))
 
     # -- sync ---------------------------------------------------------------
     elif action == "sync":
-        return await _sync_saved_jobs_from_naukri()
+        return _attach_unused(await _sync_saved_jobs_from_naukri())
 
     # -- unknown action -----------------------------------------------------
     else:

@@ -19,7 +19,7 @@ class TestSearchJobs:
     async def test_search_jobs_page_clamped_zero(self):
         """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_search_jobs
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {
                 "noOfJobs": 1,
                 "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "X",
@@ -32,7 +32,7 @@ class TestSearchJobs:
     async def test_search_jobs_page_clamped_negative(self):
         """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_search_jobs
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {
                 "noOfJobs": 1,
                 "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "X",
@@ -87,7 +87,7 @@ class TestGetRecommendations:
     async def test_recommendations_page_clamped_zero(self):
         """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_recommendations
-        with patch("naukri_server.tools.search.api_post", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"jobDetails": []}
             result = await naukri_get_recommendations(page=0)
             mock_api.assert_awaited()
@@ -96,7 +96,7 @@ class TestGetRecommendations:
     async def test_recommendations_page_clamped_negative(self):
         """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_recommendations
-        with patch("naukri_server.tools.search.api_post", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"jobDetails": []}
             result = await naukri_get_recommendations(page=-1)
             mock_api.assert_awaited()
@@ -114,7 +114,7 @@ class TestGetRecommendations:
             "noOfJobs": 1,
         }
 
-        with patch("naukri_server.tools.search.api_post", new_callable=AsyncMock) as mock_post:
+        with patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = fake_data
             result = await naukri_get_recommendations(limit=10, page=1)
             mock_post.assert_awaited_once()
@@ -134,7 +134,7 @@ class TestGetSimilarJobs:
     async def test_similar_jobs_page_clamped_zero(self):
         """page=0 is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_similar_jobs
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"jobDetails": []}
             result = await naukri_get_similar_jobs(job_id="12345", page=0)
             mock_api.assert_awaited()
@@ -143,7 +143,7 @@ class TestGetSimilarJobs:
     async def test_similar_jobs_page_clamped_negative(self):
         """Negative page is silently clamped to 1 by validate_page (no error)."""
         from naukri_server.tools.search import naukri_get_similar_jobs
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"jobDetails": []}
             result = await naukri_get_similar_jobs(job_id="12345", page=-3)
             mock_api.assert_awaited()
@@ -164,7 +164,7 @@ class TestGetSimilarJobs:
             "noOfJobs": 1,
         }
 
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_get:
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = fake_data
             result = await naukri_get_similar_jobs(job_id="12345", limit=10, page=1)
             mock_get.assert_awaited_once()
@@ -223,7 +223,7 @@ class TestGetJob:
             "earlyApplicant": True,
         }
 
-        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
+        with patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock) as mock_get:
             mock_get.side_effect = [fake_detail, fake_match_score]
             result = await naukri_get_job(
                 job_id_or_url="https://www.naukri.com/job-listings-python-developer-123456789"
@@ -249,7 +249,7 @@ class TestReportFraudJob:
         """Valid job_id and reason routes to api_post and returns success."""
         from naukri_server.tools.jobs import naukri_report_fraud_job
 
-        with patch("naukri_server.tools.jobs.api_post", new_callable=AsyncMock) as mock_post:
+        with patch("naukri_server.tools.jobs.api_client.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
             result = await naukri_report_fraud_job(job_id="12345", reason="Fake listing")
             mock_post.assert_awaited_once()
@@ -359,7 +359,7 @@ class TestFetchMatchScore:
             "skillMismatch": "Docker, AWS",
         }
 
-        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
+        with patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = fake_response
             result = await _fetch_match_score("123456")
 
@@ -378,7 +378,7 @@ class TestFetchMatchScore:
         """API failure returns None gracefully — no exception propagated."""
         from naukri_server.tools.jobs import _fetch_match_score
 
-        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock) as mock_get:
+        with patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock) as mock_get:
             mock_get.side_effect = Exception("Network error")
             result = await _fetch_match_score("999999")
 

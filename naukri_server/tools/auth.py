@@ -5,7 +5,8 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
 from naukri_server.config import (
     logger, ACTIVITY_LEVEL_API, NAUKRI_BASE,
@@ -122,7 +123,7 @@ async def _verify_otp(page, otp: str) -> dict:
 
 async def _get_login_status() -> dict:
     """Check if the Naukri session is still active."""
-    data = await api_get(ACTIVITY_LEVEL_API)
+    data = await api_client.get(ACTIVITY_LEVEL_API)
     return {
         "status": "success",
         "logged_in": data.get("loggedInStatus", False),

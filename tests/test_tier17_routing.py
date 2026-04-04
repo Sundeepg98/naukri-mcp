@@ -72,7 +72,7 @@ class TestJobsSimilar:
             },
             "noOfJobs": 1,
         }
-        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock, return_value=fake_rest):
+        with patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock, return_value=fake_rest):
             result = await naukri_jobs(action="similar", job_id="12345", limit=10)
             assert result["status"] == "success"
             assert result["source"] == "rest_api"
@@ -89,7 +89,7 @@ class TestJobsSimilar:
     async def test_similar_rest_failure_falls_back(self):
         """When REST v2 fails, dispatcher falls back to search._get_similar_jobs."""
         from naukri_server.tools.jobs import naukri_jobs
-        with patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock, side_effect=Exception("timeout")) as mock_rest, \
+        with patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock, side_effect=Exception("timeout")) as mock_rest, \
              patch("naukri_server.tools.search._get_similar_jobs", new_callable=AsyncMock) as mock_fallback:
             mock_fallback.return_value = {"status": "success", "job_id": "12345", "source": "similar", "total": 5, "count": 5, "jobs": []}
             result = await naukri_jobs(action="similar", job_id="12345", limit=10, page=1)

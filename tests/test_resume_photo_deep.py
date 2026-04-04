@@ -500,7 +500,7 @@ class TestResumeInfoHelper:
     """_resume_info correctly extracts fields from the profile API response."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.resume_photo.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.resume_photo.api_client.get", new_callable=AsyncMock)
     async def test_resume_info_extracts_fields(self, mock_api_get):
         mock_api_get.return_value = {
             "profile": [
@@ -525,7 +525,7 @@ class TestResumeInfoHelper:
         assert "download_url" in result
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.resume_photo.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.resume_photo.api_client.get", new_callable=AsyncMock)
     async def test_resume_info_handles_empty_profile(self, mock_api_get):
         mock_api_get.return_value = {"profile": []}
         from naukri_server.tools.resume_photo import _resume_info
@@ -544,7 +544,7 @@ class TestPhotoInfoHelper:
     """_photo_info correctly extracts photo fields from the profile API response."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.resume_photo.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.resume_photo.api_client.get", new_callable=AsyncMock)
     async def test_photo_info_extracts_fields(self, mock_api_get):
         mock_api_get.return_value = {
             "profile": [
@@ -569,7 +569,7 @@ class TestPhotoInfoHelper:
         assert "download_api" in result
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.resume_photo.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.resume_photo.api_client.get", new_callable=AsyncMock)
     async def test_photo_info_no_photo(self, mock_api_get):
         mock_api_get.return_value = {
             "profile": [{"photoInfo": {"isAvailable": False}}]

@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from naukri_server.browser import browser, page_goto
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.config import (
     NAUKRI_BASE, PROFILE_API, FULLPROFILES_API,
     BROWSER_OPERATION_TIMEOUT, logger,
@@ -714,7 +714,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
 
     # Strategy 1: REST API (fast, no browser interaction)
     try:
-        profile_data = await api_get(
+        profile_data = await api_client.get(
             PROFILE_API,
             {"expand_level": "4"},
         )
@@ -725,7 +725,7 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                 for version in ("v0", "v2"):
                     try:
                         endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
-                        await api_post(endpoint, {"resumeHeadline": headline})
+                        await api_client.post(endpoint, {"resumeHeadline": headline})
                         _profile_ttl_cache.invalidate()
                         _dashboard_ttl_cache.invalidate()
                         return {

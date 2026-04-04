@@ -3,7 +3,7 @@ import json
 import re
 from typing import Optional
 
-from naukri_server.api import api_post
+from naukri_server.interfaces import api_client
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT, logger
 from naukri_server.models import ApplicationStatus
@@ -42,7 +42,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
             if apply_answers:
                 body["applyData"] = {job_id: {"answers": apply_answers}}
 
-        data = await api_post(
+        data = await api_client.post(
             APPLY_WORKFLOW_API,
             body,
         )
@@ -128,7 +128,7 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
             # Network calls OUTSIDE the lock
             if not pending and auto_answers:
                 body["applyData"] = {job_id: {"answers": auto_answers}}
-                data2 = await api_post(
+                data2 = await api_client.post(
                     APPLY_WORKFLOW_API,
                     body,
                 )

@@ -82,7 +82,7 @@ class TestSettings:
     async def test_settings_get_routes(self):
         """get action should call api_get and return parsed settings."""
         from naukri_server.tools.settings import naukri_settings
-        with patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"sections": []}
             result = await naukri_settings(action="get")
             assert mock_api.await_count >= 1  # formatted + raw settings APIs

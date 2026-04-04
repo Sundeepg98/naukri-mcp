@@ -256,7 +256,7 @@ class TestGetMatchAnalytics:
             "userDetails": {"name": "Sundeep"},
         }
 
-        with patch("naukri_server.tools.analytics.api_get",
+        with patch("naukri_server.tools.analytics.api_client.get",
                     new_callable=AsyncMock, return_value=api_data):
             result = await _get_match_analytics(days=7)
 
@@ -275,7 +275,7 @@ class TestGetMatchAnalytics:
         """If API returns empty-ish data, fields should be None, not crash."""
         from naukri_server.tools.tracking import _get_match_analytics
 
-        with patch("naukri_server.tools.analytics.api_get",
+        with patch("naukri_server.tools.analytics.api_client.get",
                     new_callable=AsyncMock, return_value={}):
             result = await _get_match_analytics(days=30)
 
@@ -290,7 +290,7 @@ class TestGetMatchAnalytics:
         from naukri_server.tools.tracking import _get_match_analytics
         from naukri_server.api import NaukriAPIError
 
-        with patch("naukri_server.tools.analytics.api_get",
+        with patch("naukri_server.tools.analytics.api_client.get",
                     new_callable=AsyncMock,
                     side_effect=NaukriAPIError(401, "Unauthorized")):
             with pytest.raises(NaukriAPIError):
@@ -301,7 +301,7 @@ class TestGetMatchAnalytics:
         """days < 1 should return VALIDATION_ERROR without calling API."""
         from naukri_server.tools.tracking import _get_match_analytics
 
-        with patch("naukri_server.tools.analytics.api_get",
+        with patch("naukri_server.tools.analytics.api_client.get",
                     new_callable=AsyncMock) as mock_api:
             result = await _get_match_analytics(days=0)
 
@@ -323,7 +323,7 @@ class TestPushSaveToNaukri:
         from naukri_server.tools.tracking import _push_save_to_naukri
 
         with patch("naukri_server.tools.saved_jobs.SAVE_JOB_API", "/save/"), \
-             patch("naukri_server.tools.saved_jobs.api_post",
+             patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock, return_value={}) as mock_post:
             result = await _push_save_to_naukri("J500")
 
@@ -336,7 +336,7 @@ class TestPushSaveToNaukri:
         from naukri_server.tools.tracking import _push_save_to_naukri
 
         with patch("naukri_server.tools.saved_jobs.SAVE_JOB_API", "/save/"), \
-             patch("naukri_server.tools.saved_jobs.api_post",
+             patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock,
                     side_effect=RuntimeError("Network error")):
             result = await _push_save_to_naukri("J501")
@@ -349,7 +349,7 @@ class TestPushSaveToNaukri:
         from naukri_server.tools.tracking import _push_save_to_naukri
 
         with patch("naukri_server.tools.saved_jobs.SAVE_JOB_API", ""), \
-             patch("naukri_server.tools.saved_jobs.api_post",
+             patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock) as mock_post:
             result = await _push_save_to_naukri("J502")
 
@@ -415,7 +415,7 @@ class TestSaveUnsaveJob:
 
         with patch("naukri_server.tools.saved_jobs._load_json", return_value=existing), \
              patch("naukri_server.tools.saved_jobs._save_json", side_effect=fake_save), \
-             patch("naukri_server.tools.saved_jobs.api_post",
+             patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock, return_value={}):
             result = await _unsave_job("J800")
 
@@ -432,7 +432,7 @@ class TestSaveUnsaveJob:
 
         with patch("naukri_server.tools.saved_jobs._load_json", return_value=[]), \
              patch("naukri_server.tools.saved_jobs._save_json") as mock_save, \
-             patch("naukri_server.tools.saved_jobs.api_post",
+             patch("naukri_server.tools.saved_jobs.api_client.post",
                     new_callable=AsyncMock, return_value={}):
             result = await _unsave_job("J999")
 

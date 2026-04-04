@@ -74,7 +74,7 @@ async def test_tailor_empty_string_job_id_returns_validation_error():
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_unwraps_data_envelope(mock_api_get):
     """Response wrapped as {data: {templateConfiguration: {templateDetails: [...]}}}."""
     mock_api_get.return_value = {
@@ -97,7 +97,7 @@ async def test_templates_unwraps_data_envelope(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_type1_is_free_type2_is_pro(mock_api_get):
     """Type == 1 must map to 'free'; anything else maps to 'pro'."""
     mock_api_get.return_value = {
@@ -120,7 +120,7 @@ async def test_templates_type1_is_free_type2_is_pro(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_preview_url_extracted_from_icons_variant1(mock_api_get):
     """preview_url should come from icons.variant1."""
     mock_api_get.return_value = {
@@ -143,7 +143,7 @@ async def test_templates_preview_url_extracted_from_icons_variant1(mock_api_get)
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_empty_list_returns_zero_counts(mock_api_get):
     """When templateDetails is empty, all counts should be 0."""
     mock_api_get.return_value = {
@@ -167,7 +167,7 @@ async def test_templates_empty_list_returns_zero_counts(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_naukri_api_error_caught(mock_api_get):
     """NaukriAPIError from api_get must be caught and returned as status=error."""
     mock_api_get.side_effect = _make_api_error(status=401, message="Unauthorized")
@@ -179,7 +179,7 @@ async def test_templates_naukri_api_error_caught(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_templates_generic_exception_caught(mock_api_get):
     """Generic exceptions must also be caught and returned as status=error."""
     mock_api_get.side_effect = RuntimeError("network timeout")
@@ -195,7 +195,7 @@ async def test_templates_generic_exception_caught(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_status_unwraps_data_resume_builder_envelope(mock_api_get):
     """Response wrapped as {data: {resumeBuilder: {...}}}."""
     mock_api_get.return_value = {
@@ -220,7 +220,7 @@ async def test_status_unwraps_data_resume_builder_envelope(mock_api_get):
 
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_status_defaults_when_fields_missing(mock_api_get):
     """Missing fields must fall back to safe defaults (0, False, '')."""
     mock_api_get.return_value = {"data": {"resumeBuilder": {}}}
@@ -239,7 +239,7 @@ async def test_status_defaults_when_fields_missing(mock_api_get):
 # ===========================================================================
 
 @pytest.mark.asyncio
-@patch("naukri_server.tools.resume_builder.api_get", new_callable=AsyncMock)
+@patch("naukri_server.tools.resume_builder.api_client.get", new_callable=AsyncMock)
 async def test_status_naukri_api_error_caught(mock_api_get):
     """NaukriAPIError from api_get must be caught for the status action."""
     mock_api_get.side_effect = _make_api_error(status=403, message="Forbidden")

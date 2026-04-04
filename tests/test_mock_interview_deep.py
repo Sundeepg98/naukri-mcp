@@ -103,7 +103,7 @@ class TestActionTopics:
     """naukri_mock_interview(action='topics') routes to _get_topics."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.get", new_callable=AsyncMock)
     async def test_topics_success(self, mock_api_get):
         """Successful topics fetch returns status=success with topics and roles."""
         resp = _topics_api_response()
@@ -131,7 +131,7 @@ class TestActionTopics:
         assert r["active"] == "Y"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.get", new_callable=AsyncMock)
     async def test_topics_parses_data_envelope(self, mock_api_get):
         """Response wrapped in data envelope is unwrapped before parsing topics."""
         # data envelope wraps the list directly (no 'topics' key inside data)
@@ -150,7 +150,7 @@ class TestActionTopics:
         assert result["topics"][0]["id"] == "999"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.get", new_callable=AsyncMock)
     async def test_topics_api_error_returns_error(self, mock_api_get):
         """NaukriAPIError from api_get is caught and returned as status=error."""
         from naukri_server.api import NaukriAPIError
@@ -165,7 +165,7 @@ class TestActionTopics:
         assert result["http_status"] == 401
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.get", new_callable=AsyncMock)
     async def test_topics_generic_exception_returns_error(self, mock_api_get):
         """Generic exception from api_get is caught and returned as status=error."""
         mock_api_get.side_effect = RuntimeError("connection refused")
@@ -179,7 +179,7 @@ class TestActionTopics:
         assert "RuntimeError" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.get", new_callable=AsyncMock)
     async def test_topics_string_items_in_list(self, mock_api_get):
         """String items in topics list are handled gracefully (name set, no id)."""
         mock_api_get.side_effect = [
@@ -206,7 +206,7 @@ class TestActionHistory:
     """naukri_mock_interview(action='history') routes to _get_history."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_history_success(self, mock_api_post):
         """History fetch returns status=success with interview list."""
         mock_api_post.return_value = _history_api_response()
@@ -224,7 +224,7 @@ class TestActionHistory:
         assert len(result["interviews"]) == 2
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_history_posts_with_pagination_params(self, mock_api_post):
         """History POST is sent with page=1 and pageSize=50 in the body."""
         mock_api_post.return_value = _history_api_response()
@@ -241,7 +241,7 @@ class TestActionHistory:
         assert body_arg == {"page": 1, "pageSize": 50}
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_history_api_error(self, mock_api_post):
         """NaukriAPIError from api_post is caught and returned as error dict."""
         from naukri_server.api import NaukriAPIError
@@ -256,7 +256,7 @@ class TestActionHistory:
         assert result["http_status"] == 500
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_history_uses_interviews_fallback_key(self, mock_api_post):
         """Falls back to 'interviews' key if 'previousInterview' is absent."""
         mock_api_post.return_value = {
@@ -375,7 +375,7 @@ class TestActionStart:
     """Tests for action='start' — session creation and polling."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_success_first_attempt(self, mock_api_post):
         """Start succeeds when question is DONE on the first polling attempt."""
         session_resp = _session_api_response()
@@ -397,7 +397,7 @@ class TestActionStart:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.mock_interview.asyncio.sleep", new_callable=AsyncMock)
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_polls_until_done(self, mock_api_post, mock_sleep):
         """Start retries up to 5 times and returns success when DONE on 3rd attempt."""
         session_resp = _session_api_response()
@@ -417,7 +417,7 @@ class TestActionStart:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.mock_interview.asyncio.sleep", new_callable=AsyncMock)
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_timeout_returns_generating(self, mock_api_post, mock_sleep):
         """Start returns status=generating after 5 failed polling attempts."""
         session_resp = _session_api_response()
@@ -437,7 +437,7 @@ class TestActionStart:
         assert mock_sleep.await_count == 5
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_session_api_error_code(self, mock_api_post):
         """Non-zero statusCode on session creation returns error."""
         mock_api_post.return_value = {
@@ -455,7 +455,7 @@ class TestActionStart:
         assert "Job not found" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_no_topics_returns_error(self, mock_api_post):
         """Empty topics list in session response returns error."""
         mock_api_post.return_value = {
@@ -472,7 +472,7 @@ class TestActionStart:
         assert "No interview topics" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_missing_test_id_returns_error(self, mock_api_post):
         """Missing testId in testMetaData returns error."""
         mock_api_post.return_value = {
@@ -494,7 +494,7 @@ class TestActionStart:
         assert "test/topic IDs" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_start_naukri_api_error_caught(self, mock_api_post):
         """NaukriAPIError during _start_interview is caught and returned as error."""
         from naukri_server.api import NaukriAPIError
@@ -518,7 +518,7 @@ class TestActionAnswer:
     """Tests for action='answer' — submitting answers and polling."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_returns_next_question(self, mock_api_post):
         """Submitting an answer returns the next question when status=DONE and question.id present."""
         mock_api_post.return_value = _question_done_response(q_id="q2", q_text="Explain decorators.")
@@ -538,7 +538,7 @@ class TestActionAnswer:
         assert result["question"]["text"] == "Explain decorators."
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_test_status_complete(self, mock_api_post):
         """testStatus=COMPLETE terminates the session with status=complete."""
         mock_api_post.return_value = _question_complete_response()
@@ -557,7 +557,7 @@ class TestActionAnswer:
         assert "complete" in result["message"].lower()
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_done_no_question_id_complete(self, mock_api_post):
         """DONE status with no question.id means no more questions — returns complete."""
         mock_api_post.return_value = {
@@ -581,7 +581,7 @@ class TestActionAnswer:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.mock_interview.asyncio.sleep", new_callable=AsyncMock)
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_polls_until_done(self, mock_api_post, mock_sleep):
         """Polls up to 5 times and returns next_question when DONE arrives on 2nd attempt."""
         gen = _question_generating_response()
@@ -604,7 +604,7 @@ class TestActionAnswer:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.mock_interview.asyncio.sleep", new_callable=AsyncMock)
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_timeout_returns_generating(self, mock_api_post, mock_sleep):
         """Returns status=generating after 5 failed polling attempts."""
         gen = _question_generating_response()
@@ -625,7 +625,7 @@ class TestActionAnswer:
         assert mock_sleep.await_count == 5
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.mock_interview.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.mock_interview.api_client.post", new_callable=AsyncMock)
     async def test_answer_naukri_api_error(self, mock_api_post):
         """NaukriAPIError during answer is caught and returned as error."""
         from naukri_server.api import NaukriAPIError

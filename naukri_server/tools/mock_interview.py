@@ -4,12 +4,13 @@ import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.config import (
     MOCK_INTERVIEW_TOPICS_API, MOCK_INTERVIEW_HISTORY_API, MOCK_INTERVIEW_ROLE_API,
     MOCK_INTERVIEW_OTHER_TOPICS_API, MOCK_INTERVIEW_QUESTION_API,
 )
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 
 _POLL_DELAY = 3            # Seconds between polling attempts
 _MAX_POLL_ATTEMPTS = 5     # Max polling iterations
@@ -21,8 +22,8 @@ _MAX_POLL_ATTEMPTS = 5     # Max polling iterations
 
 async def _get_topics() -> dict:
     """Fetch available mock interview topics and roles."""
-    topics_resp = await api_get(MOCK_INTERVIEW_TOPICS_API)
-    roles_resp = await api_get(MOCK_INTERVIEW_ROLE_API)
+    topics_resp = await api_client.get(MOCK_INTERVIEW_TOPICS_API)
+    roles_resp = await api_client.get(MOCK_INTERVIEW_ROLE_API)
 
     # Both responses are wrapped: {"statusCode":"0","message":"Successful","data":{...}}
     # Unwrap the "data" envelope first.
@@ -75,7 +76,7 @@ async def _get_history() -> dict:
     # Sending an empty body {} causes HTTP 500 (server bug — it NPEs on missing page/pageSize).
     # The detailedView query param is also required (400 without it).
     # Discovered via browser request interception: body must be {"page":1,"pageSize":N}.
-    data = await api_post(
+    data = await api_client.post(
         MOCK_INTERVIEW_HISTORY_API + "?detailedView=false",
         body={"page": 1, "pageSize": 50},
     )
@@ -104,7 +105,7 @@ async def _get_history() -> dict:
 async def _start_interview(job_id: str) -> dict:
     """Start a JD-based mock interview session and return the first question."""
     # Step 1: Create/retrieve test session
-    session_resp = await api_post(
+    session_resp = await api_client.post(
         MOCK_INTERVIEW_OTHER_TOPICS_API,
         body={"flowType": "JD", "flowId": str(job_id)},
     )
@@ -138,7 +139,7 @@ async def _start_interview(job_id: str) -> dict:
 
     # Step 2: Fetch first question (poll up to 5 times)
     for attempt in range(_MAX_POLL_ATTEMPTS):
-        q_resp = await api_post(
+        q_resp = await api_client.post(
             MOCK_INTERVIEW_QUESTION_API,
             body={"testId": test_id, "topicId": topic_id, "questionId": "", "answer": ""},
         )
@@ -261,7 +262,7 @@ async def _interview_prep(job_id: str) -> dict:
 async def _answer_question(test_id: str, topic_id: str, question_id: str, answer: str) -> dict:
     """Submit an answer and get the next question or completion status."""
     for attempt in range(_MAX_POLL_ATTEMPTS):
-        resp = await api_post(
+        resp = await api_client.post(
             MOCK_INTERVIEW_QUESTION_API,
             body={
                 "testId": str(test_id),
@@ -294,6 +295,19 @@ async def _answer_question(test_id: str, topic_id: str, question_id: str, answer
         await asyncio.sleep(_POLL_DELAY)
 
     return {"status": "generating", "message": "Next question still generating. Retry in ~10 seconds."}
+
+
+# ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "topics": set(),
+    "history": set(),
+    "start": {"job_id"},
+    "answer": {"test_id", "topic_id", "question_id", "answer"},
+    "prep": {"job_id"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -334,31 +348,43 @@ async def naukri_mock_interview(
         - prep: {status, job_id, job_summary, company_interviews, company_reviews, mock_interview_topics, preparation_guide}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id, "test_id": test_id, "topic_id": topic_id,
+        "question_id": question_id, "answer": answer,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # -- topics --------------------------------------------------------------
     if action == "topics":
-        return await handle_tool_action(_get_topics, "mock_interview.topics")
+        return _attach_unused(await handle_tool_action(_get_topics, "mock_interview.topics"))
 
     # -- history -------------------------------------------------------------
     elif action == "history":
-        return await handle_tool_action(_get_history, "mock_interview.history")
+        return _attach_unused(await handle_tool_action(_get_history, "mock_interview.history"))
 
     # -- start ---------------------------------------------------------------
     elif action == "start":
         if not job_id:
             return {"status": "error", "message": "start requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _start_interview(job_id), "mock_interview.start")
+        return _attach_unused(await handle_tool_action(lambda: _start_interview(job_id), "mock_interview.start"))
 
     # -- prep ----------------------------------------------------------------
     elif action == "prep":
         if not job_id:
             return {"status": "error", "message": "prep requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _interview_prep(job_id), "mock_interview.prep")
+        return _attach_unused(await handle_tool_action(lambda: _interview_prep(job_id), "mock_interview.prep"))
 
     # -- answer --------------------------------------------------------------
     elif action == "answer":
         if not test_id or not topic_id or not question_id or not answer:
             return {"status": "error", "message": "answer requires test_id, topic_id, question_id, and answer.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _answer_question(test_id, topic_id, question_id, answer), "mock_interview.answer")
+        return _attach_unused(await handle_tool_action(lambda: _answer_question(test_id, topic_id, question_id, answer), "mock_interview.answer"))
 
     # -- unknown action ------------------------------------------------------
     else:

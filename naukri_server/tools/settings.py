@@ -5,13 +5,15 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser, page_goto
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.config import (
     NAUKRI_BASE, logger, FORMATTED_SETTINGS_API, SETTINGS_API, BLOCKED_COMPANIES_API,
     PROFILE_API, WIDGET_HEADERS,
     BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE,
 )
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 
 SETTINGS_PAGE = f"{NAUKRI_BASE}/mnjuser/settings/communication"
 
@@ -33,6 +35,19 @@ RECOMMENDED_JOB_FREQUENCY = {
     "daily": 4,
     "weekly": 5,
     "no_email": 7,
+}
+
+
+_VALID_PARAMS_PER_ACTION = {
+    "get": set(),
+    "update": {"job_search_status", "recommended_job_frequency",
+               "recommended_job_notification", "recruiter_notification",
+               "promotional_notification"},
+    "blocked_companies": set(),
+    "check_email": set(),
+    "visibility": set(),
+    "notification_prefs": set(),
+    "subscription": set(),
 }
 
 
@@ -73,9 +88,24 @@ async def naukri_settings(
     Returns:
         Varies by action. All include {status: "success"|"error", ...}
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_search_status": job_search_status,
+        "recommended_job_frequency": recommended_job_frequency,
+        "recommended_job_notification": recommended_job_notification,
+        "recruiter_notification": recruiter_notification,
+        "promotional_notification": promotional_notification,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     if action == "get":
         async def _get_settings():
-            data = await api_get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
+            data = await api_client.get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
 
             sections = data if isinstance(data, list) else data.get("sections", data.get("settings", []))
             settings = []
@@ -104,7 +134,7 @@ async def naukri_settings(
 
             # Fetch raw settings for consent/WhatsApp fields not in formatted API
             try:
-                raw_data = await api_get(SETTINGS_API)
+                raw_data = await api_client.get(SETTINGS_API)
                 consent_fields = {
                     "naukri_auto_apply_consent": bool(raw_data.get("naukriAutoApplyConsent", 0)),
                     "linkedin_auto_apply_consent": bool(raw_data.get("linkedinAutoApplyConsent", 0)),
@@ -120,7 +150,7 @@ async def naukri_settings(
                 "settings": settings,
                 **consent_fields,
             }
-        return await handle_tool_action(_get_settings, "settings.get")
+        return _attach_unused(await handle_tool_action(_get_settings, "settings.get"))
 
     elif action == "update":
         updated_fields = []
@@ -243,7 +273,7 @@ async def naukri_settings(
             # GET current formatted settings, extract {settingId: numericValue} pairs,
             # merge user changes, POST complete settings.
             try:
-                formatted = await api_get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
+                formatted = await api_client.get(FORMATTED_SETTINGS_API, extra_headers=WIDGET_HEADERS)
                 raw_settings = formatted.get("settings", formatted)
                 current_settings = {}
                 if isinstance(raw_settings, dict):
@@ -257,7 +287,7 @@ async def naukri_settings(
                 logger.warning("Could not GET formatted settings (%s), posting user changes only", e)
                 merged = body
 
-            await api_post(SETTINGS_API, merged)
+            await api_client.post(SETTINGS_API, merged)
             result = {
                 "status": "success",
                 "updated_fields": updated_fields,
@@ -266,11 +296,11 @@ async def naukri_settings(
             if jss_result is not None:
                 result.update(jss_result)
             return result
-        return await handle_tool_action(_update_other_settings, "settings.update")
+        return _attach_unused(await handle_tool_action(_update_other_settings, "settings.update"))
 
     elif action == "blocked_companies":
         async def _blocked_companies():
-            data = await api_get(BLOCKED_COMPANIES_API)
+            data = await api_client.get(BLOCKED_COMPANIES_API)
             companies_raw = data if isinstance(data, list) else data.get("blockedCompanies", data.get("companies", []))
 
             companies = []
@@ -286,13 +316,13 @@ async def naukri_settings(
                 "count": len(companies),
                 "companies": companies,
             }
-        return await handle_tool_action(_blocked_companies, "settings.blocked_companies")
+        return _attach_unused(await handle_tool_action(_blocked_companies, "settings.blocked_companies"))
 
     elif action == "check_email":
         async def _check_email():
             # The /mail-verification endpoint returns 405. Email/mobile verification
             # status is available in the profile API's user object instead.
-            data = await api_get(PROFILE_API, params={"expand_level": "1"})
+            data = await api_client.get(PROFILE_API, params={"expand_level": "1"})
             user = data.get("user", {})
             return {
                 "status": "success",
@@ -301,11 +331,11 @@ async def naukri_settings(
                 "email": user.get("email", user.get("username", "")),
                 "mobile": user.get("mobile", ""),
             }
-        return await handle_tool_action(_check_email, "settings.check_email")
+        return _attach_unused(await handle_tool_action(_check_email, "settings.check_email"))
 
     elif action == "visibility":
         async def _visibility():
-            data = await api_get(PROFILE_API, params={"expand_level": "4"})
+            data = await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
             # resdexVisibility lives at top-level, inside profile[0], or inside user
             resdex = (
@@ -358,11 +388,11 @@ async def naukri_settings(
                     "visibility": {},
                     "api_top_keys": list(data.keys())[:20],
                 }
-        return await handle_tool_action(_visibility, "settings.visibility")
+        return _attach_unused(await handle_tool_action(_visibility, "settings.visibility"))
 
     elif action == "notification_prefs":
         async def _notification_prefs():
-            data = await api_get(PROFILE_API, params={"expand_level": "4"})
+            data = await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
             # communicationSettings can be at top level, inside profile[0], or inside user
             comm = (
@@ -406,11 +436,11 @@ async def naukri_settings(
                     "notification_prefs": {},
                     "api_top_keys": list(data.keys())[:20],
                 }
-        return await handle_tool_action(_notification_prefs, "settings.notification_prefs")
+        return _attach_unused(await handle_tool_action(_notification_prefs, "settings.notification_prefs"))
 
     elif action == "subscription":
         from naukri_server.tools.subscription import _get_subscription_status
-        return await _get_subscription_status()
+        return _attach_unused(await _get_subscription_status())
 
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: get, update, blocked_companies, check_email, visibility, notification_prefs, subscription", "error_code": "VALIDATION_ERROR"}

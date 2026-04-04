@@ -3,9 +3,10 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get
+from naukri_server.interfaces import api_client
 from naukri_server.config import RESUME_BUILDER_CONFIG_API, RESUME_BUILDER_STATUS_API
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 
 
 # ---------------------------------------------------------------------------
@@ -14,7 +15,7 @@ from naukri_server.error_handler import handle_tool_action
 
 async def _get_templates() -> dict:
     """Fetch available resume builder templates."""
-    data = await api_get(RESUME_BUILDER_CONFIG_API, params={"source": "rmLandingPage"})
+    data = await api_client.get(RESUME_BUILDER_CONFIG_API, params={"source": "rmLandingPage"})
 
     # Response: {statusCode, message, data: {templateConfiguration: {filters, templateDetails}}}
     inner = data.get("data", data) if isinstance(data, dict) else data
@@ -49,7 +50,7 @@ async def _get_templates() -> dict:
 
 async def _get_status() -> dict:
     """Fetch resume builder service status."""
-    data = await api_get(RESUME_BUILDER_STATUS_API, params={"service": "resumeBuilder"})
+    data = await api_client.get(RESUME_BUILDER_STATUS_API, params={"service": "resumeBuilder"})
 
     # Response may be wrapped in data envelope
     inner = data.get("data", data) if isinstance(data, dict) else data
@@ -67,6 +68,17 @@ async def _get_status() -> dict:
         "show_rewrite": rb.get("showRewrite", False),
         "experiment_variant": rb.get("attachResumeExperimentVariant", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "templates": set(),
+    "status": set(),
+    "tailor": {"job_id", "timeout_seconds"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -97,23 +109,35 @@ async def naukri_resume_builder(
         - tailor: {status, job_title, company, suggestions: {headline, skills_to_add, ...}}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id,
+        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # -- templates ──────────────────────────────────────────────────────
     if action == "templates":
-        return await handle_tool_action(_get_templates, "resume_builder.templates")
+        return _attach_unused(await handle_tool_action(_get_templates, "resume_builder.templates"))
 
     # -- status ─────────────────────────────────────────────────────────
     elif action == "status":
-        return await handle_tool_action(_get_status, "resume_builder.status")
+        return _attach_unused(await handle_tool_action(_get_status, "resume_builder.status"))
 
     # -- tailor ──────────────────────────────────────────────────────────
     elif action == "tailor":
         if not job_id:
             return {"status": "error", "message": "tailor requires job_id.", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.resume_tailor import _tailor_resume
-        return await handle_tool_action(
+        return _attach_unused(await handle_tool_action(
             lambda: _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds),
             "resume_builder.tailor",
-        )
+        ))
 
     # -- unknown action ─────────────────────────────────────────────────
     else:

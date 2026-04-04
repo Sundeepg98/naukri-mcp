@@ -48,7 +48,7 @@ class TestAlertCTCConversion:
     """Test _get_alerts_list CTC float-cast handling."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_ctc_integer_strings(self, mock_get):
         """Integer string CTC values are converted to lakhs correctly."""
         mock_get.return_value = {
@@ -69,7 +69,7 @@ class TestAlertCTCConversion:
         assert alert["ctc_unit"] == "lakhs"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_ctc_fractional_lakhs(self, mock_get):
         """CTC values that don't divide evenly into lakhs get rounded to 2 decimals."""
         mock_get.return_value = {
@@ -82,7 +82,7 @@ class TestAlertCTCConversion:
         assert alert["max_ctc"] == 25.75   # 2575000 / 100000
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_ctc_zero_string_is_falsy_path(self, mock_get):
         """maxCTC="0" is a truthy string, so float("0")/100000 = 0.0 (not None)."""
         mock_get.return_value = {
@@ -96,7 +96,7 @@ class TestAlertCTCConversion:
         assert alert["max_ctc"] == 0.0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_ctc_missing_fields_are_none(self, mock_get):
         """Alerts without minCTC/maxCTC keys should have None values."""
         mock_get.return_value = {
@@ -119,7 +119,7 @@ class TestAlertListParsing:
     """Test _get_alerts_list response parsing edge cases."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_empty_list(self, mock_get):
         mock_get.return_value = {"list": []}
         from naukri_server.tools.alerts import _get_alerts_list
@@ -129,7 +129,7 @@ class TestAlertListParsing:
         assert result["alerts"] == []
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.alerts.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.alerts.api_client.get", new_callable=AsyncMock)
     async def test_multiple_alerts_preserves_all_fields(self, mock_get):
         """All mapped fields from API response appear in the output."""
         mock_get.return_value = {
@@ -188,7 +188,7 @@ class TestSettingsRouting:
         assert "nonexistent" in result["message"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_settings_visibility_routes_to_profile_api(self, mock_get):
         """visibility action fetches PROFILE_API with expand_level=4."""
         mock_get.return_value = {
@@ -211,7 +211,7 @@ class TestSettingsRouting:
         assert call_kwargs[1]["params"]["expand_level"] == "4"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_settings_notification_prefs_routes(self, mock_get):
         """notification_prefs action fetches PROFILE_API and extracts communicationSettings."""
         mock_get.return_value = {

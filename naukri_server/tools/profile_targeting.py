@@ -1,6 +1,6 @@
 """Profile targeting tools — DFP ad-system profile view + gap analysis."""
 
-from naukri_server.api import api_get
+from naukri_server.interfaces import api_client
 from naukri_server.config import DFP_PROFILE_API
 
 
@@ -10,7 +10,7 @@ async def _do_targeting() -> dict:
     Returns how Naukri's ad system sees the profile: 35 targeting fields,
     completeness gaps, and ad slot count.
     """
-    data = await api_get(DFP_PROFILE_API)
+    data = await api_client.get(DFP_PROFILE_API)
     params = data.get("params", {})
 
     # Identify completeness gaps (empty Profile-* fields)

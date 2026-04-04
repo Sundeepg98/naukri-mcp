@@ -7,6 +7,7 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.config import logger, REMINDERS_FILE
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 _reminders_lock = asyncio.Lock()
 
@@ -160,6 +161,16 @@ async def _list_reminders(include_past: bool = True, include_app_status: bool = 
 
 
 # ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "list": {"include_past", "include_app_status"},
+    "set": {"job_id", "days", "note", "title", "company"},
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
@@ -198,21 +209,35 @@ async def naukri_reminders(
         - set: {status, job_id, remind_at, note, message}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id, "days": days if days != 7 else None,
+        "note": note, "title": title, "company": company,
+        "include_past": include_past if not include_past else None,
+        "include_app_status": include_app_status if not include_app_status else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # -- list ---------------------------------------------------------------
     if action == "list":
-        return await handle_tool_action(
+        return _attach_unused(await handle_tool_action(
             lambda: _list_reminders(include_past=include_past, include_app_status=include_app_status),
             "reminders.list",
-        )
+        ))
 
     # -- set ----------------------------------------------------------------
     elif action == "set":
         if not job_id:
             return {"status": "error", "message": "set requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(
+        return _attach_unused(await handle_tool_action(
             lambda: _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company),
             "reminders.set",
-        )
+        ))
 
     # -- unknown action -----------------------------------------------------
     else:

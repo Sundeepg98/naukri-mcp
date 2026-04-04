@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import paginate, validate_action_params
 from naukri_server.utils import load_json_with_backup, save_json_atomic
@@ -119,7 +120,7 @@ async def _list_applications(
 
 async def _get_application_detail(job_id: str) -> dict:
     """Get detailed status for a specific job application from Naukri API."""
-    data = await api_get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
+    data = await api_client.get(APPLICATION_STATUS_API, params={"jobId": job_id, "applyType": "normal"})
 
     job_details = data.get("jobDetails") or {}
     status_steps = data.get("status") or []

@@ -3,10 +3,12 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -229,7 +231,7 @@ def _parse_job_detail(details_data: dict, job_id: str, page_url: str,
 async def _fetch_match_score(job_id: str) -> dict | None:
     """Fetch per-job match score — optional enrichment, returns None on failure."""
     try:
-        score_data = await api_get(f"{JOB_MATCH_SCORE_API}{job_id}/matchscore")
+        score_data = await api_client.get(f"{JOB_MATCH_SCORE_API}{job_id}/matchscore")
         return {
             "education": score_data.get("education"),
             "functional_area": score_data.get("functionalArea"),
@@ -270,7 +272,7 @@ async def _get_job(job_id_or_url: str) -> dict:
 
     # Strategy 1: Direct REST API (fast, no browser needed)
     try:
-        detail_task = api_get(JOB_DETAIL_API + job_id)
+        detail_task = api_client.get(JOB_DETAIL_API + job_id)
         score_task = _fetch_match_score(job_id)
         data, match_score = await asyncio.gather(detail_task, score_task)
         if data:
@@ -339,7 +341,7 @@ async def _report_fraud(job_id: str, reason: str) -> dict:
         - {status: "success", job_id, message}
         - {status: "error", message}
     """
-    await api_post(
+    await api_client.post(
         REPORT_FRAUD_API,
         body={"jobId": job_id, "reason": reason},
     )
@@ -360,7 +362,7 @@ async def _bulk_fetch_jobs(job_ids: list) -> dict:
     if len(job_ids) > 20:
         job_ids = job_ids[:20]
 
-    data = await api_post(BULK_JOBS_API, {"jobIds": job_ids})
+    data = await api_client.post(BULK_JOBS_API, {"jobIds": job_ids})
     raw_jobs = data.get("jobDetails", [])
 
     jobs = _parse_job_list(raw_jobs, len(raw_jobs))
@@ -377,7 +379,7 @@ async def _get_job_v1(job_id: str) -> dict:
     if not job_id:
         return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
 
-    data = await api_get(JOB_DETAIL_V1_API + job_id)
+    data = await api_client.get(JOB_DETAIL_V1_API + job_id)
     job = data.get("job", data)
 
     result = {
@@ -450,7 +452,7 @@ async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
     Returns:
         {status, job_id, source, total, count, jobs: [...]}
     """
-    data = await api_get(f"{SIMILAR_JOBS_API}{job_id}", params={
+    data = await api_client.get(f"{SIMILAR_JOBS_API}{job_id}", params={
         "noOfResults": str(limit),
         "searchType": "sim",
     })
@@ -488,6 +490,16 @@ async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
         "count": len(jobs[:limit]),
         "jobs": jobs[:limit],
     }
+
+
+_VALID_PARAMS_PER_ACTION = {
+    "get": {"job_id"},
+    "similar": {"job_id", "limit", "page"},
+    "compare": {"job_ids", "timeout_seconds"},
+    "report_fraud": {"job_id", "reason"},
+    "detail_v1": {"job_id"},
+    "bulk": {"job_ids"},
+}
 
 
 @mcp.tool()
@@ -529,10 +541,25 @@ async def naukri_jobs(
         detail_v1: {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}
         bulk: {status, count, jobs: [...]}
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id, "reason": reason,
+        "limit": limit if limit != 10 else None,
+        "page": page if page != 1 else None,
+        "job_ids": job_ids,
+        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     if action == "get":
         if not job_id:
             return {"status": "error", "message": "job_id required", "error_code": "VALIDATION_ERROR"}
-        return await _get_job(job_id_or_url=job_id)
+        return _attach_unused(await _get_job(job_id_or_url=job_id))
     elif action == "similar":
         if not job_id:
             return {"status": "error", "message": "similar requires job_id.", "error_code": "VALIDATION_ERROR"}
@@ -547,29 +574,29 @@ async def naukri_jobs(
             from naukri_server.tools.search import _get_similar_jobs
             return await _get_similar_jobs(job_id=job_id, limit=limit, page=page)
 
-        return await handle_tool_action(_similar, "jobs.similar")
+        return _attach_unused(await handle_tool_action(_similar, "jobs.similar"))
     elif action == "compare":
         if not job_ids:
             return {"status": "error", "message": "compare requires job_ids (list of 2-5 IDs).", "error_code": "VALIDATION_ERROR"}
         from naukri_server.tools.compare import _compare_jobs
-        return await handle_tool_action(
-            lambda: _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare")
+        return _attach_unused(await handle_tool_action(
+            lambda: _compare_jobs(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare"))
     elif action == "bulk":
         if not job_ids:
             return {"status": "error", "message": "bulk requires job_ids (list of 1-20 IDs).", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(
-            lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk")
+        return _attach_unused(await handle_tool_action(
+            lambda: _bulk_fetch_jobs(job_ids=job_ids), "jobs.bulk"))
     elif action == "detail_v1":
         if not job_id:
             return {"status": "error", "message": "job_id required for detail_v1", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(
-            lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1")
+        return _attach_unused(await handle_tool_action(
+            lambda: _get_job_v1(job_id=job_id), "jobs.detail_v1"))
     elif action == "report_fraud":
         if not job_id:
             return {"status": "error", "message": "job_id required for report_fraud", "error_code": "VALIDATION_ERROR"}
         if not reason:
             return {"status": "error", "message": "reason required for report_fraud", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(
-            lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud")
+        return _attach_unused(await handle_tool_action(
+            lambda: _report_fraud(job_id=job_id, reason=reason), "jobs.report_fraud"))
     else:
         return {"status": "error", "message": f"Unknown action '{action}'. Use: get, similar, compare, bulk, detail_v1, report_fraud", "error_code": "VALIDATION_ERROR"}

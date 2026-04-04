@@ -25,7 +25,7 @@ class TestCheckLogin:
         """Valid dict response from activity-level API yields status=ok."""
         from naukri_server.tools.health import _check_login
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value={"level": 5}):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value={"level": 5}):
             result = await _check_login()
 
         assert result["name"] == "login"
@@ -38,7 +38,7 @@ class TestCheckLogin:
         """If API returns a non-dict (e.g. a list or string), status should be warn."""
         from naukri_server.tools.health import _check_login
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=["unexpected"]):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=["unexpected"]):
             result = await _check_login()
 
         assert result["name"] == "login"
@@ -51,7 +51,7 @@ class TestCheckLogin:
         """Network errors should be caught and returned as status=fail."""
         from naukri_server.tools.health import _check_login
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=ConnectionError("Network unreachable")):
             result = await _check_login()
 
@@ -65,7 +65,7 @@ class TestCheckLogin:
         """Elapsed time should always be a non-negative integer."""
         from naukri_server.tools.health import _check_login
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value={}):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value={}):
             result = await _check_login()
 
         assert isinstance(result["elapsed_ms"], int)
@@ -86,7 +86,7 @@ class TestCheckProfileApi:
         from naukri_server.tools.health import _check_profile_api
 
         mock_data = {"profile": [{"name": "Sundeep G", "email": "test@test.com"}]}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_profile_api()
 
         assert result["name"] == "profile_api"
@@ -98,7 +98,7 @@ class TestCheckProfileApi:
         """Empty profile list should return warn about missing name."""
         from naukri_server.tools.health import _check_profile_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value={"profile": []}):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value={"profile": []}):
             result = await _check_profile_api()
 
         assert result["name"] == "profile_api"
@@ -111,7 +111,7 @@ class TestCheckProfileApi:
         from naukri_server.tools.health import _check_profile_api
 
         mock_data = {"profile": [{"email": "test@test.com"}]}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_profile_api()
 
         assert result["status"] == "warn"
@@ -122,7 +122,7 @@ class TestCheckProfileApi:
         """Response without 'profile' key at all should return warn (not crash)."""
         from naukri_server.tools.health import _check_profile_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value={"other": "data"}):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value={"other": "data"}):
             result = await _check_profile_api()
 
         assert result["status"] == "warn"
@@ -132,7 +132,7 @@ class TestCheckProfileApi:
         """API errors should produce status=fail with exception details."""
         from naukri_server.tools.health import _check_profile_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=TimeoutError("Request timed out")):
             result = await _check_profile_api()
 
@@ -155,7 +155,7 @@ class TestCheckSearchApi:
         from naukri_server.tools.health import _check_search_api
 
         mock_data = {"jobDetails": [{"title": "Python Dev"}], "noOfJobs": 250}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_search_api()
 
         assert result["name"] == "search_api"
@@ -168,7 +168,7 @@ class TestCheckSearchApi:
         from naukri_server.tools.health import _check_search_api
 
         mock_data = {"jobDetails": [], "noOfJobs": 0}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_search_api()
 
         assert result["status"] == "warn"
@@ -179,7 +179,7 @@ class TestCheckSearchApi:
         """Response missing jobDetails key entirely should return warn."""
         from naukri_server.tools.health import _check_search_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value={"other": "data"}):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value={"other": "data"}):
             result = await _check_search_api()
 
         assert result["status"] == "warn"
@@ -189,7 +189,7 @@ class TestCheckSearchApi:
         """406 reCAPTCHA error is expected (browser intercept needed), should be warn."""
         from naukri_server.tools.health import _check_search_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=Exception("HTTP 406 reCAPTCHA required")):
             result = await _check_search_api()
 
@@ -202,7 +202,7 @@ class TestCheckSearchApi:
         """The recaptcha check should be case-insensitive."""
         from naukri_server.tools.health import _check_search_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=Exception("Blocked by reCAPTCHA challenge")):
             result = await _check_search_api()
 
@@ -213,7 +213,7 @@ class TestCheckSearchApi:
         """Non-406/non-reCAPTCHA exceptions should be status=fail."""
         from naukri_server.tools.health import _check_search_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=ConnectionError("DNS resolution failed")):
             result = await _check_search_api()
 
@@ -227,7 +227,7 @@ class TestCheckSearchApi:
         from naukri_server.tools.health import _check_search_api
 
         mock_data = {"jobDetails": [{"title": "Dev"}], "noOfJobs": 0}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_search_api()
 
         # Both conditions must be true: job_details truthy AND noOfJobs > 0
@@ -248,7 +248,7 @@ class TestCheckRecommendationsApi:
         from naukri_server.tools.health import _check_recommendations_api
 
         mock_data = {"jobDetails": [{"id": 1}, {"id": 2}, {"id": 3}]}
-        with patch("naukri_server.tools.health.api_post", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.post", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_recommendations_api()
 
         assert result["name"] == "recommendations_api"
@@ -260,7 +260,7 @@ class TestCheckRecommendationsApi:
         """Empty jobDetails should return warn."""
         from naukri_server.tools.health import _check_recommendations_api
 
-        with patch("naukri_server.tools.health.api_post", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.post", new_callable=AsyncMock,
                     return_value={"jobDetails": []}):
             result = await _check_recommendations_api()
 
@@ -272,7 +272,7 @@ class TestCheckRecommendationsApi:
         """Response without jobDetails key should return warn."""
         from naukri_server.tools.health import _check_recommendations_api
 
-        with patch("naukri_server.tools.health.api_post", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.post", new_callable=AsyncMock,
                     return_value={"recommendations": []}):
             result = await _check_recommendations_api()
 
@@ -283,7 +283,7 @@ class TestCheckRecommendationsApi:
         """API errors should return status=fail."""
         from naukri_server.tools.health import _check_recommendations_api
 
-        with patch("naukri_server.tools.health.api_post", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.post", new_callable=AsyncMock,
                     side_effect=RuntimeError("Server error")):
             result = await _check_recommendations_api()
 
@@ -306,7 +306,7 @@ class TestCheckDashboardApi:
         from naukri_server.tools.health import _check_dashboard_api
 
         mock_data = {"dashBoard": {"profileViewCount": 42, "otherField": "x"}}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_dashboard_api()
 
         assert result["name"] == "dashboard_api"
@@ -319,7 +319,7 @@ class TestCheckDashboardApi:
         from naukri_server.tools.health import _check_dashboard_api
 
         mock_data = {"dashBoard": {"profileViewCount": 0}}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_dashboard_api()
 
         assert result["status"] == "ok"
@@ -331,7 +331,7 @@ class TestCheckDashboardApi:
         from naukri_server.tools.health import _check_dashboard_api
 
         mock_data = {"dashBoard": {"someOtherField": 10}}
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock, return_value=mock_data):
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock, return_value=mock_data):
             result = await _check_dashboard_api()
 
         assert result["status"] == "warn"
@@ -342,7 +342,7 @@ class TestCheckDashboardApi:
         """Empty dashBoard dict should return warn."""
         from naukri_server.tools.health import _check_dashboard_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     return_value={"dashBoard": {}}):
             result = await _check_dashboard_api()
 
@@ -353,7 +353,7 @@ class TestCheckDashboardApi:
         """Response without dashBoard key should return warn (not crash)."""
         from naukri_server.tools.health import _check_dashboard_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     return_value={"other": "data"}):
             result = await _check_dashboard_api()
 
@@ -364,7 +364,7 @@ class TestCheckDashboardApi:
         """API errors should return status=fail with exception info."""
         from naukri_server.tools.health import _check_dashboard_api
 
-        with patch("naukri_server.tools.health.api_get", new_callable=AsyncMock,
+        with patch("naukri_server.tools.health.api_client.get", new_callable=AsyncMock,
                     side_effect=OSError("Connection reset")):
             result = await _check_dashboard_api()
 

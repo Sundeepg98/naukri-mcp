@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     logger, NAUKRI_BASE, JOB_ALERT_API, JOB_ALERTS_LIST_API, ALERT_DETAIL_API,
@@ -13,6 +13,7 @@ from naukri_server.config import (
     BROWSER_PAGE_LOAD, BROWSER_OPERATION_TIMEOUT,
 )
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 
 
 async def _get_alerts_list() -> dict:
@@ -20,7 +21,7 @@ async def _get_alerts_list() -> dict:
 
     Returns {status, count, alerts: [...]} or {status: "error", message}.
     """
-    data = await api_get(JOB_ALERTS_LIST_API)
+    data = await api_client.get(JOB_ALERTS_LIST_API)
     raw_list = data.get("list", [])
     alerts = []
     for alert in raw_list:
@@ -249,6 +250,16 @@ async def _delete_alert_browser(a_id: str, alert_name: str) -> dict:
             }
 
 
+_VALID_PARAMS_PER_ACTION = {
+    "list": set(),
+    "detail": {"alert_id"},
+    "create": {"name", "keywords", "location", "experience", "min_salary",
+               "max_salary", "function_area_id", "role_id", "industry_type_id"},
+    "update": {"alert_id", "keywords", "location", "experience", "min_salary", "new_name"},
+    "delete": {"alert_id"},
+}
+
+
 @mcp.tool()
 async def naukri_job_alerts(
     action: str = "list",
@@ -294,15 +305,30 @@ async def naukri_job_alerts(
         - update: {status, alert_name, updated_fields, message}
         - delete: {status, alert_id, alert_name, message}
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "alert_id": alert_id, "name": name, "keywords": keywords,
+        "location": location, "experience": experience,
+        "min_salary": min_salary, "max_salary": max_salary,
+        "function_area_id": function_area_id, "role_id": role_id,
+        "industry_type_id": industry_type_id, "new_name": new_name,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     if action == "list":
-        return await handle_tool_action(_get_alerts_list, "alerts.list")
+        return _attach_unused(await handle_tool_action(_get_alerts_list, "alerts.list"))
 
     elif action == "detail":
         if not alert_id:
             return {"status": "error", "message": "detail requires alert_id.", "error_code": "VALIDATION_ERROR"}
 
         async def _detail():
-            data = await api_get(f"{ALERT_DETAIL_API}/{alert_id}")
+            data = await api_client.get(f"{ALERT_DETAIL_API}/{alert_id}")
             alerts = data.get("list", [data] if isinstance(data, dict) else data)
             if not alerts:
                 return {"status": "error", "message": f"Alert {alert_id} not found", "error_code": "NOT_FOUND"}
@@ -328,7 +354,7 @@ async def naukri_job_alerts(
                     "industry_type_id": a.get("industryTypeId"),
                 },
             }
-        return await handle_tool_action(_detail, "alerts.detail")
+        return _attach_unused(await handle_tool_action(_detail, "alerts.detail"))
 
     elif action == "create":
         if not name or not keywords:
@@ -351,7 +377,7 @@ async def naukri_job_alerts(
             if industry_type_id is not None:
                 body["industryTypeId"] = industry_type_id
 
-            response = await api_post(JOB_ALERT_API, body)
+            response = await api_client.post(JOB_ALERT_API, body)
             result = {
                 "status": "success",
                 "alert_name": name,
@@ -365,7 +391,7 @@ async def naukri_job_alerts(
             if matched_jobs:
                 result["matched_jobs"] = matched_jobs[:5]
             return result
-        return await handle_tool_action(_create, "alerts.create")
+        return _attach_unused(await handle_tool_action(_create, "alerts.create"))
 
     elif action == "update":
         if not alert_id:
@@ -390,10 +416,10 @@ async def naukri_job_alerts(
         a_id = str(alert_id)
 
         try:
-            return await asyncio.wait_for(
+            return _attach_unused(await asyncio.wait_for(
                 _update_alert_browser(a_id, alert_name, keywords, location, experience, min_salary, new_name),
                 timeout=BROWSER_OPERATION_TIMEOUT,
-            )
+            ))
         except asyncio.TimeoutError:
             return {"status": "error", "message": f"Alert update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 
@@ -424,10 +450,10 @@ async def naukri_job_alerts(
         alert_name = target.get("name", a_id)
 
         try:
-            return await asyncio.wait_for(
+            return _attach_unused(await asyncio.wait_for(
                 _delete_alert_browser(a_id, alert_name),
                 timeout=BROWSER_OPERATION_TIMEOUT,
-            )
+            ))
         except asyncio.TimeoutError:
             return {"status": "error", "message": f"Alert delete timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 

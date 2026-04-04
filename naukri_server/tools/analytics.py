@@ -1,6 +1,6 @@
 """Match analytics for job applications."""
 
-from naukri_server.api import api_get
+from naukri_server.interfaces import api_client
 from naukri_server.config import MATCH_ANALYTICS_API
 
 
@@ -17,7 +17,7 @@ async def _get_match_analytics(days: int = 7) -> dict:
     """
     if days < 1:
         return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    data = await api_get(MATCH_ANALYTICS_API, params={"days": str(days)})
+    data = await api_client.get(MATCH_ANALYTICS_API, params={"days": str(days)})
 
     return {
         "status": "success",

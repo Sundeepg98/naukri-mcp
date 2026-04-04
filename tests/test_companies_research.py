@@ -285,7 +285,7 @@ class TestHelperValidation:
     async def test_search_companies_page_clamped(self):
         """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.companies import _search_companies
-        with patch("naukri_server.tools.companies.api_get", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.companies.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"companyList": []}
             result = await _search_companies(keyword="test", page=0)
             mock_api.assert_awaited()

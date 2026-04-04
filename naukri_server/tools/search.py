@@ -1,7 +1,8 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, api_tool
+from naukri_server.api import api_tool
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
 from naukri_server.error_handler import handle_tool_action
@@ -91,7 +92,7 @@ async def naukri_search_jobs(
         if posted_within is not None:
             rest_params["jobAge"] = str(posted_within)
 
-        data = await api_get(SEARCH_API, params=rest_params)
+        data = await api_client.get(SEARCH_API, params=rest_params)
         if data and isinstance(data, dict) and data.get("jobDetails"):
             jobs = _parse_job_list(data.get("jobDetails", []), limit)
             total = data.get("noOfJobs") or data.get("totalCount") or len(jobs)
@@ -242,7 +243,7 @@ async def naukri_get_recommendations(limit: int = 20, page: int = 1) -> dict:
     """
     limit = validate_limit(limit)
     page = validate_page(page)
-    data = await api_post(RECOMMENDED_JOBS_API, body={})
+    data = await api_client.post(RECOMMENDED_JOBS_API, body={})
     job_details = data.get("jobDetails", [])
     all_jobs = _parse_job_list(job_details, len(job_details))
     total = data.get("noOfJobs") or len(all_jobs)
@@ -295,7 +296,7 @@ async def _get_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dict
     page = validate_page(page)
 
     async def _do():
-        data = await api_get(SIMILAR_JOBS_API + job_id, params={
+        data = await api_client.get(SIMILAR_JOBS_API + job_id, params={
             "noOfResults": str(limit * page),
             "searchType": "sim",
         })

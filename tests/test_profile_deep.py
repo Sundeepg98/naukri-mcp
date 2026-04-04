@@ -106,7 +106,7 @@ class TestGetCachedProfile:
     """get_cached_profile() calls api_get and caches the result."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_get_cached_profile_calls_api(self, mock_api_get):
         mock_api_get.return_value = {
             "profile": [{"name": "Test User", "resumeHeadline": "Dev", "keySkills": "python",
@@ -124,7 +124,7 @@ class TestGetCachedProfile:
         mock_api_get.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_get_cached_profile_uses_cache(self, mock_api_get):
         """Two calls — api_get invoked only once thanks to TTL cache."""
         mock_api_get.return_value = {
@@ -145,7 +145,7 @@ class TestGetCachedDashboard:
     """get_cached_dashboard() calls api_get for dashboard data."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_get_cached_dashboard_calls_api(self, mock_api_get):
         mock_api_get.return_value = {
             "dashBoard": {
@@ -224,7 +224,7 @@ class TestProfileErrors:
     """Error handling for API failures and edge cases."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_profile_api_failure(self, mock_api_get):
         """api_get raising NaukriAPIError is caught and returned as error dict."""
         from naukri_server.api import NaukriAPIError
@@ -235,7 +235,7 @@ class TestProfileErrors:
         assert result["error_code"] == "API_ERROR"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_dashboard_empty_response(self, mock_api_get):
         """api_get returns {} for dashboard — should return success with minimal data."""
         mock_api_get.return_value = {}
@@ -253,9 +253,8 @@ class TestProfileInvalidationOnUpdate:
     """After naukri_profile(action='update'), the profile TTL cache is invalidated."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_update.api_get", new_callable=AsyncMock)
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
-    async def test_profile_invalidation_on_update(self, mock_api_get, mock_update_api_get):
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
+    async def test_profile_invalidation_on_update(self, mock_api_get):
         """Update path (via browser) invalidates _profile_ttl_cache.
 
         We can't easily run the full browser path, so we verify that
@@ -263,14 +262,10 @@ class TestProfileInvalidationOnUpdate:
         the simpler case: calling with no fields returns VALIDATION_ERROR
         (this path doesn't reach the browser but proves routing works).
         For the cache-invalidation proof, we check boost's REST path.
+
+        Note: profile.api_client and profile_update.api_client are the
+        same singleton object, so a single patch covers both modules.
         """
-        # Set up profile data for boost's REST path
-        mock_api_get.return_value = {
-            "profile": [{"resumeHeadline": "My Headline"}],
-        }
-        mock_update_api_get.return_value = {
-            "profile": [{"resumeHeadline": "My Headline"}],
-        }
         from naukri_server.tools.profile import (
             _profile_ttl_cache, get_cached_profile, naukri_profile,
         )
@@ -292,10 +287,7 @@ class TestProfileInvalidationOnUpdate:
         mock_api_get.return_value = {
             "profile": [{"resumeHeadline": "My Headline"}],
         }
-        mock_update_api_get.return_value = {
-            "profile": [{"resumeHeadline": "My Headline"}],
-        }
-        with patch("naukri_server.tools.profile_update.api_post", new_callable=AsyncMock) as mock_post:
+        with patch("naukri_server.tools.profile.api_client.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
             result = await naukri_profile(action="boost")
             assert result["status"] == "success"

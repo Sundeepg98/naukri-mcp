@@ -9,12 +9,14 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.browser import browser_retry
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import (
     DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API,
     PROFILE_CACHE_TTL, BROWSER_OPERATION_TIMEOUT,
 )
+from naukri_server.models import validate_action_params
 from naukri_server.utils import TtlCache
 from naukri_server.validation import validate_profile
 
@@ -47,7 +49,7 @@ async def get_cached_profile() -> dict:
 async def _get_profile() -> dict:
     """Fetch full Naukri profile via API (internal helper)."""
     try:
-        data = await api_get(
+        data = await api_client.get(
             PROFILE_API,
             {"expand_level": "4"},
         )
@@ -374,6 +376,20 @@ async def _audit_profile() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "get": set(),
+    "update": {"fields", "notice_period", "expected_ctc", "current_ctc"},
+    "audit": set(),
+    "boost": {"randomize"},
+    "dashboard": set(),
+    "targeting": set(),
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
@@ -416,13 +432,26 @@ async def naukri_profile(
         - targeting: {status, profile, completeness_gaps, gap_count}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "fields": fields, "notice_period": notice_period,
+        "expected_ctc": expected_ctc, "current_ctc": current_ctc,
+        "randomize": randomize if randomize else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # ── get ─────────────────────────────────────────────────────────────
     if action == "get":
-        return await handle_tool_action(_get_profile, "profile.get")
+        return _attach_unused(await handle_tool_action(_get_profile, "profile.get"))
 
     # ── update ──────────────────────────────────────────────────────────
     elif action == "update":
-        return await handle_tool_action(
+        return _attach_unused(await handle_tool_action(
             lambda: asyncio.wait_for(
                 browser_retry(
                     lambda: _update_profile(
@@ -436,15 +465,15 @@ async def naukri_profile(
                 timeout=BROWSER_OPERATION_TIMEOUT,
             ),
             "profile.update",
-        )
+        ))
 
     # ── audit ───────────────────────────────────────────────────────────
     elif action == "audit":
-        return await handle_tool_action(_audit_profile, "profile.audit")
+        return _attach_unused(await handle_tool_action(_audit_profile, "profile.audit"))
 
     # ── boost ───────────────────────────────────────────────────────────
     elif action == "boost":
-        return await handle_tool_action(
+        return _attach_unused(await handle_tool_action(
             lambda: asyncio.wait_for(
                 browser_retry(
                     lambda: _boost_visibility(randomize=randomize),
@@ -453,15 +482,15 @@ async def naukri_profile(
                 timeout=BROWSER_OPERATION_TIMEOUT,
             ),
             "profile.boost",
-        )
+        ))
 
     # ── dashboard ─────────────────────────────────────────────────────
     elif action == "dashboard":
-        return await handle_tool_action(_get_dashboard, "profile.dashboard")
+        return _attach_unused(await handle_tool_action(_get_dashboard, "profile.dashboard"))
 
     # ── targeting ───────────────────────────────────────────────────────
     elif action == "targeting":
-        return await handle_tool_action(_do_targeting, "profile.targeting")
+        return _attach_unused(await handle_tool_action(_do_targeting, "profile.targeting"))
 
     # ── unknown action ──────────────────────────────────────────────────
     else:
@@ -503,7 +532,7 @@ async def _get_dashboard() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_get(DASHBOARD_API, params={"properties": DASHBOARD_PROPERTIES})
+        data = await api_client.get(DASHBOARD_API, params={"properties": DASHBOARD_PROPERTIES})
         db = data.get("dashBoard", {})
 
         # --- Core fields (existing) ---

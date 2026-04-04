@@ -5,7 +5,8 @@ import os
 import time
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_metrics, api_post
+from naukri_server.api import api_metrics
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
@@ -30,7 +31,7 @@ async def _check_login() -> dict:
     """Verify session is valid via the activity-level endpoint."""
     t0 = time.monotonic()
     try:
-        data = await api_get(ACTIVITY_LEVEL_API)
+        data = await api_client.get(ACTIVITY_LEVEL_API)
         elapsed = int((time.monotonic() - t0) * 1000)
         if isinstance(data, dict):
             return {"name": "login", "status": "ok", "message": "Logged in, session active", "elapsed_ms": elapsed}
@@ -44,7 +45,7 @@ async def _check_profile_api() -> dict:
     """Verify profile API returns data with a name."""
     t0 = time.monotonic()
     try:
-        data = await api_get(PROFILE_API, {"expand_level": "4"})
+        data = await api_client.get(PROFILE_API, {"expand_level": "4"})
         elapsed = int((time.monotonic() - t0) * 1000)
         profiles = data.get("profile", [])
         if profiles and isinstance(profiles[0], dict) and profiles[0].get("name"):
@@ -62,7 +63,7 @@ async def _check_search_api() -> dict:
     A 406 is treated as 'warn' (API exists but requires browser), not 'fail'."""
     t0 = time.monotonic()
     try:
-        data = await api_get(SEARCH_API, {"noOfResults": "1", "keyword": "python", "searchType": "adv"})
+        data = await api_client.get(SEARCH_API, {"noOfResults": "1", "keyword": "python", "searchType": "adv"})
         elapsed = int((time.monotonic() - t0) * 1000)
         job_details = data.get("jobDetails", [])
         no_of_jobs = data.get("noOfJobs", 0)
@@ -82,7 +83,7 @@ async def _check_recommendations_api() -> dict:
     """Verify recommendations API returns job details."""
     t0 = time.monotonic()
     try:
-        data = await api_post(RECOMMENDED_JOBS_API, body={})
+        data = await api_client.post(RECOMMENDED_JOBS_API, body={})
         elapsed = int((time.monotonic() - t0) * 1000)
         job_details = data.get("jobDetails", [])
         if job_details:
@@ -97,7 +98,7 @@ async def _check_dashboard_api() -> dict:
     """Verify dashboard API returns profile view count."""
     t0 = time.monotonic()
     try:
-        data = await api_get(DASHBOARD_API)
+        data = await api_client.get(DASHBOARD_API)
         elapsed = int((time.monotonic() - t0) * 1000)
         db = data.get("dashBoard", {})
         if "profileViewCount" in db:

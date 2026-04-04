@@ -20,7 +20,7 @@ class TestSettingsWidgetHeaders:
     """FORMATTED_SETTINGS_API calls now include extra_headers=WIDGET_HEADERS (appid:109)."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_get_passes_widget_headers(self, mock_api):
         """naukri_settings(action='get') calls FORMATTED_SETTINGS_API with appid:109 header."""
         # First call → FORMATTED_SETTINGS_API (list of sections)
@@ -49,8 +49,8 @@ class TestSettingsWidgetHeaders:
         )
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_post", new_callable=AsyncMock)
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_update_preread_passes_widget_headers(self, mock_api, mock_post):
         """naukri_settings(action='update', recommended_job_frequency='daily') fetches
         FORMATTED_SETTINGS_API with widget headers before posting."""
@@ -78,7 +78,7 @@ class TestSettingsWidgetHeaders:
         )
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_raw_settings_api_no_widget_headers(self, mock_api):
         """The second api_get call (SETTINGS_API for consent fields) must NOT use widget headers."""
         mock_api.side_effect = [

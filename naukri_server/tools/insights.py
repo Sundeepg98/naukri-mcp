@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get
+from naukri_server.interfaces import api_client
 from naukri_server.cache import _load_cache, _cache_lock
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import LAKHS_MULTIPLIER, APPLY_MATCH_SCORE_API, ENTITY_TAXONOMY_API, NAUKRI_BASE, CCS_PAGE_API, CCS_DASHBOARD_PAGE, BROWSER_DOM_SETTLE
@@ -26,7 +26,7 @@ async def _get_taxonomy() -> dict:
     """Fetch Naukri's job taxonomy: 37 departments -> 167 role categories -> 1461 roles."""
 
     async def _fetch():
-        data = await api_get(ENTITY_TAXONOMY_API, params={
+        data = await api_client.get(ENTITY_TAXONOMY_API, params={
             "appid": "1", "languageId": "1", "formatType": "nested", "srcAppId": "121",
         })
         # Response key varies: raw list, "ENTITY_DEPART-ROLE_CATEG-ROLE", "data", or "entities"
@@ -379,7 +379,7 @@ async def _match_quality(days: int = 7) -> dict:
     """
     if days < 1:
         return {"status": "error", "message": "days must be >= 1", "error_code": "VALIDATION_ERROR"}
-    data = await api_get(f"{APPLY_MATCH_SCORE_API}?days={days}")
+    data = await api_client.get(f"{APPLY_MATCH_SCORE_API}?days={days}")
 
     field_breakdown = data.get("relevantFieldMatch", {})
     formatted_fields = {}

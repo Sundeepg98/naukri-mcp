@@ -4,9 +4,11 @@ import re
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_post, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API, INBOX_REST_API
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -35,7 +37,7 @@ async def _fetch_inbox(
         params = {"pageSize": str(limit), "pageNo": str(page)}
         if mail_type:
             params["mailType"] = mail_type
-        data = await api_get(INBOX_REST_API, params=params)
+        data = await api_client.get(INBOX_REST_API, params=params)
         resp = data
     except Exception:
         # Fallback to battle-tested POST endpoint
@@ -45,7 +47,7 @@ async def _fetch_inbox(
             "mailType": mail_type,
             "isUnRead": unread_only,
         }
-        data = await api_post(INBOX_API, body=body)
+        data = await api_client.post(INBOX_API, body=body)
         resp = data.get("successResponse") or data
 
     inbox_list = resp.get("inbox", [])
@@ -148,7 +150,7 @@ async def _fetch_inbox(
 
 async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
     """Fetch a single message's full content from the API."""
-    data = await api_get(MESSAGE_API, params={
+    data = await api_client.get(MESSAGE_API, params={
         "vcardId": vcard_id,
         "messageId": message_id,
         "uniqueId": unique_id,
@@ -171,7 +173,7 @@ async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
 
 async def _mark_interested(mail_id: str, conversation_id: str, interested: bool) -> dict:
     """Mark a message as interested/not interested via the API."""
-    await api_post(
+    await api_client.post(
         INBOX_MARK_INTERESTED_API,
         body={
             "mailId": str(mail_id),
@@ -194,6 +196,18 @@ async def _accept_nvite(nvite_job_id: str, answers: Optional[dict], title: Optio
         company=company,
         tracking_extra={"source": "nvite"},
     )
+
+
+# ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "list": {"limit", "unread_only", "mail_type", "page"},
+    "read": {"message_id", "vcard_id", "unique_id"},
+    "mark_interested": {"mail_id", "conversation_id", "interested"},
+    "accept_nvite": {"nvite_job_id", "answers", "title", "company"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -250,27 +264,46 @@ async def naukri_inbox(
         - accept_nvite: {status: "applied"|"needs_input"|"already_applied"|"error", ...}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "message_id": message_id, "vcard_id": vcard_id, "unique_id": unique_id,
+        "mail_id": mail_id, "conversation_id": conversation_id,
+        "interested": interested if not interested else None,
+        "nvite_job_id": nvite_job_id, "answers": answers,
+        "title": title, "company": company,
+        "limit": limit if limit != 20 else None,
+        "unread_only": unread_only if unread_only else None,
+        "mail_type": mail_type if mail_type else None,
+        "page": page if page != 1 else None,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
-        return await handle_tool_action(lambda: _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page), "inbox.list")
+        return _attach_unused(await handle_tool_action(lambda: _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page), "inbox.list"))
 
     # ── read ───────────────────────────────────────────────────────────
     elif action == "read":
         if not message_id or not vcard_id or not unique_id:
             return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _read_message(message_id, vcard_id, unique_id), "inbox.read")
+        return _attach_unused(await handle_tool_action(lambda: _read_message(message_id, vcard_id, unique_id), "inbox.read"))
 
     # ── mark_interested ────────────────────────────────────────────────
     elif action == "mark_interested":
         if not mail_id or not conversation_id:
             return {"status": "error", "message": "mark_interested requires mail_id and conversation_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _mark_interested(mail_id, conversation_id, interested), "inbox.mark_interested")
+        return _attach_unused(await handle_tool_action(lambda: _mark_interested(mail_id, conversation_id, interested), "inbox.mark_interested"))
 
     # ── accept_nvite ──────────────────────────────────────────────────
     elif action == "accept_nvite":
         if not nvite_job_id:
             return {"status": "error", "message": "accept_nvite requires nvite_job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _accept_nvite(nvite_job_id, answers, title, company), "inbox.accept_nvite")
+        return _attach_unused(await handle_tool_action(lambda: _accept_nvite(nvite_job_id, answers, title, company), "inbox.accept_nvite"))
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

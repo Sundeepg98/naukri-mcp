@@ -506,7 +506,7 @@ class TestDFPTargeting:
     """Verify DFP targeting action parses ad-system profile fields and identifies gaps."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_returns_profile_fields(self, mock_get):
         """Targeting action returns parsed profile fields."""
         mock_get.return_value = {
@@ -540,7 +540,7 @@ class TestDFPTargeting:
         assert result["ad_slots"] == 1
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_identifies_gaps(self, mock_get):
         """Empty Profile-* fields are listed as completeness gaps."""
         mock_get.return_value = {
@@ -559,7 +559,7 @@ class TestDFPTargeting:
         assert "pg course" in result["completeness_gaps"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_empty_response(self, mock_get):
         """Empty DFP response returns zero fields."""
         mock_get.return_value = {}
@@ -570,7 +570,7 @@ class TestDFPTargeting:
         assert result["gap_count"] == 0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_api_error(self, mock_get):
         """API error returns error status."""
         from naukri_server.api import NaukriAPIError
@@ -581,7 +581,7 @@ class TestDFPTargeting:
         assert result["error_code"] == "API_ERROR"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile_targeting.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_zero_values_not_gaps(self, mock_get):
         """Fields with value 0 are NOT treated as gaps."""
         mock_get.return_value = {
@@ -607,7 +607,7 @@ class TestDashboardSelectiveProperties:
     """Verify dashboard API uses selective properties param to reduce response size."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_dashboard_passes_properties_param(self, mock_get):
         """_get_dashboard passes properties param to api_get."""
         mock_get.return_value = {"dashBoard": {"pc": 100, "ca": 0}}
@@ -621,7 +621,7 @@ class TestDashboardSelectiveProperties:
         assert "properties" in params
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_dashboard_properties_contains_expected_keys(self, mock_get):
         """Properties string includes the validated property names."""
         mock_get.return_value = {"dashBoard": {}}
@@ -632,7 +632,7 @@ class TestDashboardSelectiveProperties:
             assert key in props, f"Missing property: {key}"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_dashboard_still_parses_with_selective_response(self, mock_get):
         """Selective response (fewer fields) still parses without errors."""
         mock_get.return_value = {"dashBoard": {"profileViewCount": 42}}

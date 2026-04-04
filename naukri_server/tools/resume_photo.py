@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, api_tool
+from naukri_server.api import api_tool
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
     PROFILE_API, PHOTO_API, RESUME_DOWNLOAD_API, NAUKRI_BASE, RESUME_MAX_SIZE_MB,
@@ -118,7 +119,7 @@ async def naukri_profile_media(
 
 @api_tool("Get resume info")
 async def _resume_info() -> dict:
-    data = await api_get(PROFILE_API, params={"expand_level": "4"})
+    data = await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
     profiles = data.get("profile", [])
     profile = profiles[0] if isinstance(profiles, list) and profiles else data.get("profile", {})
@@ -246,7 +247,7 @@ async def _resume_upload(file_path: str) -> dict:
 
 @api_tool("Get photo info")
 async def _photo_info() -> dict:
-    data = await api_get(PROFILE_API, params={"expand_level": "4"})
+    data = await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
     profiles = data.get("profile", [])
     profile = profiles[0] if isinstance(profiles, list) and profiles else data.get("profile", {})

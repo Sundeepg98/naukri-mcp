@@ -825,7 +825,7 @@ class TestHelperValidation:
     async def test_fetch_inbox_page_clamped(self):
         """page=0 is silently clamped to 1 by validate_page."""
         from naukri_server.tools.inbox import _fetch_inbox
-        with patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock) as mock_api:
+        with patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"successResponse": {"inbox": [], "total": 0, "unread": 0}}
             result = await _fetch_inbox(page=0)
             mock_api.assert_awaited()

@@ -6,6 +6,7 @@ from naukri_server import mcp
 from naukri_server.interfaces import api_client
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger, EARLY_ACCESS_TRACKING_FILE
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.models import validate_action_params
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.validation import validate_limit, validate_page
 
@@ -131,6 +132,16 @@ async def _share_interest(job_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ISP param validation
+# ---------------------------------------------------------------------------
+
+_VALID_PARAMS_PER_ACTION = {
+    "list": {"page", "limit", "filter_company", "filter_location", "filter_experience"},
+    "share": {"job_id"},
+}
+
+
+# ---------------------------------------------------------------------------
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
@@ -167,6 +178,21 @@ async def naukri_early_access(
         - share: {status, job_id, message, quota}
         - {status: "error", message} on failure
     """
+    # ── ISP: warn about params irrelevant to chosen action ─────────────
+    _provided = {
+        "job_id": job_id,
+        "page": page if page != 1 else None,
+        "limit": limit if limit != 20 else None,
+        "filter_company": filter_company, "filter_location": filter_location,
+        "filter_experience": filter_experience,
+    }
+    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+
+    def _attach_unused(result: dict) -> dict:
+        if _unused and isinstance(result, dict):
+            result["unused_params"] = _unused
+        return result
+
     # ── list ───────────────────────────────────────────────────────────
     if action == "list":
         async def _list():
@@ -198,13 +224,13 @@ async def naukri_early_access(
                     }.items() if v is not None
                 }
             return result
-        return await handle_tool_action(_list, "early_access.list")
+        return _attach_unused(await handle_tool_action(_list, "early_access.list"))
 
     # ── share ──────────────────────────────────────────────────────────
     elif action == "share":
         if not job_id:
             return {"status": "error", "message": "share requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _share_interest(job_id), "early_access.share")
+        return _attach_unused(await handle_tool_action(lambda: _share_interest(job_id), "early_access.share"))
 
     # ── unknown action ─────────────────────────────────────────────────
     else:

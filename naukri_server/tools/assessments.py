@@ -1,6 +1,7 @@
 """Assessment tools — skill test scores and profile completeness metrics."""
 
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.config import DASHBOARD_API
 
 
@@ -10,7 +11,7 @@ from naukri_server.config import DASHBOARD_API
 
 async def _list_assessments() -> dict:
     """Fetch skill assessment results from the dashboard API."""
-    data = await api_get(DASHBOARD_API)
+    data = await api_client.get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
     assessments_raw = dashboard.get("assessments", [])
 
@@ -52,7 +53,7 @@ async def _list_assessments() -> dict:
 
 async def _get_profile_completeness() -> dict:
     """Fetch profile completeness score and key metrics from the dashboard API."""
-    data = await api_get(DASHBOARD_API)
+    data = await api_client.get(DASHBOARD_API)
     dashboard = data.get("dashBoard", data)
 
     # Extract job search status

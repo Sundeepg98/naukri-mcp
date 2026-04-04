@@ -20,7 +20,7 @@ class TestTrackingTier22EdgeCases:
     # 1. totalApplicants extracted correctly
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_total_applicants_extracted(self, mock_api):
         mock_api.return_value = {
             "totalApplicants": 884,
@@ -38,7 +38,7 @@ class TestTrackingTier22EdgeCases:
     # 2. jobActivity and jobActivityDate extracted correctly
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_job_activity_fields_extracted(self, mock_api):
         mock_api.return_value = {
             "jobActivity": 12,
@@ -58,7 +58,7 @@ class TestTrackingTier22EdgeCases:
     # 3. isCrawled extracted correctly
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_is_crawled_extracted(self, mock_api):
         mock_api.return_value = {
             "isCrawled": True,
@@ -76,7 +76,7 @@ class TestTrackingTier22EdgeCases:
     # 4. companyRating falls through to ambitionBoxData (uppercase keys)
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_company_rating_from_ambitionbox_data(self, mock_api):
         # No companyRating key — should fall through to ambitionBoxData
         mock_api.return_value = {
@@ -97,7 +97,7 @@ class TestTrackingTier22EdgeCases:
     # 5. companyRating with lowercase keys (rating / reviewsCount)
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_company_rating_lowercase_keys(self, mock_api):
         mock_api.return_value = {
             "companyRating": {"rating": 4.1, "reviewsCount": 350},
@@ -117,7 +117,7 @@ class TestTrackingTier22EdgeCases:
     # 6. None fields stripped — absent Tier 22 fields must not appear
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_none_fields_stripped_from_result(self, mock_api):
         # Minimal payload — no Tier 22 fields at all
         mock_api.return_value = {
@@ -146,7 +146,7 @@ class TestTrackingTier22EdgeCases:
     # 7. Missing totalApplicants handled gracefully (stripped, not KeyError)
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_total_applicants_missing_graceful(self, mock_api):
         # No totalApplicants in response
         mock_api.return_value = {

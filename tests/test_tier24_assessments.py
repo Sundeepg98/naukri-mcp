@@ -56,7 +56,7 @@ def _make_dashboard_response(assessments=None, extras=None) -> dict:
 
 class TestListAssessments:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_populated_dashboard(self, mock_get):
         mock_get.return_value = _make_dashboard_response(
             assessments=[_make_assessment(), _make_assessment(skill="SQL", level="Intermediate")]
@@ -74,7 +74,7 @@ class TestListAssessments:
         assert result["assessments"][0]["level"] == "Expert"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_empty_assessments(self, mock_get):
         """Empty assessments list returns success with total=0."""
         mock_get.return_value = _make_dashboard_response(assessments=[])
@@ -86,7 +86,7 @@ class TestListAssessments:
         assert result["assessments"] == []
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_level_as_dict_fallback(self, mock_get):
         """When level is a dict, extracts 'name' key."""
         mock_get.return_value = _make_dashboard_response(
@@ -97,7 +97,7 @@ class TestListAssessments:
         assert result["assessments"][0]["level"] == "Advanced"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_badge_as_dict_fallback(self, mock_get):
         """When badge is a dict, extracts 'imgStr' key."""
         mock_get.return_value = _make_dashboard_response(
@@ -108,7 +108,7 @@ class TestListAssessments:
         assert result["assessments"][0]["badge_url"] == "https://cdn.naukri.com/b.png"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_pagination_fields(self, mock_get):
         """Pagination fields page=1 and has_more=False are always set."""
         mock_get.return_value = _make_dashboard_response(assessments=[_make_assessment()])
@@ -124,7 +124,7 @@ class TestListAssessments:
 
 class TestGetProfileCompleteness:
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_normal_parsing(self, mock_get):
         mock_get.return_value = _make_dashboard_response()
         from naukri_server.tools.assessments import _get_profile_completeness
@@ -141,7 +141,7 @@ class TestGetProfileCompleteness:
         assert result["job_search_status"] == "Actively looking"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_empty_jb_search_status(self, mock_get):
         """Empty jbSearchStatus.data produces empty string job_search_status."""
         data = _make_dashboard_response()
@@ -152,7 +152,7 @@ class TestGetProfileCompleteness:
         assert result["job_search_status"] == ""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.assessments.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.assessments.api_client.get", new_callable=AsyncMock)
     async def test_jb_search_status_as_non_dict(self, mock_get):
         """Non-dict jbSearchStatus is coerced to string."""
         data = _make_dashboard_response()

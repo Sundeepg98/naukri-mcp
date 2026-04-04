@@ -39,7 +39,7 @@ class TestFetchInbox:
     """Tests for naukri_server.tools.inbox._fetch_inbox."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
     async def test_fetch_inbox_parses_messages(self, mock_post):
         mock_post.return_value = {
             "successResponse": {
@@ -74,7 +74,7 @@ class TestFetchInbox:
         assert result["messages"][1]["sender"] == "Direct Name"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
     async def test_fetch_inbox_unread_only(self, mock_post):
         """unread_only=True should filter out read messages."""
         mock_post.return_value = {
@@ -102,7 +102,7 @@ class TestNaukriInbox:
     """Tests for naukri_server.tools.inbox.naukri_inbox routing."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
     async def test_inbox_mark_interested(self, mock_post):
         """mark_interested with valid params should route to _mark_interested."""
         mock_post.return_value = {}

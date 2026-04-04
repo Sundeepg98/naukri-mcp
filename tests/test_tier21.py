@@ -197,7 +197,7 @@ class TestSettingsConsentFields:
     """Tests for consent fields in naukri_settings(action='get')."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_get_returns_consent_booleans(self, mock_get):
         """GET returns naukri_auto_apply_consent, linkedin_auto_apply_consent,
         whatsapp_apply_notification, whatsapp_profile_notification as booleans."""
@@ -223,7 +223,7 @@ class TestSettingsConsentFields:
         assert result["whatsapp_profile_notification"] is False
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_consent_fields_are_booleans(self, mock_get):
         """Consent fields are always booleans even when API returns integers."""
         async def side_effect(url, *args, **kwargs):
@@ -246,7 +246,7 @@ class TestSettingsConsentFields:
         assert isinstance(result["whatsapp_profile_notification"], bool)
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_raw_settings_failure_still_returns_main_settings(self, mock_get):
         """If raw settings fetch fails, consent_fields is empty but main settings still returned."""
         call_count = 0
@@ -288,7 +288,7 @@ class TestSettingsConsentFields:
         assert "whatsapp_profile_notification" not in result
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.settings.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
     async def test_formatted_settings_parsing(self, mock_get):
         """Formatted settings are parsed with section, id, label, value etc."""
         async def side_effect(url, *args, **kwargs):
@@ -332,7 +332,7 @@ class TestProfileLookupData:
     """Tests for lookup_data section extracted from lookupData."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_lookup_data_extracted(self, mock_get):
         mock_get.return_value = {
             "profile": [{"name": "Test User", "experience": {}}],
@@ -366,7 +366,7 @@ class TestProfileAiFeatures:
     """Tests for ai_features section extracted from additionalDetails."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_ai_features_extracted(self, mock_get):
         mock_get.return_value = {
             "profile": [{"name": "Test User", "experience": {}}],
@@ -386,7 +386,7 @@ class TestProfileExtendedProfile:
     """Tests for extended_profile section (job_search_status, career_break, stale_tags)."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_extended_profile_extracted(self, mock_get):
         mock_get.return_value = {
             "profile": [{"name": "Test", "experience": {}}],
@@ -415,7 +415,7 @@ class TestProfileExtendedProfile:
         assert ep["stale_tags"] == ["Java", "COBOL"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_extended_profile_no_stale_tags(self, mock_get):
         """When no tags are inactive, stale_tags is an empty list."""
         mock_get.return_value = {
@@ -440,7 +440,7 @@ class TestProfileSchools:
     """Tests for schools section parsing."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_schools_parsed(self, mock_get):
         mock_get.return_value = {
             "profile": [{"name": "Test", "experience": {}}],
@@ -475,7 +475,7 @@ class TestProfileSchools:
         assert result["schools"][1]["board"] == "ICSE"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_schools_fallback_to_school_level(self, mock_get):
         """When educationType is missing, falls back to schoolLevel."""
         mock_get.return_value = {
@@ -501,7 +501,7 @@ class TestProfileMissingSections:
     """Tests that missing sections are gracefully omitted from result."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_missing_sections_not_in_result(self, mock_get):
         """When lookupData, additionalDetails, extendedProfile, schools are absent,
         their corresponding keys are not present in the result."""
@@ -526,7 +526,7 @@ class TestDashboardAssessments:
     """Tests for assessments parsing in _get_dashboard."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_assessments_with_results(self, mock_get):
         mock_get.return_value = {
             "dashBoard": {
@@ -562,7 +562,7 @@ class TestDashboardAssessments:
         assert a["results"]["status"] == "passed"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_assessments_without_results(self, mock_get):
         """Assessment with no results has results=None."""
         mock_get.return_value = {
@@ -590,7 +590,7 @@ class TestDashboardExpectedCtcStructured:
     """Tests for expected_ctc_structured calculation."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_expected_ctc_structured_calculation(self, mock_get):
         """lacs * 100000 + thousands * 1000 = total_annual."""
         mock_get.return_value = {
@@ -609,7 +609,7 @@ class TestDashboardExpectedCtcStructured:
         assert ctc["total_annual"] == 15 * 100000 + 50 * 1000  # 1,550,000
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_expected_ctc_structured_zero_thousands(self, mock_get):
         """Zero thousands still computes correctly."""
         mock_get.return_value = {
@@ -626,7 +626,7 @@ class TestDashboardExpectedCtcStructured:
         assert ctc["total_annual"] == 1000000
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_expected_ctc_structured_missing_value(self, mock_get):
         """Missing value defaults to 0."""
         mock_get.return_value = {
@@ -645,7 +645,7 @@ class TestDashboardExpectedCtcStructured:
         assert ctc["total_annual"] == 0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_expected_ctc_not_present_when_not_dict(self, mock_get):
         """If expectedCtc is not a dict, expected_ctc_structured is not in result."""
         mock_get.return_value = {
@@ -662,7 +662,7 @@ class TestDashboardRecommendedCompanies:
     """Tests for recommended_companies from similarCompToFollow."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_recommended_companies_caps_at_5(self, mock_get):
         """similarCompToFollow is capped at 5 entries."""
         companies = [
@@ -677,7 +677,7 @@ class TestDashboardRecommendedCompanies:
         assert result["recommended_companies"][4]["name"] == "Company 4"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_recommended_companies_with_reviews_count(self, mock_get):
         mock_get.return_value = {
             "dashBoard": {
@@ -691,7 +691,7 @@ class TestDashboardRecommendedCompanies:
         assert result["recommended_companies"][0]["reviews_count"] == 50000
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_recommended_companies_empty_list(self, mock_get):
         """Empty similarCompToFollow means recommended_companies is not in result."""
         mock_get.return_value = {"dashBoard": {"similarCompToFollow": []}}
@@ -704,7 +704,7 @@ class TestDashboardFeatureFlags:
     """Tests for feature_flags extraction."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_feature_flags_extracted(self, mock_get):
         mock_get.return_value = {
             "dashBoard": {
@@ -723,7 +723,7 @@ class TestDashboardFeatureFlags:
         assert ff["job_search_status"] == "open_to_opportunities"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_feature_flags_missing_jb_search(self, mock_get):
         """When jbSearchStatus is missing, job_search_status is None."""
         mock_get.return_value = {"dashBoard": {}}
@@ -736,7 +736,7 @@ class TestDashboardEmptyFields:
     """Tests for graceful handling of empty/missing dashboard fields."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_empty_dashboard(self, mock_get):
         """Empty dashBoard returns success with status and feature_flags."""
         mock_get.return_value = {"dashBoard": {}}
@@ -750,7 +750,7 @@ class TestDashboardEmptyFields:
         assert "recommended_companies" not in result
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_missing_dashboard_key(self, mock_get):
         """Missing dashBoard key returns success with all None."""
         mock_get.return_value = {}
@@ -767,7 +767,7 @@ class TestInboxRestApi:
     """Tests for REST GET first / POST fallback in _fetch_inbox."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.get", new_callable=AsyncMock)
     async def test_rest_get_tried_first(self, mock_get):
         """REST GET is tried first and used when successful."""
         mock_get.return_value = {
@@ -789,8 +789,8 @@ class TestInboxRestApi:
         mock_get.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock)
-    @patch("naukri_server.tools.inbox.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.get", new_callable=AsyncMock)
     async def test_fallback_to_post_when_get_fails(self, mock_get, mock_post):
         """Fallback to POST when GET raises an exception."""
         mock_get.side_effect = Exception("GET not supported")
@@ -813,7 +813,7 @@ class TestInboxRestApi:
         mock_post.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.get", new_callable=AsyncMock)
     async def test_relevant_count_and_has_power_nvites(self, mock_get):
         """relevant_count and has_power_nvites are in the return."""
         mock_get.return_value = {
@@ -831,7 +831,7 @@ class TestInboxRestApi:
         assert result["has_power_nvites"] is True
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.get", new_callable=AsyncMock)
     async def test_total_count_unread_count_mapping(self, mock_get):
         """totalCount and unreadCount from REST response are mapped correctly."""
         mock_get.return_value = {
@@ -855,7 +855,7 @@ class TestBulkFetchJobs:
     """Tests for _bulk_fetch_jobs."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.post", new_callable=AsyncMock)
     async def test_successful_bulk_fetch(self, mock_post):
         """Successful bulk fetch with multiple job IDs."""
         mock_post.return_value = {
@@ -892,7 +892,7 @@ class TestBulkFetchJobs:
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.post", new_callable=AsyncMock)
     async def test_caps_at_20_job_ids(self, mock_post):
         """More than 20 job IDs are capped at 20."""
         mock_post.return_value = {"jobDetails": []}
@@ -904,7 +904,7 @@ class TestBulkFetchJobs:
         assert len(call_body["jobIds"]) == 20
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.post", new_callable=AsyncMock)
     async def test_invalid_ids_empty_job_details(self, mock_post):
         """Invalid IDs silently dropped — empty jobDetails yields count=0."""
         mock_post.return_value = {"jobDetails": []}
@@ -923,7 +923,7 @@ class TestGetJobV1:
     """Tests for _get_job_v1."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_walk_in_fields_extracted(self, mock_get):
         """Walk-in fields are extracted: is_walk_in, walkin_time, walkin_venue."""
         mock_get.return_value = {
@@ -948,7 +948,7 @@ class TestGetJobV1:
         assert result["walkin_date_to"] == "2026-03-12"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_contact_fields_extracted(self, mock_get):
         """Contact fields are extracted: contact_name, contact_email, contact_phone."""
         mock_get.return_value = {
@@ -970,7 +970,7 @@ class TestGetJobV1:
         assert result["contact_designation"] == "HR Manager"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_metrics_extracted(self, mock_get):
         """Metrics are extracted: jd_views, jd_applies, vacancy."""
         mock_get.return_value = {
@@ -990,7 +990,7 @@ class TestGetJobV1:
         assert result["vacancy"] == 5
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_none_values_stripped(self, mock_get):
         """None values are stripped from the result."""
         mock_get.return_value = {
@@ -1020,7 +1020,7 @@ class TestGetJobV1:
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_salary_hidden_field(self, mock_get):
         """salary_hidden is True when showSal == 'n'."""
         mock_get.return_value = {
@@ -1038,7 +1038,7 @@ class TestGetJobV1:
         assert result["salary_hidden"] is True
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_work_mode_mapping(self, mock_get):
         """wfhType maps to human-readable work_mode."""
         mock_get.return_value = {
@@ -1054,7 +1054,7 @@ class TestGetJobV1:
         assert result["work_mode"] == "remote"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_hiring_for_field(self, mock_get):
         """hiringFor field is extracted when present."""
         mock_get.return_value = {
@@ -1226,7 +1226,7 @@ class TestDashboardAssessmentEdgeCases:
     """Edge cases for dashboard assessments."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_assessment_with_empty_results_dict(self, mock_get):
         """Assessment with empty results dict {} is falsy in Python, so results=None."""
         mock_get.return_value = {
@@ -1251,7 +1251,7 @@ class TestDashboardAssessmentEdgeCases:
         assert a["results"] is None
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_assessment_with_populated_results(self, mock_get):
         """Assessment with a non-empty results dict parses scorePercent, rank, status."""
         mock_get.return_value = {
@@ -1285,8 +1285,8 @@ class TestInboxRestApiFallbackDetails:
     """Additional tests for inbox REST to POST fallback details."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.inbox.api_post", new_callable=AsyncMock)
-    @patch("naukri_server.tools.inbox.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.inbox.api_client.get", new_callable=AsyncMock)
     async def test_rest_get_params_passed(self, mock_get, mock_post):
         """REST GET is called with correct query params."""
         mock_get.return_value = {
@@ -1329,7 +1329,7 @@ class TestJobV1IsExpired:
     """Test additional V1-unique fields."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_is_expired_and_closing_date(self, mock_get):
         mock_get.return_value = {
             "job": {
@@ -1346,7 +1346,7 @@ class TestJobV1IsExpired:
         assert result["closing_date"] == "2025-12-31"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.jobs.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.jobs.api_client.get", new_callable=AsyncMock)
     async def test_is_consultant_field(self, mock_get):
         mock_get.return_value = {
             "job": {

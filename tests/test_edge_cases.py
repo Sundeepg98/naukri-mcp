@@ -85,7 +85,7 @@ class TestEmptyResponses:
     async def test_search_no_results_rest_fallback_to_browser_empty(self):
         """When REST returns no jobDetails and browser also fails, error is returned."""
         from naukri_server.tools.search import naukri_search_jobs
-        with patch("naukri_server.tools.search.api_get", new_callable=AsyncMock) as mock_api, \
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api, \
              patch("naukri_server.tools.search.browser") as mock_browser:
             # REST returns empty (no jobDetails key triggers fallback)
             mock_api.return_value = {"noOfJobs": 0, "jobDetails": []}

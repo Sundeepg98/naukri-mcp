@@ -7,7 +7,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_get, NaukriAPIError
+from naukri_server.api import NaukriAPIError
+from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto, page_intercept_json
 from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
@@ -181,7 +182,7 @@ async def _fetch_via_rest(api_path: Optional[str], params: dict = None) -> Optio
     if not api_path:
         return None
     try:
-        return await api_get(api_path, params)
+        return await api_client.get(api_path, params)
     except NaukriAPIError as e:
         logger.warning("REST fetch failed for %s: %s", api_path, e)
         return None
@@ -207,7 +208,7 @@ async def _fetch_applied_jobs_rest(max_pages: int = 10, days_back: int = 365) ->
     while page <= max_pages:
         params = {"pageSize": "20", "days": str(days_back), "pageNumber": str(page), "filterInfo": "2"}
         try:
-            data = await api_get(APPLIED_JOBS_API, params)
+            data = await api_client.get(APPLIED_JOBS_API, params)
         except Exception as e:
             logger.warning("Applied jobs REST page %d failed: %s", page, e)
             if page == 1:

@@ -95,7 +95,7 @@ class TestTaxonomyEdgeCases:
     # 2a. Cache hit — API must NOT be called
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_taxonomy_cache_hit(self, mock_api):
         cached_result = {
             "status": "success",
@@ -115,7 +115,7 @@ class TestTaxonomyEdgeCases:
     # 2b. Response wrapped in "data" key — parsing must still work
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_taxonomy_data_wrapper(self, mock_api):
         # API wraps the entity list under a "data" key instead of returning a raw list
         mock_api.return_value = {
@@ -156,7 +156,7 @@ class TestRecommendationClustersEdgeCases:
     # 3a. "recommendedClusters" key used when "clusters" is absent/falsy
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_recommended_clusters_fallback_key(self, mock_api):
         mock_api.return_value = {
             "jobDetails": [],
@@ -176,7 +176,7 @@ class TestRecommendationClustersEdgeCases:
     # 3b. Missing clusters key entirely — result["clusters"] must be {}
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_empty_clusters_handled(self, mock_api):
         mock_api.return_value = {
             "jobDetails": [],

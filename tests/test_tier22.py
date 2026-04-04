@@ -290,7 +290,7 @@ class TestApplicationsFilterInfo:
         assert result["total"] == 0
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_star_rating_extracted(self, mock_api):
         """_get_application_detail extracts starRating from API response."""
         mock_api.return_value = {
@@ -304,7 +304,7 @@ class TestApplicationsFilterInfo:
         assert result["star_rating"] == 4
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_apply_flow_type_extracted(self, mock_api):
         """_get_application_detail extracts applyFlowType from API response."""
         mock_api.return_value = {
@@ -326,7 +326,7 @@ class TestCompanyRatingParsing:
     """Tests for companyRating extraction in _get_application_detail."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_company_rating_from_companyRating(self, mock_api):
         """_get_application_detail parses companyRating dict into company_rating."""
         mock_api.return_value = {
@@ -342,7 +342,7 @@ class TestCompanyRatingParsing:
         assert result["company_rating"]["reviews"] == 500
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.tracking.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.tracking.api_client.get", new_callable=AsyncMock)
     async def test_company_rating_missing(self, mock_api):
         """_get_application_detail does not include company_rating when field is absent."""
         mock_api.return_value = {
@@ -363,7 +363,7 @@ class TestRecommendationClusters:
     """Tests for cluster parsing in naukri_get_recommendations."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_cluster_parsing_dict(self, mock_post):
         """Clusters as dicts with count+title are parsed into cluster_info."""
         mock_post.return_value = {
@@ -381,7 +381,7 @@ class TestRecommendationClusters:
         assert result["clusters"]["apply"]["title"] == "Based on applies"
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_cluster_parsing_int(self, mock_post):
         """Clusters as plain integers are converted to count-only dicts."""
         mock_post.return_value = {
@@ -395,7 +395,7 @@ class TestRecommendationClusters:
         assert result["clusters"]["apply"]["count"] == 64
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_agent_eligible_flag(self, mock_post):
         """agentEligibleJobExists=True is surfaced as agent_eligible_exists=True."""
         mock_post.return_value = {
@@ -410,7 +410,7 @@ class TestRecommendationClusters:
         assert result["agent_eligible_exists"] is True
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.search.api_post", new_callable=AsyncMock)
+    @patch("naukri_server.tools.search.api_client.post", new_callable=AsyncMock)
     async def test_cluster_split_date(self, mock_post):
         """clusterSplitDate from response is surfaced as cluster_split_date."""
         mock_post.return_value = {
@@ -442,7 +442,7 @@ class TestTaxonomyLookup:
     """Tests for _get_taxonomy hierarchy parsing in insights.py."""
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_hierarchy_parsing(self, mock_api):
         """_get_taxonomy parses 2 departments, each with 1 role_category and 2 roles."""
         mock_api.return_value = [
@@ -484,7 +484,7 @@ class TestTaxonomyLookup:
         assert len(dept0["role_categories"][0]["roles"]) == 2
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_synonym_extraction(self, mock_api):
         """_get_taxonomy preserves synonyms on roles."""
         mock_api.return_value = [
@@ -509,7 +509,7 @@ class TestTaxonomyLookup:
         assert "developer" in role["synonyms"]
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_total_role_count(self, mock_api):
         """_get_taxonomy total_roles matches actual role count across all depts."""
         mock_api.return_value = [
@@ -539,7 +539,7 @@ class TestTaxonomyLookup:
         assert result["total_roles"] == 5  # 3 from Dept A + 2 from Dept B
 
     @pytest.mark.asyncio
-    @patch("naukri_server.tools.insights.api_get", new_callable=AsyncMock)
+    @patch("naukri_server.tools.insights.api_client.get", new_callable=AsyncMock)
     async def test_empty_response(self, mock_api):
         """_get_taxonomy handles empty response gracefully — returns departments=[], total_roles=0."""
         mock_api.return_value = {}
