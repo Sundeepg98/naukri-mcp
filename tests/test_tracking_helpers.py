@@ -134,7 +134,7 @@ class TestApplicationFollowUp:
         inbox_result = {"status": "success", "messages": []}
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -172,7 +172,7 @@ class TestApplicationFollowUp:
         }
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -194,7 +194,7 @@ class TestApplicationFollowUp:
         inbox_result = {"status": "success", "messages": []}
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, return_value=inbox_result), \
@@ -222,7 +222,7 @@ class TestApplicationFollowUp:
         inbox_exc = RuntimeError("Inbox API down")
         reminders_result = {"status": "success", "reminders": []}
 
-        with patch("naukri_server.tools.tracking._get_stale_applications",
+        with patch("naukri_server.services.application_service.get_stale_applications",
                     new_callable=AsyncMock, return_value=stale_result), \
              patch("naukri_server.tools.inbox._fetch_inbox",
                     new_callable=AsyncMock, side_effect=inbox_exc), \
@@ -506,11 +506,11 @@ class TestInterviewPrep:
         }
 
         with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=app), \
-             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+             patch("naukri_server.services.application_service._safe_fetch_company_intel",
                    new_callable=AsyncMock, return_value=company_intel), \
-             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+             patch("naukri_server.services.application_service._safe_fetch_mock_topics",
                    new_callable=AsyncMock, return_value=mock_topics), \
-             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+             patch("naukri_server.services.application_service._safe_fetch_fit_score",
                    new_callable=AsyncMock, return_value=fit_data):
             result = await _interview_prep("IP1")
 
@@ -554,11 +554,11 @@ class TestInterviewPrep:
         }
 
         with patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=app), \
-             patch("naukri_server.tools.tracking._safe_fetch_company_intel",
+             patch("naukri_server.services.application_service._safe_fetch_company_intel",
                    new_callable=AsyncMock, return_value=None), \
-             patch("naukri_server.tools.tracking._safe_fetch_mock_topics",
+             patch("naukri_server.services.application_service._safe_fetch_mock_topics",
                    new_callable=AsyncMock, return_value=mock_topics), \
-             patch("naukri_server.tools.tracking._safe_fetch_fit_score",
+             patch("naukri_server.services.application_service._safe_fetch_fit_score",
                    new_callable=AsyncMock, return_value=fit_data):
             result = await _interview_prep("IP2")
 

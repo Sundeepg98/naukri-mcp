@@ -33,7 +33,7 @@ class TestLocalTrackingInDetail:
             "fit_score": 82,
         }
 
-        with patch("naukri_server.tools.tracking.api_client.get",
+        with patch("naukri_server.services.application_service.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
              patch("naukri_server.database.get_application",
                     new_callable=AsyncMock, return_value=local_app):
@@ -56,7 +56,7 @@ class TestLocalTrackingInDetail:
             "status": [],
         }
 
-        with patch("naukri_server.tools.tracking.api_client.get",
+        with patch("naukri_server.services.application_service.api_client.get",
                     new_callable=AsyncMock, return_value=api_response), \
              patch("naukri_server.database.get_application",
                     new_callable=AsyncMock, return_value=None):
