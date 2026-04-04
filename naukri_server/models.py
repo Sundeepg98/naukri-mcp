@@ -2,6 +2,7 @@
 
 from enum import Enum
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional, Any
 
 
@@ -83,3 +84,126 @@ def paginate(items: list, page: int = 1, limit: int = 50) -> tuple:
         "page": page,
         "has_more": (offset + limit) < total,
     }, page_items
+
+
+# ---------------------------------------------------------------------------
+# Rich domain entities (behavior-carrying, NOT ORMs)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Job:
+    """Domain entity for a job listing."""
+    job_id: str
+    title: str = ""
+    company: str = ""
+    salary: str = ""
+    salary_min_lakhs: Optional[float] = None
+    salary_max_lakhs: Optional[float] = None
+    location: str = ""
+    experience: str = ""
+    experience_min: Optional[int] = None
+    experience_max: Optional[int] = None
+    tags: list = field(default_factory=list)
+    is_applied: bool = False
+    is_agent_eligible: bool = False
+    work_mode: str = ""
+    company_rating: Optional[str] = None
+
+    @property
+    def salary_disclosed(self) -> bool:
+        return self.salary_min_lakhs is not None and self.salary_min_lakhs > 0
+
+    @property
+    def experience_range(self) -> str:
+        if self.experience_min is not None and self.experience_max is not None:
+            return f"{self.experience_min}-{self.experience_max} Yrs"
+        return self.experience
+
+    def matches_experience(self, years: float) -> bool:
+        if self.experience_min is not None and self.experience_max is not None:
+            return self.experience_min <= years <= self.experience_max
+        return True
+
+    @classmethod
+    def from_api_dict(cls, data: dict) -> "Job":
+        """Create Job from Naukri API response dict."""
+        return cls(
+            job_id=str(data.get("job_id", data.get("jobId", ""))),
+            title=data.get("title", ""),
+            company=data.get("company", data.get("companyName", "")),
+            salary=data.get("salary", "Not Disclosed"),
+            salary_min_lakhs=data.get("salary_min_lakhs"),
+            salary_max_lakhs=data.get("salary_max_lakhs"),
+            location=data.get("location", ""),
+            experience=data.get("experience", ""),
+            experience_min=data.get("experience_min"),
+            experience_max=data.get("experience_max"),
+            tags=data.get("tags", []),
+            is_applied=data.get("is_applied", False),
+            is_agent_eligible=data.get("is_agent_eligible", False),
+            work_mode=data.get("work_mode", ""),
+            company_rating=data.get("company_rating"),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize for API response."""
+        return {k: v for k, v in self.__dict__.items() if v is not None}
+
+
+@dataclass
+class Application:
+    """Domain entity for a tracked job application."""
+    job_id: str
+    title: str = ""
+    company: str = ""
+    status: ApplicationStatus = ApplicationStatus.UNKNOWN
+    applied_at: str = ""
+    source: str = "manual"
+    ars_score: Optional[int] = None
+    view_count: Optional[int] = None
+    is_open: Optional[bool] = None
+    follow_up_priority: int = 50
+
+    @property
+    def is_stale(self) -> bool:
+        if not self.applied_at:
+            return False
+        try:
+            applied = datetime.fromisoformat(self.applied_at.replace("+00:00", "+00:00"))
+            days = (datetime.now(timezone.utc) - applied).days
+            return days > 14 and self.status == ApplicationStatus.APPLIED
+        except Exception:
+            return False
+
+    @property
+    def days_since_applied(self) -> int:
+        try:
+            applied = datetime.fromisoformat(self.applied_at.replace("+00:00", "+00:00"))
+            return (datetime.now(timezone.utc) - applied).days
+        except Exception:
+            return 0
+
+    @property
+    def has_recruiter_interest(self) -> bool:
+        return (self.view_count or 0) > 0 or (self.ars_score or 0) >= 70
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Application":
+        return cls(
+            job_id=str(data.get("job_id", "")),
+            title=data.get("title", ""),
+            company=data.get("company", ""),
+            status=ApplicationStatus.from_string(data.get("status", "")),
+            applied_at=data.get("applied_at", ""),
+            source=data.get("source", "manual"),
+            ars_score=data.get("ars_score"),
+            view_count=data.get("view_count"),
+            is_open=data.get("is_open"),
+            follow_up_priority=data.get("follow_up_priority", 50),
+        )
+
+    def to_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["status"] = self.status.value
+        return {k: v for k, v in d.items() if v is not None}
