@@ -231,6 +231,14 @@ class ProbeStateChanged(DomainEvent):
     criticality: str = ""
 
 
+@dataclass
+class NewEndpointDiscovered(DomainEvent):
+    """Emitted when a previously unknown API endpoint is discovered."""
+    url: str = ""
+    method: str = "GET"
+    page_source: str = ""
+
+
 class EventBus:
     """Simple async event bus — register subscribers, emit events."""
 

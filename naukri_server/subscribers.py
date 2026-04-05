@@ -16,6 +16,7 @@ from naukri_server.events import (
     ProfileUpdated, ProfileBoosted, AlertCreated, AlertUpdated, AlertDeleted,
     ApplicationsPurged, ResumeUploaded, PhotoUploaded, PhotoDeleted,
     CachedAnswerUpdated, CachedAnswerDeleted, SettingsUpdated,
+    NewEndpointDiscovered,
 )
 
 logger = logging.getLogger(__name__)
@@ -498,6 +499,22 @@ async def _on_settings_updated(event: SettingsUpdated):
         logger.warning("Subscriber _on_settings_updated failed: %s", e)
 
 
+async def _on_new_endpoint_discovered(event: NewEndpointDiscovered):
+    """Store notification when a new API endpoint is discovered."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "NewEndpointDiscovered",
+            "title": f"New API endpoint: {event.url[:80]}",
+            "body": f"Discovered {event.method} {event.url} from {event.page_source}. Review and add to config.py.",
+            "priority": "medium",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"url": event.url, "method": event.method, "page_source": event.page_source},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_new_endpoint_discovered failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -531,7 +548,8 @@ def register_all():
     event_bus.subscribe(CachedAnswerUpdated, _on_cached_answer_updated)
     event_bus.subscribe(CachedAnswerDeleted, _on_cached_answer_deleted)
     event_bus.subscribe(SettingsUpdated, _on_settings_updated)
-    logger.info("Registered %d reactive subscribers", 27)
+    event_bus.subscribe(NewEndpointDiscovered, _on_new_endpoint_discovered)
+    logger.info("Registered %d reactive subscribers", 28)
 
 
 # Auto-register on import

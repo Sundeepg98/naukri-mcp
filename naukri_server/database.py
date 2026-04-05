@@ -96,6 +96,17 @@ CREATE TABLE IF NOT EXISTS event_log (
 );
 CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_event_log_ts ON event_log(timestamp);
+
+CREATE TABLE IF NOT EXISTS endpoint_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    method TEXT DEFAULT 'GET',
+    status TEXT DEFAULT 'NEW',
+    first_discovered TEXT,
+    last_seen TEXT,
+    page_source TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_endpoint_url ON endpoint_audit(url);
 """
 
 
@@ -750,3 +761,48 @@ class ReminderRepository:
     @staticmethod
     async def delete(job_id: str) -> bool:
         return await delete_reminder(job_id)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint audit CRUD
+# ---------------------------------------------------------------------------
+
+async def log_endpoint_audit(url: str, method: str = "GET", status: str = "NEW", page_source: str = "") -> int:
+    """Log a discovered endpoint. Updates last_seen if URL already exists, else inserts.
+
+    Returns the row id.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    db = await get_db()
+    try:
+        # Check if URL already exists
+        cursor = await db.execute("SELECT id FROM endpoint_audit WHERE url = ?", (url,))
+        row = await cursor.fetchone()
+        if row:
+            await db.execute(
+                "UPDATE endpoint_audit SET last_seen = ?, status = ? WHERE url = ?",
+                (now, status, url),
+            )
+            await db.commit()
+            return row["id"]
+        else:
+            cursor = await db.execute(
+                "INSERT INTO endpoint_audit (url, method, status, first_discovered, last_seen, page_source) VALUES (?, ?, ?, ?, ?, ?)",
+                (url, method, status, now, now, page_source),
+            )
+            await db.commit()
+            return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_known_endpoints() -> list[dict]:
+    """Return all rows from the endpoint_audit table."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM endpoint_audit ORDER BY first_discovered DESC")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()

@@ -13,6 +13,7 @@ _probe_modules = [
     "naukri_server.health.probes.notifications",
     "naukri_server.health.probes.scraping",
     "naukri_server.health.probes.system",
+    "naukri_server.health.probes.discovery",
 ]
 
 for mod in _probe_modules:
