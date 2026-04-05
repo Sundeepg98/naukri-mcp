@@ -74,6 +74,8 @@ from mcp.server.fastmcp import FastMCP
 from naukri_server.api import close_api_session
 from naukri_server.browser import browser
 from naukri_server.database import init_db
+import naukri_server.browser_watchdog as _watchdog_module
+from naukri_server.browser_watchdog import BrowserWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,9 @@ async def lifespan(server):
         if _lifespan_refs == 1:
             await browser.start()
             await init_db()
+            # Start browser watchdog for self-healing
+            _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
+            await _watchdog_module.watchdog.start()
             # Startup health check — validates core services after browser is ready
             logger.info("Running startup health check...")
             try:
@@ -108,6 +113,8 @@ async def lifespan(server):
         async with _lifespan_lock:
             _lifespan_refs -= 1
             if _lifespan_refs == 0:
+                if _watchdog_module.watchdog:
+                    await _watchdog_module.watchdog.stop()
                 try:
                     await browser.stop()
                 except Exception:

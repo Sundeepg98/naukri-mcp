@@ -240,6 +240,15 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
         "checks": checks,
         "pool_stats": pool_stats,
     }
+    # Watchdog stats
+    try:
+        from naukri_server.browser_watchdog import watchdog
+        if watchdog:
+            result["watchdog"] = watchdog.stats
+            result["watchdog"]["circuit_breaker"] = browser.page_pool.circuit_state if browser.page_pool else "N/A"
+    except Exception:
+        pass
+
     result["api_metrics"] = api_metrics.get_stats()
     if warnings:
         result["warnings"] = warnings

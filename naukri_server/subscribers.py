@@ -12,6 +12,7 @@ from naukri_server.events import (
     ApplicationStale, ApplicationInterviewScheduled, SyncCompleted, ReminderDue,
     RecruiterEngaged, ProfileScoreChanged,
     SavedJobExpiring, SavedJobAdded, SavedJobRemoved, ReminderSet,
+    BrowserCrashed, BrowserRecovered,
 )
 
 logger = logging.getLogger(__name__)
@@ -254,6 +255,37 @@ async def _on_reminder_set(event: ReminderSet):
         logger.warning("Subscriber _on_reminder_set failed: %s", e)
 
 
+async def _on_browser_crashed(event: BrowserCrashed):
+    """Store notification when browser crashes."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "BrowserCrashed",
+            "title": f"Browser crashed ({event.consecutive_failures} failures)",
+            "body": f"Reason: {event.reason}. Restart attempt #{event.crash_count + 1}.",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"crash_count": event.crash_count, "consecutive": event.consecutive_failures},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_browser_crashed failed: %s", e)
+
+
+async def _on_browser_recovered(event: BrowserRecovered):
+    """Store notification on successful recovery."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "BrowserRecovered",
+            "title": f"Browser recovered (downtime: {event.downtime_seconds}s)",
+            "body": f"Restart #{event.restart_count} successful.",
+            "priority": "medium",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_browser_recovered failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -272,7 +304,9 @@ def register_all():
     event_bus.subscribe(SavedJobAdded, _on_saved_job_added)
     event_bus.subscribe(SavedJobRemoved, _on_saved_job_removed)
     event_bus.subscribe(ReminderSet, _on_reminder_set)
-    logger.info("Registered %d reactive subscribers", 12)
+    event_bus.subscribe(BrowserCrashed, _on_browser_crashed)
+    event_bus.subscribe(BrowserRecovered, _on_browser_recovered)
+    logger.info("Registered %d reactive subscribers", 14)
 
 
 # Auto-register on import

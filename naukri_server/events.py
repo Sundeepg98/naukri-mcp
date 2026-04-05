@@ -121,6 +121,28 @@ class SavedJobExpiring(DomainEvent):
     expires_in_days: int = 0
 
 
+@dataclass
+class BrowserCrashed(DomainEvent):
+    """Emitted when browser becomes unresponsive or context dies."""
+    reason: str = ""
+    crash_count: int = 0
+    consecutive_failures: int = 0
+
+
+@dataclass
+class BrowserRecovered(DomainEvent):
+    """Emitted after successful browser restart."""
+    downtime_seconds: float = 0
+    restart_count: int = 0
+
+
+@dataclass
+class BrowserDegraded(DomainEvent):
+    """Emitted when browser has high crash rate or slow responses."""
+    crash_rate: float = 0
+    avg_acquire_ms: float = 0
+
+
 class EventBus:
     """Simple async event bus — register subscribers, emit events."""
 

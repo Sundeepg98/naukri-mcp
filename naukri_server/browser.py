@@ -118,6 +118,11 @@ class TokenManager:
         return self._token
 
 
+class BrowserUnavailableError(Exception):
+    """Raised when circuit breaker is open — browser is known-dead."""
+    pass
+
+
 class PagePool:
     """Manages a pool of browser pages (tabs) with semaphore-based checkout."""
 
@@ -134,6 +139,12 @@ class PagePool:
         self._returns = 0
         self._crashes = 0
         self._max_wait_ms = 0
+        # Circuit breaker state
+        self._circuit_state = "closed"  # closed, open, half_open
+        self._circuit_failure_count = 0
+        self._circuit_failure_threshold = 3
+        self._circuit_open_time = 0.0
+        self._circuit_cooldown = 30.0  # seconds before half-open
 
     async def initialize(self, first_page: Page):
         """Seed pool with the initial page from browser context."""
@@ -166,6 +177,15 @@ class PagePool:
                 await page.goto(url)
                 result = await page.evaluate(...)
         """
+        # Circuit breaker check — fast-fail when browser is known-dead
+        if self._circuit_state == "open":
+            elapsed = time.monotonic() - self._circuit_open_time
+            if elapsed < self._circuit_cooldown:
+                raise BrowserUnavailableError(
+                    f"Browser unavailable (circuit open, {self._circuit_cooldown - elapsed:.0f}s until retry)"
+                )
+            self._circuit_state = "half_open"
+
         t0 = time.monotonic()
         try:
             await asyncio.wait_for(self._semaphore.acquire(), timeout=POOL_CHECKOUT_TIMEOUT)
@@ -196,6 +216,19 @@ class PagePool:
                 page = await self._recover_page(page)
 
             yield page
+            # Success — reset circuit breaker
+            self._circuit_failure_count = 0
+            if self._circuit_state == "half_open":
+                self._circuit_state = "closed"
+        except BrowserUnavailableError:
+            raise
+        except Exception:
+            self._circuit_failure_count += 1
+            if self._circuit_failure_count >= self._circuit_failure_threshold:
+                self._circuit_state = "open"
+                self._circuit_open_time = time.monotonic()
+                logger.warning("Circuit breaker OPEN after %d failures", self._circuit_failure_count)
+            raise
         finally:
             # Return page to pool
             if page is not None:
@@ -219,6 +252,15 @@ class PagePool:
                 self._available.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def reset_circuit(self):
+        """Called by watchdog after successful restart."""
+        self._circuit_state = "closed"
+        self._circuit_failure_count = 0
+
+    @property
+    def circuit_state(self) -> str:
+        return self._circuit_state
 
     def get_stats(self) -> dict:
         """Return observability counters for the page pool."""
