@@ -49,11 +49,16 @@ class Salary:
             return (self.min_lakhs + self.max_lakhs) / 2
         return None
 
-    def compare_to_ctc(self, expected_ctc: float) -> int:
+    def compare_to_ctc(self, expected_ctc) -> int:
         """Score salary fit against expected CTC. Returns 0, 3, or 5.
 
         5 = meets expectation, 3 = within 20%, 0 = below threshold.
         """
+        # Defensive: ensure float (callers may pass string like "25")
+        try:
+            expected_ctc = float(expected_ctc)
+        except (ValueError, TypeError):
+            return 0
         if self.max_lakhs is None or self.max_lakhs > 200:
             return 0
         if self.max_lakhs >= expected_ctc:
