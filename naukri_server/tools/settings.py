@@ -265,6 +265,11 @@ async def naukri_settings(
             if not body:
                 if jss_result is not None:
                     # Only job_search_status was requested; no API settings to update
+                    try:
+                        from naukri_server.events import event_bus, SettingsUpdated
+                        await event_bus.emit(SettingsUpdated(updated_fields=", ".join(updated_fields)))
+                    except Exception:
+                        pass
                     result = {"status": "success", "updated_fields": updated_fields}
                     result.update(jss_result)
                     return result
@@ -288,6 +293,13 @@ async def naukri_settings(
                 merged = body
 
             await api_client.post(SETTINGS_API, merged)
+
+            try:
+                from naukri_server.events import event_bus, SettingsUpdated
+                await event_bus.emit(SettingsUpdated(updated_fields=", ".join(updated_fields)))
+            except Exception:
+                pass
+
             result = {
                 "status": "success",
                 "updated_fields": updated_fields,

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_tool
+from naukri_server.error_handler import api_tool
 from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
@@ -145,14 +145,13 @@ async def _resume_info() -> dict:
 
 
 async def _resume_download(save_path: str) -> dict:
-    from naukri_server.api import get_session
     from naukri_server.config import API_HEADERS
 
     try:
         token = await browser.token_manager.ensure_token()
         cookie_str = browser.token_manager.get_cookies()
 
-        session = await get_session()
+        session = await api_client.get_session()
         headers = {
             **API_HEADERS,
             "Authorization": f"Bearer {token}",
@@ -232,6 +231,13 @@ async def _resume_upload(file_path: str) -> dict:
 
             _profile_ttl_cache.invalidate()
             _dashboard_ttl_cache.invalidate()
+
+            try:
+                from naukri_server.events import event_bus, ResumeUploaded
+                await event_bus.emit(ResumeUploaded(file_name=path.name, size_mb=round(size_mb, 2)))
+            except Exception:
+                pass
+
             return {
                 "status": "success",
                 "action": "uploaded",
@@ -362,6 +368,12 @@ async def _photo_upload(file_path: str) -> dict:
                 logger.info("No save button found, waiting for auto-upload")
                 await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)
 
+            try:
+                from naukri_server.events import event_bus, PhotoUploaded
+                await event_bus.emit(PhotoUploaded(file_name=path.name))
+            except Exception:
+                pass
+
             return {
                 "status": "success",
                 "action": "uploaded",
@@ -474,6 +486,12 @@ async def _photo_delete() -> dict:
 
             logger.info("Clicked confirmation button: %s", confirm_clicked)
             await asyncio.sleep(BROWSER_UPLOAD_COMPLETE)  # Wait for deletion to complete
+
+            try:
+                from naukri_server.events import event_bus, PhotoDeleted
+                await event_bus.emit(PhotoDeleted())
+            except Exception:
+                pass
 
             return {
                 "status": "success",

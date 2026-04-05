@@ -1,7 +1,8 @@
 """Shared error handling for MCP tool dispatch functions."""
 
 import logging
-from naukri_server.api import NaukriAPIError
+
+from naukri_server.api import NaukriAPIError, api_tool  # noqa: F401 — re-export
 
 logger = logging.getLogger(__name__)
 

@@ -1,11 +1,10 @@
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.api import api_tool
+from naukri_server.error_handler import api_tool, handle_tool_action
 from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_intercept_json
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
-from naukri_server.error_handler import handle_tool_action
 from naukri_server.tools.job_parsing import _parse_job_list  # noqa: F401
 from naukri_server.validation import validate_job_list, validate_limit, validate_page  # noqa: F401
 

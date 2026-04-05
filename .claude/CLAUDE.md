@@ -110,8 +110,8 @@ Check the implementation plan for file assignments before starting.
 - Domain: `naukri_server/domain/*.py` (9 domain objects)
 - Database: `naukri_server/database.py` (SQLite, 7 tables, 24+ CRUD helpers)
 - Infrastructure: `naukri_server/api.py`, `browser.py`, `config.py`, `utils.py`, `interfaces.py`
-- Events: `naukri_server/events.py` (EventBus, 12 event types)
-- Subscribers: `naukri_server/subscribers.py` (8 reactive handlers)
+- Events: `naukri_server/events.py` (EventBus, 24 event types)
+- Subscribers: `naukri_server/subscribers.py` (27 reactive handlers)
 - Workflows: `naukri_server/workflows.py` (2 saga workflows)
 - Tests: `tests/test_*.py`
 
@@ -144,10 +144,19 @@ from naukri_server.events import event_bus, ApplicationSubmitted
 await event_bus.emit(ApplicationSubmitted(job_id=job_id, company=company))
 ```
 
-### Event Types (12 total)
+### Event Types (24 total)
 ApplicationSubmitted, ApplicationStatusChanged, ApplicationStale, RecruiterEngaged,
 ApplicationInterviewScheduled, SyncCompleted, ReminderDue, ReminderSet,
-ProfileScoreChanged, SavedJobAdded, SavedJobRemoved, SavedJobExpiring
+ProfileScoreChanged, SavedJobAdded, SavedJobRemoved, SavedJobExpiring,
+ProfileUpdated, ProfileBoosted, AlertCreated, AlertUpdated, AlertDeleted,
+ApplicationsPurged, ResumeUploaded, PhotoUploaded, PhotoDeleted,
+CachedAnswerUpdated, CachedAnswerDeleted, SettingsUpdated
+
+### CQRS Read Model
+Reads go through TtlCache (profile, dashboard already cached in _profile_ttl_cache
+and _dashboard_ttl_cache). Writes invalidate those caches. Every write emits a
+domain event. This IS the CQRS read model at this project scale -- no separate
+read store needed.
 
 ### Subscriber Safety Rules
 - Wrap handler body in try/except (never crash the caller)

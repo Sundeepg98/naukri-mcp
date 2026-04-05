@@ -122,6 +122,84 @@ class SavedJobExpiring(DomainEvent):
 
 
 @dataclass
+class ProfileUpdated(DomainEvent):
+    """Fired when profile fields are updated via browser UI."""
+    fields: str = ""  # comma-separated field names
+    method: str = ""  # "browser_ui" or "rest_api"
+
+
+@dataclass
+class ProfileBoosted(DomainEvent):
+    """Fired when profile is refreshed/boosted for visibility."""
+    method: str = ""  # "rest_api_v0", "browser_headline_edit", etc.
+
+
+@dataclass
+class AlertCreated(DomainEvent):
+    """Fired when a new job alert is created."""
+    alert_name: str = ""
+    keywords: str = ""
+
+
+@dataclass
+class AlertUpdated(DomainEvent):
+    """Fired when a job alert is modified."""
+    alert_name: str = ""
+    updated_fields: str = ""  # comma-separated field names
+
+
+@dataclass
+class AlertDeleted(DomainEvent):
+    """Fired when a job alert is deleted."""
+    alert_id: str = ""
+    alert_name: str = ""
+
+
+@dataclass
+class ApplicationsPurged(DomainEvent):
+    """Fired when old applications are purged from the database."""
+    purged_count: int = 0
+    before_date: str = ""
+
+
+@dataclass
+class ResumeUploaded(DomainEvent):
+    """Fired when a new resume is uploaded to the profile."""
+    file_name: str = ""
+    size_mb: float = 0.0
+
+
+@dataclass
+class PhotoUploaded(DomainEvent):
+    """Fired when a profile photo is uploaded."""
+    file_name: str = ""
+
+
+@dataclass
+class PhotoDeleted(DomainEvent):
+    """Fired when a profile photo is deleted."""
+    pass
+
+
+@dataclass
+class CachedAnswerUpdated(DomainEvent):
+    """Fired when a screening question cached answer is updated."""
+    key: str = ""
+
+
+@dataclass
+class CachedAnswerDeleted(DomainEvent):
+    """Fired when a screening question cached answer is deleted."""
+    key: str = ""
+
+
+@dataclass
+class SettingsUpdated(DomainEvent):
+    """Fired when account settings are changed."""
+    updated_fields: str = ""  # comma-separated field names
+
+
+@dataclass
 class BrowserCrashed(DomainEvent):
     """Emitted when browser becomes unresponsive or context dies."""
     reason: str = ""

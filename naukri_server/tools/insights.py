@@ -138,6 +138,11 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
         from naukri_server.cache import update_cached_answer
         updated = await update_cached_answer(key, new_answer)
         if updated:
+            try:
+                from naukri_server.events import event_bus, CachedAnswerUpdated
+                await event_bus.emit(CachedAnswerUpdated(key=key))
+            except Exception:
+                pass
             return {"status": "success", "key": key, "new_answer": new_answer, "message": f"Answer updated."}
         return {"status": "error", "message": f"Key '{key}' not found in cache.", "error_code": "NOT_FOUND"}
 
@@ -147,6 +152,11 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
         from naukri_server.cache import delete_cached_answer
         deleted = await delete_cached_answer(key)
         if deleted:
+            try:
+                from naukri_server.events import event_bus, CachedAnswerDeleted
+                await event_bus.emit(CachedAnswerDeleted(key=key))
+            except Exception:
+                pass
             return {"status": "success", "key": key, "message": f"Cached answer '{key}' deleted."}
         return {"status": "error", "message": f"Key '{key}' not found in cache.", "error_code": "NOT_FOUND"}
 

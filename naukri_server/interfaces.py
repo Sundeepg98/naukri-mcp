@@ -11,7 +11,7 @@ Usage for new tools:
         data = await api_client.get("/some/path", params={"key": "val"})
         await api_client.post("/some/path", body={"field": "value"})
 
-Existing tools still use direct imports (migration is optional and incremental).
+All tools use these interfaces — no tool imports api_get/api_post directly.
 """
 
 from abc import ABC, abstractmethod
@@ -40,6 +40,10 @@ class ApiClient(ABC):
     @abstractmethod
     async def delete(self, path: str, body: dict = None) -> dict:
         """DELETE request to Naukri API."""
+
+    @abstractmethod
+    async def get_session(self) -> Any:
+        """Return the underlying HTTP session for low-level operations (e.g. binary downloads)."""
 
 
 class BrowserProvider(ABC):
@@ -79,6 +83,10 @@ class NaukriApiClient(ApiClient):
     async def delete(self, path: str, body: dict = None) -> dict:
         from naukri_server.api import api_delete
         return await api_delete(path, body=body)
+
+    async def get_session(self) -> Any:
+        from naukri_server.api import get_session
+        return await get_session()
 
 
 class PlaywrightBrowserProvider(BrowserProvider):

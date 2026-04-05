@@ -157,6 +157,15 @@ async def purge_applications(before_date: str, dry_run: bool = True) -> dict:
         deleted = await delete_applications_before(before_date)
         purge_count = deleted
 
+        try:
+            from naukri_server.events import event_bus, ApplicationsPurged
+            await event_bus.emit(ApplicationsPurged(
+                purged_count=purge_count,
+                before_date=before_date,
+            ))
+        except Exception:
+            pass
+
     return {
         "status": "success",
         "purged_count": purge_count,

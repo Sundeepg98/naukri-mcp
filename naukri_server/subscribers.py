@@ -13,6 +13,9 @@ from naukri_server.events import (
     RecruiterEngaged, ProfileScoreChanged,
     SavedJobExpiring, SavedJobAdded, SavedJobRemoved, ReminderSet,
     BrowserCrashed, BrowserRecovered, ProbeStateChanged,
+    ProfileUpdated, ProfileBoosted, AlertCreated, AlertUpdated, AlertDeleted,
+    ApplicationsPurged, ResumeUploaded, PhotoUploaded, PhotoDeleted,
+    CachedAnswerUpdated, CachedAnswerDeleted, SettingsUpdated,
 )
 
 logger = logging.getLogger(__name__)
@@ -304,6 +307,197 @@ async def _on_probe_state_changed(event: ProbeStateChanged):
         logger.warning("Subscriber _on_probe_state_changed failed: %s", e)
 
 
+async def _on_profile_updated(event: ProfileUpdated):
+    """Store notification when profile fields are updated."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ProfileUpdated",
+            "title": f"Profile updated: {event.fields}",
+            "body": f"Profile fields updated via {event.method}.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"fields": event.fields, "method": event.method},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_profile_updated failed: %s", e)
+
+
+async def _on_profile_boosted(event: ProfileBoosted):
+    """Store notification when profile is boosted for visibility."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ProfileBoosted",
+            "title": "Profile visibility refreshed",
+            "body": f"Profile boosted via {event.method}. You appear as 'recently active'.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"method": event.method},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_profile_boosted failed: %s", e)
+
+
+async def _on_alert_created(event: AlertCreated):
+    """Store notification when a job alert is created."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "AlertCreated",
+            "title": f"Alert created: {event.alert_name}",
+            "body": f"Job alert '{event.alert_name}' created for '{event.keywords}'.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"alert_name": event.alert_name, "keywords": event.keywords},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_alert_created failed: %s", e)
+
+
+async def _on_alert_updated(event: AlertUpdated):
+    """Store notification when a job alert is modified."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "AlertUpdated",
+            "title": f"Alert updated: {event.alert_name}",
+            "body": f"Updated fields: {event.updated_fields}.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"alert_name": event.alert_name, "updated_fields": event.updated_fields},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_alert_updated failed: %s", e)
+
+
+async def _on_alert_deleted(event: AlertDeleted):
+    """Store notification when a job alert is deleted."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "AlertDeleted",
+            "title": f"Alert deleted: {event.alert_name}",
+            "body": f"Job alert '{event.alert_name}' (id={event.alert_id}) deleted.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"alert_id": event.alert_id, "alert_name": event.alert_name},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_alert_deleted failed: %s", e)
+
+
+async def _on_applications_purged(event: ApplicationsPurged):
+    """Store notification when old applications are purged."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ApplicationsPurged",
+            "title": f"Purged {event.purged_count} old applications",
+            "body": f"Applications before {event.before_date} have been deleted.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"purged_count": event.purged_count, "before_date": event.before_date},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_applications_purged failed: %s", e)
+
+
+async def _on_resume_uploaded(event: ResumeUploaded):
+    """Store notification when a resume is uploaded."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ResumeUploaded",
+            "title": f"Resume uploaded: {event.file_name}",
+            "body": f"Resume '{event.file_name}' ({event.size_mb}MB) uploaded to profile.",
+            "priority": "medium",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"file_name": event.file_name, "size_mb": event.size_mb},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_resume_uploaded failed: %s", e)
+
+
+async def _on_photo_uploaded(event: PhotoUploaded):
+    """Store notification when a photo is uploaded."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "PhotoUploaded",
+            "title": f"Photo uploaded: {event.file_name}",
+            "body": f"Profile photo '{event.file_name}' uploaded.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"file_name": event.file_name},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_photo_uploaded failed: %s", e)
+
+
+async def _on_photo_deleted(event: PhotoDeleted):
+    """Store notification when a photo is deleted."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "PhotoDeleted",
+            "title": "Profile photo deleted",
+            "body": "Profile photo has been removed.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_photo_deleted failed: %s", e)
+
+
+async def _on_cached_answer_updated(event: CachedAnswerUpdated):
+    """Store notification when a cached screening answer is updated."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "CachedAnswerUpdated",
+            "title": f"Cached answer updated: {event.key[:50]}",
+            "body": f"Screening question answer for '{event.key}' was modified.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"key": event.key},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_cached_answer_updated failed: %s", e)
+
+
+async def _on_cached_answer_deleted(event: CachedAnswerDeleted):
+    """Store notification when a cached screening answer is deleted."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "CachedAnswerDeleted",
+            "title": f"Cached answer deleted: {event.key[:50]}",
+            "body": f"Screening question answer for '{event.key}' was removed.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"key": event.key},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_cached_answer_deleted failed: %s", e)
+
+
+async def _on_settings_updated(event: SettingsUpdated):
+    """Store notification when account settings change."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "SettingsUpdated",
+            "title": f"Settings updated: {event.updated_fields}",
+            "body": f"Account settings changed: {event.updated_fields}.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"updated_fields": event.updated_fields},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_settings_updated failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -325,7 +519,19 @@ def register_all():
     event_bus.subscribe(BrowserCrashed, _on_browser_crashed)
     event_bus.subscribe(BrowserRecovered, _on_browser_recovered)
     event_bus.subscribe(ProbeStateChanged, _on_probe_state_changed)
-    logger.info("Registered %d reactive subscribers", 15)
+    event_bus.subscribe(ProfileUpdated, _on_profile_updated)
+    event_bus.subscribe(ProfileBoosted, _on_profile_boosted)
+    event_bus.subscribe(AlertCreated, _on_alert_created)
+    event_bus.subscribe(AlertUpdated, _on_alert_updated)
+    event_bus.subscribe(AlertDeleted, _on_alert_deleted)
+    event_bus.subscribe(ApplicationsPurged, _on_applications_purged)
+    event_bus.subscribe(ResumeUploaded, _on_resume_uploaded)
+    event_bus.subscribe(PhotoUploaded, _on_photo_uploaded)
+    event_bus.subscribe(PhotoDeleted, _on_photo_deleted)
+    event_bus.subscribe(CachedAnswerUpdated, _on_cached_answer_updated)
+    event_bus.subscribe(CachedAnswerDeleted, _on_cached_answer_deleted)
+    event_bus.subscribe(SettingsUpdated, _on_settings_updated)
+    logger.info("Registered %d reactive subscribers", 27)
 
 
 # Auto-register on import

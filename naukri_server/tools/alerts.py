@@ -138,6 +138,16 @@ async def _update_alert_browser(a_id: str, alert_name: str, keywords, location, 
 
             display_name = new_name or alert_name
             logger.info("Alert '%s' updated: %s", display_name, updates)
+
+            try:
+                from naukri_server.events import event_bus, AlertUpdated
+                await event_bus.emit(AlertUpdated(
+                    alert_name=display_name,
+                    updated_fields=", ".join(updates.keys()),
+                ))
+            except Exception:
+                pass
+
             return {
                 "status": "success",
                 "alert_name": display_name,
@@ -234,6 +244,13 @@ async def _delete_alert_browser(a_id: str, alert_name: str) -> dict:
                     }
 
             logger.info("Alert '%s' (id=%s) deleted successfully.", alert_name, a_id)
+
+            try:
+                from naukri_server.events import event_bus, AlertDeleted
+                await event_bus.emit(AlertDeleted(alert_id=a_id, alert_name=alert_name))
+            except Exception:
+                pass
+
             return {
                 "status": "success",
                 "alert_id": a_id,
@@ -378,6 +395,13 @@ async def naukri_job_alerts(
                 body["industryTypeId"] = industry_type_id
 
             response = await api_client.post(JOB_ALERT_API, body)
+
+            try:
+                from naukri_server.events import event_bus, AlertCreated
+                await event_bus.emit(AlertCreated(alert_name=name, keywords=keywords))
+            except Exception:
+                pass
+
             result = {
                 "status": "success",
                 "alert_name": name,

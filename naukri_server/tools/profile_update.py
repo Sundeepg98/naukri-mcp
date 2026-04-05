@@ -690,6 +690,18 @@ async def _update_profile(
 
             _profile_ttl_cache.invalidate()
             _dashboard_ttl_cache.invalidate()
+
+            # Emit ProfileUpdated event
+            if ui_updated:
+                try:
+                    from naukri_server.events import event_bus, ProfileUpdated
+                    await event_bus.emit(ProfileUpdated(
+                        fields=", ".join(ui_updated),
+                        method="browser_ui",
+                    ))
+                except Exception:
+                    pass
+
             return {
                 "status": "updated",
                 "method": "browser_ui",
@@ -728,6 +740,13 @@ async def _boost_visibility(randomize: bool = False) -> dict:
                         await api_client.post(endpoint, {"resumeHeadline": headline})
                         _profile_ttl_cache.invalidate()
                         _dashboard_ttl_cache.invalidate()
+
+                        try:
+                            from naukri_server.events import event_bus, ProfileBoosted
+                            await event_bus.emit(ProfileBoosted(method=f"rest_api_{version}"))
+                        except Exception:
+                            pass
+
                         return {
                             "status": "success", "action": "refreshed",
                             "method": f"rest_api_{version}",
@@ -798,6 +817,13 @@ async def _boost_visibility(randomize: bool = False) -> dict:
 
             _profile_ttl_cache.invalidate()
             _dashboard_ttl_cache.invalidate()
+
+            try:
+                from naukri_server.events import event_bus, ProfileBoosted
+                await event_bus.emit(ProfileBoosted(method=f"browser_{edit_clicked}"))
+            except Exception:
+                pass
+
             return {
                 "status": "success", "action": "refreshed",
                 "method": f"browser_{edit_clicked}",
