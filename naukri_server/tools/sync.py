@@ -646,11 +646,50 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
     remote_jobs = _parse_saved_jobs(remote_data)
 
     from naukri_server.database import list_all_saved_jobs, upsert_saved_job
+    from naukri_server.sagas import SagaExecutor
+    from naukri_server.events import SyncCompleted as SyncCompletedEvent
 
     local_saved = await list_all_saved_jobs()
-    stats = _merge_saved_jobs(local_saved, remote_jobs)
-    for sj in local_saved:
-        await upsert_saved_job(sj)
+
+    # --- Saga: wrap merge + persist + emit events in saga steps ---
+    saga = SagaExecutor("sync_saved_jobs")
+    stats = {}
+
+    async def step_merge():
+        nonlocal stats
+        stats = _merge_saved_jobs(local_saved, remote_jobs)
+        return stats
+
+    async def step_persist():
+        for sj in local_saved:
+            await upsert_saved_job(sj)
+        return {"persisted": len(local_saved)}
+
+    async def step_emit_events():
+        await event_bus.emit(SyncCompletedEvent(
+            entity="saved_jobs",
+            new_added=stats.get("new_added", 0),
+            updated=0,
+            status_changes_count=0,
+        ))
+        return {"events_emitted": 1}
+
+    saga.add_step("merge", step_merge)
+    saga.add_step("persist", step_persist)
+    saga.add_step("emit_events", step_emit_events)
+
+    saga_result = await saga.run()
+
+    if saga_result["status"] == "error":
+        saga_errors = saga_result.get("errors", [])
+        error_detail = saga_errors[0] if saga_errors else "unknown"
+        return {
+            "status": "error",
+            "message": f"Sync saga failed at step '{saga_result.get('failed_step')}': {error_detail}",
+            "error_code": "API_ERROR",
+            "saga_steps": saga_result.get("completed_steps", []),
+            "saga_errors": saga_errors,
+        }
 
     # Record sync metadata
     async with _sync_state_lock:
@@ -667,6 +706,8 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
         **stats,
         "last_sync": state.get("last_saved_jobs_sync"),
         "saved_jobs": local_saved[:20],
+        "saga_steps": saga_result.get("completed_steps", []),
+        "step_timings": saga_result.get("step_timings", {}),
     }
 
 

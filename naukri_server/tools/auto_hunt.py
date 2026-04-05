@@ -5,8 +5,9 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.domain.fit_score import FitScore
 from naukri_server.models import Job
-from naukri_server.scoring import compute_fit_score, parse_skills
+from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
 from naukri_server.validation import validate_limit
 
 
@@ -115,41 +116,49 @@ async def naukri_auto_hunt(
 
         # Score each job
         ranked = []
-        for job in jobs:
-            job_skills = parse_skills(job.get("tags") or job.get("skills") or [])
-            fit = compute_fit_score(
+        for job_dict in jobs:
+            job = Job.from_api_dict(job_dict)
+            job_skills = parse_skills(job.tags or [])
+            fit = FitScore.compute(
                 job_skills, profile_skills,
-                job.get("experience", ""),
+                job_dict.get("experience", ""),
                 profile_exp,
-                job_location=job.get("location"),
+                job_location=job.location,
                 profile_location=profile_location,
-                job_work_mode=job.get("work_mode"),
-                job_salary=job.get("salary"),
+                job_work_mode=job.work_mode,
+                job_salary=job_dict.get("salary"),
                 profile_expected_ctc=profile_expected_ctc,
-                experience_min=job.get("experience_min"),
-                experience_max=job.get("experience_max"),
-                is_agent_eligible=job.get("is_agent_eligible"),
+                experience_min=job.experience_min,
+                experience_max=job.experience_max,
+                is_agent_eligible=job.is_agent_eligible,
+                score_location_fn=_score_location,
+                score_work_mode_fn=_score_work_mode,
+                score_salary_fn=_score_salary,
             )
 
-            if fit["overall_score"] >= min_fit_score:
-                # Use Job entity for computed properties
-                job_entity = Job.from_api_dict(job)
+            if fit.overall_score >= min_fit_score:
                 ranked.append({
-                    "job_id": job.get("job_id"),
-                    "title": job.get("title"),
-                    "company": job.get("company"),
-                    "salary": job.get("salary"),
-                    "location": job.get("location"),
-                    "work_mode": job.get("work_mode"),
-                    "experience": job.get("experience"),
-                    "is_applied": job.get("is_applied"),
-                    "salary_disclosed": job_entity.salary_disclosed,
-                    "experience_match": job_entity.matches_experience(profile_exp_years),
-                    "fit_score": fit["overall_score"],
-                    "matched_skills": fit["skill_match"]["matched"],
-                    "missing_skills": fit["skill_match"]["missing"],
-                    "recommendation": fit["recommendation"],
-                    "bonuses": fit.get("bonuses"),
+                    "job_id": job.job_id,
+                    "title": job.title,
+                    "company": job.company,
+                    "salary": job_dict.get("salary"),
+                    "location": job.location,
+                    "work_mode": job.work_mode,
+                    "experience": job_dict.get("experience"),
+                    "is_applied": job.is_applied,
+                    "salary_disclosed": job.salary_disclosed,
+                    "experience_match": job.matches_experience(profile_exp_years),
+                    "fit_score": fit.overall_score,
+                    "matched_skills": sorted(fit.skill_match.matched),
+                    "missing_skills": sorted(fit.skill_match.missing),
+                    "recommendation": fit.recommendation,
+                    "bonuses": {
+                        "location": fit.bonuses.location,
+                        "work_mode": fit.bonuses.work_mode,
+                        "salary": fit.bonuses.salary,
+                        "agent_eligible": fit.bonuses.agent_eligible,
+                        "total": fit.bonuses.total,
+                    } if fit._has_enrichment else None,
                 })
 
         # Sort by fit score descending

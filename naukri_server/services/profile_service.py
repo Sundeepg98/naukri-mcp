@@ -191,6 +191,14 @@ async def _audit_profile() -> dict:
         # --- Pure computation (domain object) ---
         report = CompletionReport.from_profile(profile_result, completeness_pct)
 
+        # --- Emit ProfileScoreChanged if we have a completeness score ---
+        try:
+            from naukri_server.events import event_bus, ProfileScoreChanged
+            if report.completeness_pct is not None:
+                await event_bus.emit(ProfileScoreChanged(old_score=0, new_score=report.completeness_pct))
+        except Exception:
+            pass
+
         return {"status": "success", **report.to_dict()}
     except Exception as e:
         return {"status": "error", "message": f"Profile audit failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}

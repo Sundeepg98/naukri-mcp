@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from naukri_server.events import (
     event_bus, ApplicationSubmitted, ApplicationStatusChanged,
     ApplicationStale, ApplicationInterviewScheduled, SyncCompleted, ReminderDue,
-    RecruiterEngaged,
+    RecruiterEngaged, ProfileScoreChanged,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,6 +174,21 @@ async def _on_reminder_due(event: ReminderDue):
         logger.warning("Subscriber _on_reminder_due failed: %s", e)
 
 
+async def _on_profile_score_changed(event: ProfileScoreChanged):
+    """Store notification when profile completeness score is assessed."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ProfileScoreChanged",
+            "title": f"Profile score: {event.new_score}%",
+            "body": "Your profile completeness score was assessed.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_profile_score_changed failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -187,7 +202,8 @@ def register_all():
     event_bus.subscribe(SyncCompleted, _on_sync_completed)
     event_bus.subscribe(RecruiterEngaged, _on_recruiter_engaged)
     event_bus.subscribe(ReminderDue, _on_reminder_due)
-    logger.info("Registered %d reactive subscribers", 7)
+    event_bus.subscribe(ProfileScoreChanged, _on_profile_score_changed)
+    logger.info("Registered %d reactive subscribers", 8)
 
 
 # Auto-register on import

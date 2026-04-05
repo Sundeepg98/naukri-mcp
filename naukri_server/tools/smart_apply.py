@@ -5,8 +5,10 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
+from naukri_server.domain.fit_score import FitScore
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.scoring import compute_fit_score, parse_skills
+from naukri_server.models import Job
+from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
 
 
 
@@ -14,7 +16,7 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
     """Score a single job against a profile. Returns the fit assessment dict."""
     job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
     profile_skills = parse_skills(profile_result.get("key_skills", []))
-    return compute_fit_score(
+    fit = FitScore.compute(
         job_skills, profile_skills,
         job_result.get("experience", ""),
         profile_result.get("total_experience"),
@@ -24,7 +26,11 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
         job_salary=job_result.get("salary"),
         profile_expected_ctc=profile_result.get("expected_ctc"),
         is_agent_eligible=is_agent_eligible,
+        score_location_fn=_score_location,
+        score_work_mode_fn=_score_work_mode,
+        score_salary_fn=_score_salary,
     )
+    return fit.to_dict()
 
 
 async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120) -> dict:
@@ -94,18 +100,19 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
             if detail is None or (isinstance(detail, dict) and detail.get("status") == "error"):
                 continue
 
-            fit = _score_job(detail, profile_result, is_agent_eligible=detail.get("is_agent_eligible", False))
+            job = Job.from_api_dict(detail)
+            fit = _score_job(detail, profile_result, is_agent_eligible=job.is_agent_eligible)
             fit_score = fit.get("overall_score", 0)
 
             if fit_score >= min_fit_score:
                 scored.append({
                     "job_id": saved_job.get("job_id"),
-                    "title": detail.get("title") or saved_job.get("title"),
-                    "company": detail.get("company") or saved_job.get("company"),
-                    "salary": detail.get("salary") or saved_job.get("salary"),
-                    "location": detail.get("location") or saved_job.get("location"),
-                    "experience": detail.get("experience"),
-                    "work_mode": detail.get("work_mode"),
+                    "title": job.title or saved_job.get("title"),
+                    "company": job.company or saved_job.get("company"),
+                    "salary": job.salary or saved_job.get("salary"),
+                    "location": job.location or saved_job.get("location"),
+                    "experience": job.experience,
+                    "work_mode": job.work_mode,
                     "fit_score": fit_score,
                     "fit_details": fit,
                 })

@@ -14,6 +14,7 @@ from naukri_server.config import (
     BROWSER_MODAL_APPEAR, logger,
 )
 from naukri_server.domain import safe_get
+from naukri_server.domain.salary import Salary
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.utils import derive_slug
 from naukri_server.validation import validate_company_list, validate_job_list, validate_limit, validate_page
@@ -647,34 +648,17 @@ async def salary_benchmark(
         salary_by_company = []
         for job in jobs:
             salary_str = job.get("salary", "")
-            if not salary_str or salary_str.lower() == "not disclosed":
+            salary = Salary.from_string(salary_str)
+            if not salary.is_disclosed:
                 continue
 
-            nums = re.findall(r'(\d+(?:\.\d+)?)', str(salary_str).replace(",", ""))
-            if len(nums) >= 2:
-                low, high = float(nums[0]), float(nums[1])
-                if low > 200:
-                    low /= LAKHS_MULTIPLIER
-                    high /= LAKHS_MULTIPLIER
-                avg_val = (low + high) / 2
-                salary_values.append(avg_val)
-                salary_by_company.append({
-                    "company": job.get("company"),
-                    "title": job.get("title"),
-                    "salary_range": salary_str,
-                    "avg_lpa": round(avg_val, 1),
-                })
-            elif len(nums) == 1:
-                val = float(nums[0])
-                if val > 200:
-                    val /= LAKHS_MULTIPLIER
-                salary_values.append(val)
-                salary_by_company.append({
-                    "company": job.get("company"),
-                    "title": job.get("title"),
-                    "salary_range": salary_str,
-                    "avg_lpa": round(val, 1),
-                })
+            salary_values.append(salary.midpoint)
+            salary_by_company.append({
+                "company": job.get("company"),
+                "title": job.get("title"),
+                "salary_range": salary_str,
+                "avg_lpa": round(salary.midpoint, 1),
+            })
 
         if not salary_values:
             return {
@@ -705,12 +689,8 @@ async def salary_benchmark(
             ctc = float(current_ctc) if not isinstance(current_ctc, (int, float)) else current_ctc
             if ctc > 200:
                 ctc /= LAKHS_MULTIPLIER
-            if ctc < avg_market * 0.85:
-                positioning["current_vs_market"] = "below"
-            elif ctc > avg_market * 1.15:
-                positioning["current_vs_market"] = "above"
-            else:
-                positioning["current_vs_market"] = "at_market"
+            salary_obj = Salary(min_lakhs=ctc, max_lakhs=ctc, raw=str(ctc))
+            positioning["current_vs_market"] = salary_obj.market_position(avg_market)
             below = sum(1 for s in salary_values if s < ctc)
             positioning["current_percentile"] = round(below / len(salary_values) * 100)
 
@@ -718,12 +698,8 @@ async def salary_benchmark(
             ectc = float(expected_ctc) if not isinstance(expected_ctc, (int, float)) else expected_ctc
             if ectc > 200:
                 ectc /= LAKHS_MULTIPLIER
-            if ectc < avg_market * 0.85:
-                positioning["expected_vs_market"] = "below"
-            elif ectc > avg_market * 1.15:
-                positioning["expected_vs_market"] = "above"
-            else:
-                positioning["expected_vs_market"] = "at_market"
+            salary_obj = Salary(min_lakhs=ectc, max_lakhs=ectc, raw=str(ectc))
+            positioning["expected_vs_market"] = salary_obj.market_position(avg_market)
             below = sum(1 for s in salary_values if s < ectc)
             positioning["expected_percentile"] = round(below / len(salary_values) * 100)
 

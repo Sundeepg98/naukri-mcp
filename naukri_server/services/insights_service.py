@@ -25,6 +25,8 @@ from naukri_server.config import (
 )
 from naukri_server.scoring import normalize_skill, parse_skills
 from naukri_server.domain.application import StatusTransition
+from naukri_server.domain.salary import Salary
+from naukri_server.models import Application, ApplicationStatus
 
 __all__ = [
     "conversion_funnel",
@@ -80,15 +82,23 @@ async def conversion_funnel(days: int = 30) -> dict:
             "dead_zones": [],
         }
 
-    by_status = Counter(a.get("status", "unknown") for a in recent)
+    RESPONDED_STATUSES = {
+        ApplicationStatus.INTERVIEW,
+        ApplicationStatus.VIEWED,
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.OFFERED,
+    }
+
+    by_status = Counter(Application.from_dict(a).status.value for a in recent)
 
     by_company: dict[str, dict] = {}
     for a in recent:
-        co = a.get("company", "Unknown")
+        app = Application.from_dict(a)
+        co = app.company or "Unknown"
         if co not in by_company:
             by_company[co] = {"applied": 0, "responded": 0}
         by_company[co]["applied"] += 1
-        if a.get("status") in ("interview", "viewed", "shortlisted", "offered"):
+        if app.status in RESPONDED_STATUSES:
             by_company[co]["responded"] += 1
 
     responsive = sorted(
@@ -97,7 +107,7 @@ async def conversion_funnel(days: int = 30) -> dict:
         key=lambda x: -x["rate"]
     )
 
-    interviews = by_status.get("interview", 0)
+    interviews = by_status.get(ApplicationStatus.INTERVIEW.value, 0)
 
     return {
         "status": "success",
@@ -135,7 +145,7 @@ async def application_insights(days: int = 30) -> dict:
             "error_code": "NOT_FOUND",
         }
 
-    status_counts = Counter(a.get("status", "unknown") for a in recent)
+    status_counts = Counter(Application.from_dict(a).status.value for a in recent)
 
     company_counts = Counter(a.get("company", "Unknown") for a in recent)
     top_companies = [{"company": c, "count": n} for c, n in company_counts.most_common(10)]
@@ -202,10 +212,9 @@ async def salary_position(designation: Optional[str] = None) -> dict:
     salaries = []
     for app in apps:
         sal_str = app.get("salary") or app.get("salary_range") or ""
-        s_min, s_max = parse_salary_str(sal_str)
-        if s_min is not None and s_max is not None:
-            midpoint = (s_min + s_max) / 2
-            salaries.append({"min": s_min, "max": s_max, "mid": midpoint, "raw": sal_str})
+        salary = Salary.from_string(sal_str)
+        if salary.is_disclosed:
+            salaries.append({"min": salary.min_lakhs, "max": salary.max_lakhs, "mid": salary.midpoint, "raw": sal_str})
 
     if not salaries:
         return {
