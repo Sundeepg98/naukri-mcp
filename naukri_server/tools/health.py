@@ -171,7 +171,7 @@ async def _check_browser_interface() -> dict:
 
 
 @mcp.tool()
-async def naukri_health_check(include_browser: bool = True) -> dict:
+async def naukri_health_check(include_browser: bool = True, source: str = "checks") -> dict:
     """Run a comprehensive health check on all Naukri MCP integrations.
 
     Tests API endpoints (login, profile, search, recommendations, dashboard)
@@ -180,10 +180,25 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
     Args:
         include_browser: If True (default), also run browser checks (~8s extra).
                          Set to False for a fast API-only smoke test (~2s).
+        source: "checks" (default) for traditional health checks, "probes" for
+                probe-based health check using the health probe framework.
 
     Returns:
         - {status: "success", summary: {ok, warn, fail, total_ms}, checks: [{name, status, message, elapsed_ms}, ...]}
     """
+    # Probe-based health check
+    if source == "probes":
+        try:
+            from naukri_server.health import probe_registry
+            return {
+                "status": "success",
+                "source": "probes",
+                "summary": probe_registry.summary(),
+                "probes": probe_registry.all_results(),
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Probe registry error: {e}", "error_code": "INTERNAL_ERROR"}
+
     t_start = time.monotonic()
 
     # Run all 5 API checks in parallel
@@ -267,6 +282,12 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
         notif_count = await count_undelivered_notifications()
         result["event_stats_24h"] = event_stats
         result["pending_notifications"] = notif_count
+    except Exception:
+        pass
+
+    try:
+        from naukri_server.health import probe_registry
+        result["probe_summary"] = probe_registry.summary()
     except Exception:
         pass
 

@@ -12,7 +12,7 @@ from naukri_server.events import (
     ApplicationStale, ApplicationInterviewScheduled, SyncCompleted, ReminderDue,
     RecruiterEngaged, ProfileScoreChanged,
     SavedJobExpiring, SavedJobAdded, SavedJobRemoved, ReminderSet,
-    BrowserCrashed, BrowserRecovered,
+    BrowserCrashed, BrowserRecovered, ProbeStateChanged,
 )
 
 logger = logging.getLogger(__name__)
@@ -286,6 +286,24 @@ async def _on_browser_recovered(event: BrowserRecovered):
         logger.warning("Subscriber _on_browser_recovered failed: %s", e)
 
 
+async def _on_probe_state_changed(event: ProbeStateChanged):
+    """Store notification when critical probe changes to unhealthy."""
+    if event.criticality != "critical" or event.new_status != "unhealthy":
+        return  # Only notify on critical failures
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ProbeStateChanged",
+            "title": f"ALERT: {event.probe_name} is {event.new_status}",
+            "body": event.message,
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"probe": event.probe_name, "old": event.old_status, "new": event.new_status},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_probe_state_changed failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -306,7 +324,8 @@ def register_all():
     event_bus.subscribe(ReminderSet, _on_reminder_set)
     event_bus.subscribe(BrowserCrashed, _on_browser_crashed)
     event_bus.subscribe(BrowserRecovered, _on_browser_recovered)
-    logger.info("Registered %d reactive subscribers", 14)
+    event_bus.subscribe(ProbeStateChanged, _on_probe_state_changed)
+    logger.info("Registered %d reactive subscribers", 15)
 
 
 # Auto-register on import

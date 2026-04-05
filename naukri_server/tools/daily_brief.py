@@ -132,6 +132,19 @@ def _build_recommended_actions(brief: dict) -> list:
             "tool": "naukri_daily_brief() — see pending_notifications",
         })
 
+    # Check for critical probe failures
+    try:
+        from naukri_server.health import probe_registry
+        critical_failures = probe_registry.summary().get("critical_failures", [])
+        if critical_failures:
+            actions.append({
+                "priority": "high",
+                "action": f"System health alert: {', '.join(critical_failures[:3])} failing",
+                "tool": "naukri_health_check",
+            })
+    except Exception:
+        pass
+
     # High priority: unread recruiter messages
     inbox = brief.get("unread_messages", {})
     if inbox.get("count", 0) > 0:

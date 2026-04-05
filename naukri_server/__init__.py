@@ -96,6 +96,12 @@ async def lifespan(server):
             # Start browser watchdog for self-healing
             _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
             await _watchdog_module.watchdog.start()
+            # Import and start probe scheduler
+            import naukri_server.health.probes  # noqa: F401 — triggers probe registration
+            from naukri_server.health import probe_registry, HealthProbeScheduler
+            import naukri_server.health as _health_module
+            _health_module._scheduler = HealthProbeScheduler(probe_registry, watchdog=_watchdog_module.watchdog)
+            await _health_module._scheduler.start()
             # Startup health check — validates core services after browser is ready
             logger.info("Running startup health check...")
             try:
@@ -113,6 +119,9 @@ async def lifespan(server):
         async with _lifespan_lock:
             _lifespan_refs -= 1
             if _lifespan_refs == 0:
+                import naukri_server.health as _health_module
+                if hasattr(_health_module, '_scheduler') and _health_module._scheduler:
+                    await _health_module._scheduler.stop()
                 if _watchdog_module.watchdog:
                     await _watchdog_module.watchdog.stop()
                 try:
