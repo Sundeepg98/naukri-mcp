@@ -11,6 +11,7 @@ from naukri_server.events import (
     event_bus, ApplicationSubmitted, ApplicationStatusChanged,
     ApplicationStale, ApplicationInterviewScheduled, SyncCompleted, ReminderDue,
     RecruiterEngaged, ProfileScoreChanged,
+    SavedJobExpiring, SavedJobAdded, SavedJobRemoved, ReminderSet,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,70 @@ async def _on_profile_score_changed(event: ProfileScoreChanged):
         logger.warning("Subscriber _on_profile_score_changed failed: %s", e)
 
 
+async def _on_saved_job_expiring(event: SavedJobExpiring):
+    """Store high-priority notification when a saved job is about to expire."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "SavedJobExpiring",
+            "title": f"Saved job expiring: {event.title or 'job'} at {event.company or 'company'}",
+            "body": f"Saved job {event.job_id} expires in {event.expires_in_days} days. Apply or remove it.",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id, "expires_in_days": event.expires_in_days},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_saved_job_expiring failed: %s", e)
+
+
+async def _on_saved_job_added(event: SavedJobAdded):
+    """Store low-priority notification when a job is saved."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "SavedJobAdded",
+            "title": f"Job saved: {event.title or 'job'} at {event.company or 'company'}",
+            "body": f"Job {event.job_id} added to saved jobs.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_saved_job_added failed: %s", e)
+
+
+async def _on_saved_job_removed(event: SavedJobRemoved):
+    """Store low-priority notification when a saved job is removed."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "SavedJobRemoved",
+            "title": f"Job unsaved: {event.job_id}",
+            "body": f"Job {event.job_id} removed from saved jobs.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_saved_job_removed failed: %s", e)
+
+
+async def _on_reminder_set(event: ReminderSet):
+    """Store low-priority notification when a reminder is created."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ReminderSet",
+            "title": f"Reminder set: {event.company or 'Follow up'} in {event.days} days",
+            "body": f"Reminder for job {event.job_id} scheduled at {event.remind_at}.",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id, "remind_at": event.remind_at},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_reminder_set failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -203,7 +268,11 @@ def register_all():
     event_bus.subscribe(RecruiterEngaged, _on_recruiter_engaged)
     event_bus.subscribe(ReminderDue, _on_reminder_due)
     event_bus.subscribe(ProfileScoreChanged, _on_profile_score_changed)
-    logger.info("Registered %d reactive subscribers", 8)
+    event_bus.subscribe(SavedJobExpiring, _on_saved_job_expiring)
+    event_bus.subscribe(SavedJobAdded, _on_saved_job_added)
+    event_bus.subscribe(SavedJobRemoved, _on_saved_job_removed)
+    event_bus.subscribe(ReminderSet, _on_reminder_set)
+    logger.info("Registered %d reactive subscribers", 12)
 
 
 # Auto-register on import
