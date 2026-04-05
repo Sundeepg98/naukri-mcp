@@ -19,6 +19,20 @@ async def _fetch_ab_applied_insights() -> dict:
         return {"status": "success", "count": 0, "insights": []}
 
 
+async def _fetch_pending_notifications() -> list:
+    """Fetch undelivered notifications for the daily brief."""
+    try:
+        from naukri_server.database import list_undelivered_notifications, mark_notifications_delivered
+        notifs = await list_undelivered_notifications(limit=10)
+        if notifs:
+            ids = [n["id"] for n in notifs]
+            await mark_notifications_delivered(ids, via="brief")
+        return notifs
+    except Exception as e:
+        logger.warning("Failed to fetch notifications: %s", e)
+        return []
+
+
 def _build_early_access_section(early_access: dict | None, errors: list) -> dict:
     """Build the early_access_roles section with new-role delta tracking."""
     from naukri_server.tools.early_access import _detect_new_roles
@@ -107,6 +121,16 @@ def _build_competition_section(apps_result) -> dict:
 def _build_recommended_actions(brief: dict) -> list:
     """Synthesize prioritized action recommendations from brief data."""
     actions = []
+
+    # High priority: pending workflow notifications
+    pending_notifs = brief.get("pending_notifications", [])
+    high_priority_notifs = [n for n in pending_notifs if n.get("priority") == "high"]
+    if high_priority_notifs:
+        actions.append({
+            "priority": "high",
+            "action": f"Review {len(high_priority_notifs)} high-priority notification(s): {high_priority_notifs[0].get('title', 'notification')}",
+            "tool": "naukri_daily_brief() — see pending_notifications",
+        })
 
     # High priority: unread recruiter messages
     inbox = brief.get("unread_messages", {})
@@ -230,12 +254,13 @@ def _build_recommended_actions(brief: dict) -> list:
 async def naukri_daily_brief() -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
-    Runs 19 checks in parallel plus a post-gather conversion funnel analysis:
+    Runs 20 checks in parallel plus a post-gather conversion funnel analysis:
     unread messages, notifications, new recommendations, recruiter activity,
     profile activity level, today's applications, dashboard stats, early access
     roles, subscription status, due reminders, stale applications, job alerts,
     profile completeness, saved jobs count, search impressions, assessment status,
-    match quality, unified notify summary, and AmbitionBox salary insights.
+    match quality, unified notify summary, AmbitionBox salary insights, and
+    pending workflow notifications.
 
     Returns:
         - {status: "success", unread_messages, notifications, notification_summary,
@@ -246,7 +271,7 @@ async def naukri_daily_brief() -> dict:
            competition_overview (total_with_data, low, medium, high, very_high,
            average_applicants, top_competitive),
            conversion_funnel (total_applied, conversion_rate, dead_zones),
-           recommended_actions, errors}
+           pending_notifications, recommended_actions, errors}
     """
     from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications, _get_unified_notify
@@ -284,6 +309,7 @@ async def naukri_daily_brief() -> dict:
         _match_quality(days=7),                              # 16
         _get_unified_notify(),                             # 17
         _fetch_ab_applied_insights(),                      # 18
+        _fetch_pending_notifications(),                    # 19
         return_exceptions=True,
     )
 
@@ -316,6 +342,12 @@ async def naukri_daily_brief() -> dict:
     match_quality = _extract(16, "Match quality")
     notify_summary = _extract(17, "Unified notify")
     ab_insights = _extract(18, "AB applied insights")
+    pending_notifs_raw = results[19]
+    if isinstance(pending_notifs_raw, Exception):
+        errors.append(f"Pending notifications: {type(pending_notifs_raw).__name__}: {pending_notifs_raw}")
+        pending_notifs = []
+    else:
+        pending_notifs = pending_notifs_raw if isinstance(pending_notifs_raw, list) else []
 
     # Count pending assessments (those without a completed status)
     pending_count = 0
@@ -387,6 +419,7 @@ async def naukri_daily_brief() -> dict:
         "match_quality": match_quality if match_quality else None,
         "competition_overview": _build_competition_section(apps),
         "applied_salary_insights": ab_insights if ab_insights else None,
+        "pending_notifications": pending_notifs,
     }
 
     # Conversion funnel summary (loads applications.json which is already loaded, so run after gather)
