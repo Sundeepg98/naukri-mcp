@@ -102,11 +102,85 @@ Check the implementation plan for file assignments before starting.
 - `ApiClient` and `BrowserProvider` abstract classes for new tools
 - Concrete implementations (`NaukriApiClient`, `PlaywrightBrowserProvider`) wrap existing `api.py` / `browser.py`
 - Existing tools still use direct imports (migration is optional and incremental)
-- **New tools SHOULD use interfaces for testability** � depend on `api_client` / `browser_provider` singletons instead of importing `api_get` / `api_post` directly
+- **New tools SHOULD use interfaces for testability** � depend on `api_client` / `browser_provider` singletons instead of importing `api_get` / `api_post` directly
 
 ## Key File Paths
-- Tools: `naukri_server/tools/*.py`
+- Tools: `naukri_server/tools/*.py` (100 MCP tools)
+- Services: `naukri_server/services/*.py` (7 service modules)
+- Domain: `naukri_server/domain/*.py` (9 domain objects)
+- Database: `naukri_server/database.py` (SQLite, 7 tables, 24+ CRUD helpers)
 - Infrastructure: `naukri_server/api.py`, `browser.py`, `config.py`, `utils.py`, `interfaces.py`
+- Events: `naukri_server/events.py` (EventBus, 12 event types)
+- Subscribers: `naukri_server/subscribers.py` (8 reactive handlers)
+- Workflows: `naukri_server/workflows.py` (2 saga workflows)
 - Tests: `tests/test_*.py`
-- Data: `applications.json`, `saved_jobs.json`, `reminders.json`, `questions.json`
-- Config: `naukri_server/config.py` (API endpoints, timeouts, headers)
+
+## Domain Objects (`naukri_server/domain/`)
+
+Rich domain objects encoding business rules. Use these instead of raw dicts for business logic.
+
+| Object | File | Purpose |
+|--------|------|---------|
+| `SkillTaxonomy` | `domain/skill_taxonomy.py` | 88 canonical skills, 150 aliases, normalization |
+| `Salary` | `domain/salary.py` | Parsing, unit detection, CTC comparison, market positioning |
+| `FitScore` | `domain/fit_score.py` | Job-profile matching (SkillMatch + ExperienceScore + BonusScore) |
+| `StalenessReport` | `domain/application.py` | 5-signal staleness scoring |
+| `StatusTransition` | `domain/application.py` | Positive/negative transition classification |
+| `CompletionReport` | `domain/profile_completeness.py` | Profile grading, gaps, tips |
+| `ParsedSalary` | `domain/job.py` | Consolidated salary parsing with logging |
+| `ApplicationDetail` | `domain/application_detail.py` | API response parsing factory |
+| `ProfileParser` | `domain/profile.py` | Profile field extraction with safe_get |
+
+### Anti-Corruption Layer
+All external API data MUST be accessed through `safe_get()` from `naukri_server.domain` or domain factories. Never use raw `.get()` on API responses without logging.
+
+## Events & Subscribers
+
+The system is event-driven. State changes emit events, subscribers react with side effects.
+
+### Emitting Events
+```python
+from naukri_server.events import event_bus, ApplicationSubmitted
+await event_bus.emit(ApplicationSubmitted(job_id=job_id, company=company))
+```
+
+### Event Types (12 total)
+ApplicationSubmitted, ApplicationStatusChanged, ApplicationStale, RecruiterEngaged,
+ApplicationInterviewScheduled, SyncCompleted, ReminderDue, ReminderSet,
+ProfileScoreChanged, SavedJobAdded, SavedJobRemoved, SavedJobExpiring
+
+### Subscriber Safety Rules
+- Wrap handler body in try/except (never crash the caller)
+- Use lazy imports inside handlers
+- EventBus has depth guard (max 3) preventing infinite loops
+- Every event persisted to SQLite event_log table
+
+## Sagas & Workflows
+
+Multi-step operations use SagaExecutor for partial-success handling.
+
+### When to Use Saga
+- Multi-step operation where each step is independently valuable
+- Need step-by-step timing and error tracking
+- Partial success is acceptable (not all-or-nothing)
+
+### Current Sagas (7)
+| Saga | Steps | File |
+|------|-------|------|
+| apply_workflow | apply → reminder | apply_service.py |
+| sync_applications | merge → purge → detect → persist → emit | sync.py |
+| sync_saved_jobs | merge → persist → emit | sync.py |
+| apply_top_fits | score → apply_batch | smart_apply.py |
+| compare_jobs | fetch → score → aggregate | compare.py |
+| interview_lifecycle | prep → reminder → notify | workflows.py |
+| stale_follow_up | draft → notify | workflows.py |
+
+### Adding a New Saga
+```python
+from naukri_server.sagas import SagaExecutor
+saga = SagaExecutor("my_workflow")
+saga.add_step("step1", async_fn_1)
+saga.add_step("step2", async_fn_2)
+result = await saga.run()
+# result: {status, completed_steps, step_timings, errors}
+```
