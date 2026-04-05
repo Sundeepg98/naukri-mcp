@@ -1,6 +1,7 @@
 """Event-driven pub/sub — domain events with async subscriber dispatch."""
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -154,18 +155,28 @@ class EventBus:
                 self._event_log = self._event_log[-self._max_log_size:]
 
             handlers = self._subscribers.get(type(event), [])
-            if not handlers:
-                return
+            if handlers:
+                results = await asyncio.gather(
+                    *[self._safe_call(h, event) for h in handlers],
+                    return_exceptions=True,
+                )
 
-            results = await asyncio.gather(
-                *[self._safe_call(h, event) for h in handlers],
-                return_exceptions=True,
-            )
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.warning("Event handler %s failed for %s: %s",
+                                     handlers[i].__name__, type(event).__name__, result)
 
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.warning("Event handler %s failed for %s: %s",
-                                 handlers[i].__name__, type(event).__name__, result)
+            # Persist event to database — never crash the caller
+            try:
+                from naukri_server.database import log_event
+                await log_event(
+                    event_type=type(event).__name__,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    data=json.dumps({k: str(v) for k, v in event.__dict__.items()}),
+                    subscriber_count=len(handlers),
+                )
+            except Exception:
+                pass
         finally:
             self._emit_depth -= 1
 

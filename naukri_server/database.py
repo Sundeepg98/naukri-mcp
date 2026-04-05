@@ -86,6 +86,16 @@ CREATE INDEX IF NOT EXISTS idx_apps_applied_at ON applications(applied_at);
 CREATE INDEX IF NOT EXISTS idx_rounds_job_id ON interview_rounds(job_id);
 CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read_at);
 CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    data TEXT,
+    subscriber_count INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_event_log_ts ON event_log(timestamp);
 """
 
 
@@ -484,6 +494,42 @@ async def count_undelivered_notifications() -> int:
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM notifications WHERE delivered_via IS NULL")
         return (await cursor.fetchone())[0]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Event log persistence
+# ---------------------------------------------------------------------------
+
+
+async def log_event(event_type: str, timestamp: str, data: str = None, subscriber_count: int = 0) -> int:
+    """Persist a domain event to the event_log table. Returns the new row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO event_log (event_type, timestamp, data, subscriber_count) VALUES (?, ?, ?, ?)",
+            (event_type, timestamp, data, subscriber_count),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_event_stats(hours: int = 24) -> dict:
+    """Get event counts by type for the last N hours."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT event_type, COUNT(*) as count
+            FROM event_log
+            WHERE timestamp >= datetime('now', ?)
+            GROUP BY event_type
+            ORDER BY count DESC
+        """, (f"-{hours} hours",))
+        rows = await cursor.fetchall()
+        return {row["event_type"]: row["count"] for row in rows}
     finally:
         await db.close()
 

@@ -244,4 +244,21 @@ async def naukri_health_check(include_browser: bool = True) -> dict:
     if warnings:
         result["warnings"] = warnings
 
+    # Event bus observability
+    try:
+        from naukri_server.events import event_bus
+        result["subscriber_count"] = event_bus.subscriber_count_by_type
+    except Exception:
+        pass
+
+    # Event persistence stats
+    try:
+        from naukri_server.database import get_event_stats, count_undelivered_notifications
+        event_stats = await get_event_stats(hours=24)
+        notif_count = await count_undelivered_notifications()
+        result["event_stats_24h"] = event_stats
+        result["pending_notifications"] = notif_count
+    except Exception:
+        pass
+
     return result

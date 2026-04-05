@@ -34,7 +34,7 @@ async def _open_db(db_path: Path) -> aiosqlite.Connection:
 
 
 async def test_init_db_creates_tables(tmp_path):
-    """init_db should create all 6 tables and 5 indexes."""
+    """init_db should create all 7 tables and 7 indexes."""
     db_path = await _init_db_in(tmp_path)
 
     db = await _open_db(db_path)
@@ -54,6 +54,7 @@ async def test_init_db_creates_tables(tmp_path):
 
     expected = [
         "applications",
+        "event_log",
         "interview_rounds",
         "notifications",
         "reminders",
@@ -65,6 +66,8 @@ async def test_init_db_creates_tables(tmp_path):
     expected_indexes = [
         "idx_apps_applied_at",
         "idx_apps_status",
+        "idx_event_log_ts",
+        "idx_event_log_type",
         "idx_notif_created",
         "idx_notif_read",
         "idx_rounds_job_id",
