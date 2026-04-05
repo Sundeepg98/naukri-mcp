@@ -375,6 +375,25 @@ async def get_stale_applications(
 
     stale_apps.sort(key=lambda x: x["follow_up_priority"], reverse=True)
 
+    # Emit events for high-priority stale applications
+    from naukri_server.events import event_bus, ApplicationStale
+    for sa in stale_apps:
+        if sa.get("follow_up_priority", 0) >= 60:
+            # Compute days_since_applied from the applied_date string (YYYY-MM-DD)
+            _days = 0
+            try:
+                _applied = sa.get("applied_date", "")
+                if _applied:
+                    _days = (datetime.now(timezone.utc) - datetime.fromisoformat(_applied)).days
+            except (ValueError, TypeError):
+                pass
+            await event_bus.emit(ApplicationStale(
+                job_id=sa.get("job_id", ""),
+                company=sa.get("company", ""),
+                days_since_applied=_days,
+                follow_up_priority=sa.get("follow_up_priority", 0),
+            ))
+
     pagination, page_items = paginate(stale_apps, page, limit)
 
     return {
@@ -520,6 +539,14 @@ async def add_interview_round(job_id: str, round_type: str, date: str = "",
     }
     await db_add_round(round_entry)
     job_rounds = await db_list_rounds(job_id)
+
+    # Emit interview scheduled event for reactive subscribers
+    from naukri_server.events import event_bus, ApplicationInterviewScheduled
+    await event_bus.emit(ApplicationInterviewScheduled(
+        job_id=job_id,
+        round_type=round_type,
+        date=round_entry.get("date", ""),
+    ))
 
     return {
         "status": "success",

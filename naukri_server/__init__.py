@@ -119,3 +119,4 @@ mcp = FastMCP("naukri", lifespan=lifespan)
 
 # Import tool modules to register @mcp.tool() decorators
 from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders  # noqa: E402, F401
+from naukri_server import subscribers  # noqa: F401 — registers event handlers

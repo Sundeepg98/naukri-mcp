@@ -552,6 +552,15 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         state["last_applications_count"] = len(remote_jobs)
         await _save_sync_state_async(state)
 
+    # Emit SyncCompleted event for reactive subscribers
+    from naukri_server.events import SyncCompleted as SyncCompletedEvent
+    await event_bus.emit(SyncCompletedEvent(
+        entity="applications",
+        new_added=stats.get("new_added", 0),
+        updated=stats.get("updated", 0),
+        status_changes_count=len(status_changes),
+    ))
+
     result = {
         "status": "success",
         "method": method,
