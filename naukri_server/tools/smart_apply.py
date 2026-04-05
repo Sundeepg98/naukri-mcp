@@ -140,94 +140,131 @@ async def _apply_top_fits(
     """Score saved jobs and apply to top fits above min_fit_score."""
     from naukri_server.tools.apply import _apply_single
     from naukri_server.validation import validate_limit
+    from naukri_server.sagas import SagaExecutor
 
     limit = validate_limit(limit, max_allowed=20)
 
-    # Step 1: Get scored jobs
-    scored_result = await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
-    if scored_result.get("status") == "error":
-        return scored_result
-
-    scored_jobs = scored_result.get("scored_jobs", [])
-    if not scored_jobs:
-        return {
-            "status": "success",
-            "message": f"No saved jobs with fit score >= {min_fit_score}",
-            "applied": 0,
-            "skipped": scored_result.get("total_saved", 0),
-            "results": [],
-        }
-
-    # Prioritize agent-eligible jobs at equal scores
-    scored_jobs.sort(key=lambda x: (
-        not x.get("fit_details", {}).get("bonuses", {}).get("agent_eligible", 0),
-        -x["fit_score"]
-    ))
-
-    # Step 2: Apply to top N
-    to_apply = scored_jobs[:limit]
+    saga = SagaExecutor("apply_top_fits")
+    scored_jobs = []
+    to_apply = []
     results = []
     applied_count = 0
     errors = []
 
-    for job in to_apply:
-        jid = job.get("job_id")
-        if not jid:
-            continue
-        try:
-            apply_result = await _apply_single(
-                job_id=jid,
-                answers=answers,
-                title=job.get("title"),
-                company=job.get("company"),
-                tracking_extra={"source": "apply_top_fits", "fit_score": job.get("fit_score")},
-            )
-            status = apply_result.get("status")
+    async def step_score():
+        nonlocal scored_jobs
+        scored_result = await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+        if scored_result.get("status") == "error":
+            raise RuntimeError(scored_result.get("message", "Scoring failed"))
 
-            # Auto-retry needs_input if general answers were provided
-            if status == "needs_input" and answers:
+        scored_jobs = scored_result.get("scored_jobs", [])
+        return {
+            "total_saved": scored_result.get("total_saved", 0),
+            "scored_count": len(scored_jobs),
+        }
+
+    async def step_apply_batch():
+        nonlocal to_apply, results, applied_count, errors
+
+        if not scored_jobs:
+            return {"applied": 0, "attempted": 0}
+
+        # Prioritize agent-eligible jobs at equal scores
+        scored_jobs.sort(key=lambda x: (
+            not x.get("fit_details", {}).get("bonuses", {}).get("agent_eligible", 0),
+            -x["fit_score"]
+        ))
+
+        to_apply = scored_jobs[:limit]
+
+        for job in to_apply:
+            jid = job.get("job_id")
+            if not jid:
+                continue
+            try:
                 apply_result = await _apply_single(
                     job_id=jid,
                     answers=answers,
                     title=job.get("title"),
                     company=job.get("company"),
-                    tracking_extra={"source": "apply_top_fits_retry", "fit_score": job.get("fit_score")},
+                    tracking_extra={"source": "apply_top_fits", "fit_score": job.get("fit_score")},
                 )
                 status = apply_result.get("status")
 
-            entry = {
-                "job_id": jid,
-                "title": job.get("title"),
-                "company": job.get("company"),
-                "fit_score": job.get("fit_score"),
-                "apply_status": status,
-            }
+                # Auto-retry needs_input if general answers were provided
+                if status == "needs_input" and answers:
+                    apply_result = await _apply_single(
+                        job_id=jid,
+                        answers=answers,
+                        title=job.get("title"),
+                        company=job.get("company"),
+                        tracking_extra={"source": "apply_top_fits_retry", "fit_score": job.get("fit_score")},
+                    )
+                    status = apply_result.get("status")
 
-            if status == "applied":
-                applied_count += 1
-                # Auto-reminder
-                if set_reminder_days:
-                    from naukri_server.tools.reminders import _set_reminder
-                    try:
-                        await _set_reminder(
-                            job_id=jid,
-                            days=set_reminder_days,
-                            note=f"Follow up on {job.get('company', 'unknown')} application",
-                        )
-                        entry["reminder_set"] = True
-                    except Exception:
-                        entry["reminder_set"] = False
+                entry = {
+                    "job_id": jid,
+                    "title": job.get("title"),
+                    "company": job.get("company"),
+                    "fit_score": job.get("fit_score"),
+                    "apply_status": status,
+                }
 
-            results.append(entry)
-        except Exception as e:
-            errors.append(f"Job {jid}: {type(e).__name__}: {e}")
-            results.append({
-                "job_id": jid,
-                "title": job.get("title"),
-                "fit_score": job.get("fit_score"),
-                "apply_status": "error",
-                "error": str(e),
-            })
+                if status == "applied":
+                    applied_count += 1
+                    # Auto-reminder
+                    if set_reminder_days:
+                        from naukri_server.tools.reminders import _set_reminder
+                        try:
+                            await _set_reminder(
+                                job_id=jid,
+                                days=set_reminder_days,
+                                note=f"Follow up on {job.get('company', 'unknown')} application",
+                            )
+                            entry["reminder_set"] = True
+                        except Exception:
+                            entry["reminder_set"] = False
+
+                results.append(entry)
+            except Exception as e:
+                errors.append(f"Job {jid}: {type(e).__name__}: {e}")
+                results.append({
+                    "job_id": jid,
+                    "title": job.get("title"),
+                    "fit_score": job.get("fit_score"),
+                    "apply_status": "error",
+                    "error": str(e),
+                })
+
+        return {"applied": applied_count, "attempted": len(to_apply)}
+
+    saga.add_step("score_saved", step_score)
+    saga.add_step("apply_batch", step_apply_batch)
+
+    saga_result = await saga.run()
+
+    if saga_result["status"] == "error":
+        saga_errors = saga_result.get("errors", [])
+        error_detail = saga_errors[0] if saga_errors else "unknown"
+        return {
+            "status": "error",
+            "message": f"Apply top fits saga failed at step '{saga_result.get('failed_step')}': {error_detail}",
+            "error_code": "API_ERROR",
+            "saga_steps": saga_result.get("completed_steps", []),
+            "saga_errors": saga_errors,
+        }
+
+    # Build result — scored_jobs may be empty if none met threshold
+    if not scored_jobs:
+        return {
+            "status": "success",
+            "message": f"No saved jobs with fit score >= {min_fit_score}",
+            "applied": 0,
+            "skipped": saga_result.get("results", {}).get("score_saved", {}).get("total_saved", 0),
+            "results": [],
+            "saga_steps": saga_result.get("completed_steps", []),
+            "step_timings": saga_result.get("step_timings", {}),
+        }
 
     result = {
         "status": "success" if applied_count > 0 else "error",
@@ -236,6 +273,8 @@ async def _apply_top_fits(
         "total_scored": len(scored_jobs),
         "min_fit_score": min_fit_score,
         "results": results,
+        "saga_steps": saga_result.get("completed_steps", []),
+        "step_timings": saga_result.get("step_timings", {}),
     }
     if errors:
         result["errors"] = errors

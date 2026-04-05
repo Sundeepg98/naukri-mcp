@@ -501,48 +501,86 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
             job["status"] = "applied"
 
     from naukri_server.database import list_all_applications, upsert_application, delete_applications_before
+    from naukri_server.sagas import SagaExecutor
 
     local_apps = await list_all_applications()
     # Snapshot old statuses for change detection
     old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
-    stats = _merge_applications(local_apps, remote_jobs)
-    # Auto-purge applications older than AUTO_PURGE_DAYS
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
-    before_count = len(local_apps)
-    local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
-    purged = before_count - len(local_apps)
-    if purged:
-        logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
-    # Detect status changes
-    status_changes = []
-    for app in local_apps:
-        jid = app.get("job_id")
-        old_s = old_status_map.get(jid)
-        new_s = app.get("status")
-        if old_s and new_s and old_s != new_s:
-            status_changes.append({
-                "job_id": jid,
-                "title": app.get("title"),
-                "company": app.get("company"),
-                "old_status": old_s,
-                "new_status": new_s,
-            })
-    # Persist merged + purged results to SQLite
-    for app in local_apps:
-        await upsert_application(app)
-    # Delete purged entries from SQLite (those older than cutoff and not manual)
-    if purged:
-        await delete_applications_before(cutoff)
 
-    # Emit events for status changes (outside the lock)
-    for change in status_changes:
-        await event_bus.emit(ApplicationStatusChanged(
-            job_id=change.get("job_id", ""),
-            company=change.get("company", ""),
-            title=change.get("title", ""),
-            old_status=change.get("old_status", ""),
-            new_status=change.get("new_status", ""),
-        ))
+    # --- Saga: wrap merge + purge + persist + events in saga steps ---
+    saga = SagaExecutor("sync_applications")
+    stats = {}
+    purged = 0
+    status_changes = []
+
+    async def step_merge():
+        nonlocal stats
+        stats = _merge_applications(local_apps, remote_jobs)
+        return stats
+
+    async def step_purge():
+        nonlocal local_apps, purged
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+        before_count = len(local_apps)
+        local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
+        purged = before_count - len(local_apps)
+        if purged:
+            logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
+        return {"purged": purged}
+
+    async def step_detect_changes():
+        nonlocal status_changes
+        for app in local_apps:
+            jid = app.get("job_id")
+            old_s = old_status_map.get(jid)
+            new_s = app.get("status")
+            if old_s and new_s and old_s != new_s:
+                status_changes.append({
+                    "job_id": jid,
+                    "title": app.get("title"),
+                    "company": app.get("company"),
+                    "old_status": old_s,
+                    "new_status": new_s,
+                })
+        return {"status_changes_count": len(status_changes)}
+
+    async def step_persist():
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+        for app in local_apps:
+            await upsert_application(app)
+        if purged:
+            await delete_applications_before(cutoff)
+        return {"persisted": len(local_apps)}
+
+    async def step_emit_events():
+        for change in status_changes:
+            await event_bus.emit(ApplicationStatusChanged(
+                job_id=change.get("job_id", ""),
+                company=change.get("company", ""),
+                title=change.get("title", ""),
+                old_status=change.get("old_status", ""),
+                new_status=change.get("new_status", ""),
+            ))
+        return {"events_emitted": len(status_changes)}
+
+    saga.add_step("merge", step_merge)
+    saga.add_step("purge", step_purge)
+    saga.add_step("detect_changes", step_detect_changes)
+    saga.add_step("persist", step_persist)
+    saga.add_step("emit_events", step_emit_events)
+
+    saga_result = await saga.run()
+
+    if saga_result["status"] == "error":
+        saga_errors = saga_result.get("errors", [])
+        error_detail = saga_errors[0] if saga_errors else "unknown"
+        return {
+            "status": "error",
+            "message": f"Sync saga failed at step '{saga_result.get('failed_step')}': {error_detail}",
+            "error_code": "API_ERROR",
+            "saga_steps": saga_result.get("completed_steps", []),
+            "saga_errors": saga_errors,
+        }
 
     # Record sync metadata
     async with _sync_state_lock:
@@ -570,6 +608,8 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         "days_back": days_back,
         "last_sync": state.get("last_applications_sync"),
         "applications": local_apps[:20],
+        "saga_steps": saga_result.get("completed_steps", []),
+        "step_timings": saga_result.get("step_timings", {}),
     }
     if status_changes:
         result["status_changes"] = status_changes
