@@ -69,6 +69,12 @@ async def _save_job(job_id: str, title: str = None, company: str = None,
 
     total = await count_saved_jobs()
 
+    try:
+        from naukri_server.events import event_bus, SavedJobAdded
+        await event_bus.emit(SavedJobAdded(job_id=job_id, title=title or "", company=company or ""))
+    except Exception:
+        pass
+
     synced_remote = False
     if sync_to_naukri:
         synced_remote = await _push_save_to_naukri(job_id)
@@ -129,6 +135,11 @@ async def _unsave_job(job_id: str) -> dict:
     # Remove from local DB
     deleted = await delete_saved_job(job_id)
     if deleted:
+        try:
+            from naukri_server.events import event_bus, SavedJobRemoved
+            await event_bus.emit(SavedJobRemoved(job_id=job_id))
+        except Exception:
+            pass
         return {"status": "success", "action": "unsaved", "job_id": job_id}
     else:
         return {"status": "error", "message": f"Job {job_id} not in saved jobs.", "error_code": "NOT_FOUND"}

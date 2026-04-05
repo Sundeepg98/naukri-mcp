@@ -115,6 +115,16 @@ async def _get_recruiter_activity(
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    # Emit RecruiterEngaged for CONTACTED or DOWNLOADED actions (once per batch)
+    try:
+        from naukri_server.events import event_bus, RecruiterEngaged
+        for act in activities:
+            if act.get("action") in ("CONTACTED", "DOWNLOADED"):
+                await event_bus.emit(RecruiterEngaged(job_id=act.get("meta_job_id", ""), company=act.get("company", ""), title=""))
+                break  # Emit once per batch, not per activity
+    except Exception:
+        pass
+
     total = success.get("count", len(activities))
     has_more = (page * size) < total
 

@@ -40,6 +40,8 @@ class RecruiterEngaged(DomainEvent):
     recruiter_name: str = ""
     company: str = ""
     action: str = ""  # VIEWED, DOWNLOADED, CONTACTED
+    job_id: str = ""
+    title: str = ""
 
 
 @dataclass
@@ -84,6 +86,29 @@ class ProfileScoreChanged(DomainEvent):
     """Fired when profile completeness score changes."""
     old_score: int = 0
     new_score: int = 0
+
+
+@dataclass
+class SavedJobAdded(DomainEvent):
+    """Fired when a job is saved/bookmarked."""
+    job_id: str = ""
+    title: str = ""
+    company: str = ""
+
+
+@dataclass
+class SavedJobRemoved(DomainEvent):
+    """Fired when a saved job is removed."""
+    job_id: str = ""
+
+
+@dataclass
+class ReminderSet(DomainEvent):
+    """Fired when a follow-up reminder is created or updated."""
+    job_id: str = ""
+    company: str = ""
+    remind_at: str = ""
+    days: int = 0
 
 
 @dataclass

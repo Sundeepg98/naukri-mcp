@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from naukri_server.events import (
     event_bus, ApplicationSubmitted, ApplicationStatusChanged,
     ApplicationStale, ApplicationInterviewScheduled, SyncCompleted, ReminderDue,
+    RecruiterEngaged,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ async def _on_status_change(event: ApplicationStatusChanged):
 
 
 async def _on_application_stale(event: ApplicationStale):
-    """Store notification for high-priority stale applications."""
+    """Store notification + trigger follow-up workflow for high-priority stale apps."""
     try:
         from naukri_server.database import store_notification
         await store_notification({
@@ -75,12 +76,24 @@ async def _on_application_stale(event: ApplicationStale):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {"job_id": event.job_id, "company": event.company},
         })
+
+        # Trigger follow-up workflow for high-priority apps
+        if event.follow_up_priority >= 70:
+            try:
+                from naukri_server.workflows import stale_follow_up_workflow
+                await stale_follow_up_workflow(
+                    job_id=event.job_id,
+                    company=event.company,
+                )
+                logger.info("Stale follow-up workflow completed for %s", event.job_id)
+            except Exception as wf_err:
+                logger.warning("Stale follow-up workflow failed (non-fatal): %s", wf_err)
     except Exception as e:
         logger.warning("Subscriber _on_application_stale failed: %s", e)
 
 
 async def _on_interview_scheduled(event: ApplicationInterviewScheduled):
-    """Auto-generate interview prep when round is scheduled."""
+    """Store notification + trigger interview lifecycle workflow."""
     try:
         from naukri_server.database import store_notification
         await store_notification({
@@ -91,6 +104,18 @@ async def _on_interview_scheduled(event: ApplicationInterviewScheduled):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {"job_id": event.job_id, "round_type": event.round_type, "date": event.date},
         })
+
+        # Trigger interview lifecycle workflow (fire-and-forget)
+        try:
+            from naukri_server.workflows import interview_lifecycle_workflow
+            await interview_lifecycle_workflow(
+                job_id=event.job_id,
+                company=event.company,
+                round_type=event.round_type,
+            )
+            logger.info("Interview lifecycle workflow completed for %s", event.job_id)
+        except Exception as wf_err:
+            logger.warning("Interview workflow failed (non-fatal): %s", wf_err)
     except Exception as e:
         logger.warning("Subscriber _on_interview_scheduled failed: %s", e)
 
@@ -117,6 +142,38 @@ async def _on_sync_completed(event: SyncCompleted):
         logger.warning("Subscriber _on_sync_completed failed: %s", e)
 
 
+async def _on_recruiter_engaged(event: RecruiterEngaged):
+    """Store notification when recruiter contacts you."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "RecruiterEngaged",
+            "title": f"Recruiter from {event.company or 'a company'} engaged",
+            "body": "A recruiter viewed/contacted you. Check recruiter activity for details.",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id, "company": event.company},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_recruiter_engaged failed: %s", e)
+
+
+async def _on_reminder_due(event: ReminderDue):
+    """Store notification for due reminders."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "ReminderDue",
+            "title": f"Reminder due: {event.company or 'Follow up'}",
+            "body": event.note or f"Follow up on job {event.job_id}",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"job_id": event.job_id},
+        })
+    except Exception as e:
+        logger.warning("Subscriber _on_reminder_due failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
@@ -128,7 +185,9 @@ def register_all():
     event_bus.subscribe(ApplicationStale, _on_application_stale)
     event_bus.subscribe(ApplicationInterviewScheduled, _on_interview_scheduled)
     event_bus.subscribe(SyncCompleted, _on_sync_completed)
-    logger.info("Registered %d reactive subscribers", 5)
+    event_bus.subscribe(RecruiterEngaged, _on_recruiter_engaged)
+    event_bus.subscribe(ReminderDue, _on_reminder_due)
+    logger.info("Registered %d reactive subscribers", 7)
 
 
 # Auto-register on import

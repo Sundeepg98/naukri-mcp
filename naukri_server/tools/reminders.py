@@ -42,6 +42,13 @@ async def _set_reminder(
         if company:
             existing["company"] = company
         await upsert_reminder(existing)
+
+        try:
+            from naukri_server.events import event_bus, ReminderSet
+            await event_bus.emit(ReminderSet(job_id=job_id, company=company or existing.get("company", ""), remind_at=remind_at, days=days))
+        except Exception:
+            pass
+
         return {
             "status": "success",
             "job_id": job_id,
@@ -58,6 +65,13 @@ async def _set_reminder(
         "note": note,
         "created_at": now.isoformat(),
     })
+
+    # Emit ReminderSet for both new and updated reminders
+    try:
+        from naukri_server.events import event_bus, ReminderSet
+        await event_bus.emit(ReminderSet(job_id=job_id, company=company or "", remind_at=remind_at, days=days))
+    except Exception:
+        pass
 
     return {
         "status": "success",
@@ -99,6 +113,11 @@ async def _list_reminders(include_past: bool = True, include_app_status: bool = 
 
         if is_due:
             due_count += 1
+            try:
+                from naukri_server.events import event_bus, ReminderDue
+                await event_bus.emit(ReminderDue(job_id=r.get("job_id", ""), company=r.get("company", ""), title=r.get("title", ""), note=r.get("note", "")))
+            except Exception:
+                pass
 
         result_list.append({
             "job_id": r.get("job_id"),
