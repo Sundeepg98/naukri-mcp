@@ -34,7 +34,7 @@ async def _open_db(db_path: Path) -> aiosqlite.Connection:
 
 
 async def test_init_db_creates_tables(tmp_path):
-    """init_db should create all 5 tables and 3 indexes."""
+    """init_db should create all 6 tables and 5 indexes."""
     db_path = await _init_db_in(tmp_path)
 
     db = await _open_db(db_path)
@@ -55,6 +55,7 @@ async def test_init_db_creates_tables(tmp_path):
     expected = [
         "applications",
         "interview_rounds",
+        "notifications",
         "reminders",
         "saved_jobs",
         "screening_questions",
@@ -64,6 +65,8 @@ async def test_init_db_creates_tables(tmp_path):
     expected_indexes = [
         "idx_apps_applied_at",
         "idx_apps_status",
+        "idx_notif_created",
+        "idx_notif_read",
         "idx_rounds_job_id",
     ]
     assert indexes == expected_indexes

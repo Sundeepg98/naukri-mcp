@@ -69,9 +69,23 @@ CREATE TABLE IF NOT EXISTS screening_questions (
     cached_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    title TEXT,
+    body TEXT,
+    priority TEXT DEFAULT 'medium',
+    created_at TEXT NOT NULL,
+    read_at TEXT,
+    delivered_via TEXT,
+    metadata TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_apps_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_apps_applied_at ON applications(applied_at);
 CREATE INDEX IF NOT EXISTS idx_rounds_job_id ON interview_rounds(job_id);
+CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read_at);
+CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);
 """
 
 
@@ -401,6 +415,75 @@ async def list_interview_rounds(job_id: str = None):
             cursor = await db.execute("SELECT * FROM interview_rounds ORDER BY date ASC")
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Notifications CRUD
+# ---------------------------------------------------------------------------
+
+async def store_notification(notif: dict) -> int:
+    """Store a notification. Returns the new row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            INSERT INTO notifications (event_type, title, body, priority, created_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            notif.get("event_type"), notif.get("title"), notif.get("body"),
+            notif.get("priority", "medium"), notif.get("created_at"),
+            json.dumps(notif.get("metadata")) if notif.get("metadata") else None,
+        ))
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_undelivered_notifications(limit: int = 20) -> list:
+    """Get undelivered notifications ordered by priority then date."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT * FROM notifications
+            WHERE delivered_via IS NULL
+            ORDER BY
+                CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                created_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def mark_notifications_delivered(ids: list, via: str = "brief") -> int:
+    """Mark notifications as delivered. Returns count updated."""
+    if not ids:
+        return 0
+    db = await get_db()
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        placeholders = ",".join("?" * len(ids))
+        cursor = await db.execute(
+            f"UPDATE notifications SET delivered_via = ?, read_at = ? WHERE id IN ({placeholders})",
+            [via, now] + list(ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def count_undelivered_notifications() -> int:
+    """Count undelivered notifications."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT COUNT(*) FROM notifications WHERE delivered_via IS NULL")
+        return (await cursor.fetchone())[0]
     finally:
         await db.close()
 
