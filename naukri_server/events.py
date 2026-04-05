@@ -143,6 +143,16 @@ class BrowserDegraded(DomainEvent):
     avg_acquire_ms: float = 0
 
 
+@dataclass
+class ProbeStateChanged(DomainEvent):
+    """Emitted when a health probe changes status."""
+    probe_name: str = ""
+    old_status: str = ""
+    new_status: str = ""
+    message: str = ""
+    criticality: str = ""
+
+
 class EventBus:
     """Simple async event bus — register subscribers, emit events."""
 
