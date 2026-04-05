@@ -51,6 +51,50 @@ class ApplicationStale(DomainEvent):
     follow_up_priority: int = 0
 
 
+@dataclass
+class ApplicationInterviewScheduled(DomainEvent):
+    """Fired when an interview round is added."""
+    job_id: str = ""
+    company: str = ""
+    title: str = ""
+    round_type: str = ""
+    date: str = ""
+
+
+@dataclass
+class SyncCompleted(DomainEvent):
+    """Fired after a successful sync operation."""
+    entity: str = ""  # "applications" or "saved_jobs"
+    new_added: int = 0
+    updated: int = 0
+    status_changes_count: int = 0
+
+
+@dataclass
+class ReminderDue(DomainEvent):
+    """Fired when a reminder becomes due."""
+    job_id: str = ""
+    company: str = ""
+    title: str = ""
+    note: str = ""
+
+
+@dataclass
+class ProfileScoreChanged(DomainEvent):
+    """Fired when profile completeness score changes."""
+    old_score: int = 0
+    new_score: int = 0
+
+
+@dataclass
+class SavedJobExpiring(DomainEvent):
+    """Fired when a saved job is about to expire."""
+    job_id: str = ""
+    title: str = ""
+    company: str = ""
+    expires_in_days: int = 0
+
+
 class EventBus:
     """Simple async event bus — register subscribers, emit events."""
 
@@ -58,6 +102,8 @@ class EventBus:
         self._subscribers: dict[type, list[Callable]] = {}
         self._event_log: list[DomainEvent] = []
         self._max_log_size = 100
+        self._emit_depth = 0
+        self._max_emit_depth = 3
 
     def subscribe(self, event_type: type, handler: Callable):
         """Register an async handler for an event type."""
@@ -72,23 +118,31 @@ class EventBus:
 
     async def emit(self, event: DomainEvent):
         """Emit an event to all registered subscribers. Failures are logged, not raised."""
-        self._event_log.append(event)
-        if len(self._event_log) > self._max_log_size:
-            self._event_log = self._event_log[-self._max_log_size:]
-
-        handlers = self._subscribers.get(type(event), [])
-        if not handlers:
+        if self._emit_depth >= self._max_emit_depth:
+            logger.warning("Event loop depth limit reached (%d), dropping %s",
+                           self._max_emit_depth, type(event).__name__)
             return
+        self._emit_depth += 1
+        try:
+            self._event_log.append(event)
+            if len(self._event_log) > self._max_log_size:
+                self._event_log = self._event_log[-self._max_log_size:]
 
-        results = await asyncio.gather(
-            *[self._safe_call(h, event) for h in handlers],
-            return_exceptions=True,
-        )
+            handlers = self._subscribers.get(type(event), [])
+            if not handlers:
+                return
 
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.warning("Event handler %s failed for %s: %s",
-                             handlers[i].__name__, type(event).__name__, result)
+            results = await asyncio.gather(
+                *[self._safe_call(h, event) for h in handlers],
+                return_exceptions=True,
+            )
+
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning("Event handler %s failed for %s: %s",
+                                 handlers[i].__name__, type(event).__name__, result)
+        finally:
+            self._emit_depth -= 1
 
     async def _safe_call(self, handler, event):
         """Call handler, catching all exceptions."""
@@ -104,6 +158,10 @@ class EventBus:
     @property
     def subscriber_count(self) -> int:
         return sum(len(handlers) for handlers in self._subscribers.values())
+
+    @property
+    def subscriber_count_by_type(self) -> dict:
+        return {k.__name__: len(v) for k, v in self._subscribers.items()}
 
 
 # Global event bus singleton
