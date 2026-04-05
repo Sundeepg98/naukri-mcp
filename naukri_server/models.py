@@ -6,6 +6,37 @@ from datetime import datetime, timezone
 from typing import Optional, Any, TypedDict, NotRequired
 
 
+# ---------------------------------------------------------------------------
+# DDD: Ubiquitous Language — canonical glossary for the Naukri job-hunting domain
+# ---------------------------------------------------------------------------
+
+UBIQUITOUS_LANGUAGE = {
+    "fit_score": "0-100 score measuring how well a job matches the user's profile",
+    "stale_application": "Application with no recruiter response for 14+ days",
+    "dead_zone": "Company with 3+ applications and zero responses",
+    "follow_up_priority": "0-100 score ranking which stale apps to follow up first",
+    "ars_score": "Naukri's internal Application Relevance Score (0-100)",
+    "agent_eligible": "Job that can be auto-applied via Naukri's AI agent",
+    "screening_question": "Required question from recruiter before application is accepted",
+    "nvite": "Recruiter invitation to apply for a specific job",
+    "early_access": "Pre-posted job roles from top companies",
+    "taxonomy": "Naukri's hierarchical classification: departments → role categories → roles",
+}
+
+
+# ---------------------------------------------------------------------------
+# DDD: Aggregate Root marker
+# ---------------------------------------------------------------------------
+
+class AggregateRoot:
+    """Marker mixin for aggregate root entities.
+
+    Aggregates are consistency boundaries — all mutations to child entities
+    (interview rounds, reminders, status transitions) go through the root.
+    """
+    pass
+
+
 class ApplicationStatus(Enum):
     """Canonical application statuses used across tracking, sync, and apply."""
     APPLIED = "applied"
@@ -92,8 +123,8 @@ def paginate(items: list, page: int = 1, limit: int = 50) -> tuple:
 
 
 @dataclass
-class Job:
-    """Domain entity for a job listing."""
+class Job(AggregateRoot):
+    """Job aggregate root — owns salary, skills, company data."""
     job_id: str
     title: str = ""
     company: str = ""
@@ -152,8 +183,8 @@ class Job:
 
 
 @dataclass
-class Application:
-    """Domain entity for a tracked job application."""
+class Application(AggregateRoot):
+    """Application aggregate root — owns interview rounds, reminders, status transitions."""
     job_id: str
     title: str = ""
     company: str = ""

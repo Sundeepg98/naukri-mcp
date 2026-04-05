@@ -2,16 +2,41 @@
 Configuration constants and logging setup for Naukri MCP server.
 """
 
+import json
 import logging
 import os
 import sys
 from pathlib import Path
 from typing import Optional
 
+
+class StructuredFormatter(logging.Formatter):
+    """JSON-formatted log lines for structured observability.
+
+    Emits one JSON object per log line with timestamp, level, module, message,
+    and optional request_id for trace correlation.
+    """
+
+    def format(self, record):
+        log_data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "module": record.module,
+            "message": record.getMessage(),
+        }
+        if hasattr(record, "request_id"):
+            log_data["request_id"] = record.request_id
+        if record.exc_info and record.exc_info[1]:
+            log_data["exception"] = str(record.exc_info[1])
+        return json.dumps(log_data)
+
+
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(StructuredFormatter())
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stderr,
+    handlers=[_handler],
 )
 logger = logging.getLogger("naukri")
 

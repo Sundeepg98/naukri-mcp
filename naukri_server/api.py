@@ -5,6 +5,7 @@ API helpers — aiohttp-based GET/POST/PUT/DELETE for Naukri REST endpoints.
 import asyncio
 import json
 import random
+import time
 from functools import wraps
 from urllib.parse import urlencode
 
@@ -40,6 +41,50 @@ class _ApiMetrics:
         }
 
 api_metrics = _ApiMetrics()
+
+
+class ApiCircuitBreaker:
+    """Circuit breaker for API calls — prevents hammering a down service.
+
+    States: closed (normal) → open (failing, reject calls) → half_open (allow one probe).
+    """
+
+    def __init__(self, failure_threshold=5, reset_timeout=60):
+        self._failures = 0
+        self._threshold = failure_threshold
+        self._reset_timeout = reset_timeout
+        self._state = "closed"
+        self._last_failure = 0.0
+
+    def record_success(self):
+        self._failures = 0
+        self._state = "closed"
+
+    def record_failure(self):
+        self._failures += 1
+        if self._failures >= self._threshold:
+            self._state = "open"
+            self._last_failure = time.time()
+
+    def can_execute(self) -> bool:
+        if self._state == "closed":
+            return True
+        if self._state == "open":
+            if time.time() - self._last_failure > self._reset_timeout:
+                self._state = "half_open"
+                return True
+            return False
+        return True  # half_open: allow one probe attempt
+
+    @property
+    def state(self) -> str:
+        # Re-check for auto-transition from open to half_open on read
+        if self._state == "open" and time.time() - self._last_failure > self._reset_timeout:
+            self._state = "half_open"
+        return self._state
+
+
+_api_circuit = ApiCircuitBreaker()
 
 
 class NaukriAPIError(Exception):
@@ -131,9 +176,11 @@ async def close_api_session():
 async def _api_request(method: str, path: str, params: dict = None,
                        body=None, extra_headers: dict = None,
                        _attempt: int = 0) -> dict:
-    """Unified HTTP request handler with retry, 401 refresh, and error parsing."""
+    """Unified HTTP request handler with retry, 401 refresh, circuit breaker, and error parsing."""
     if _attempt == 0:
         api_metrics.total += 1
+        if not _api_circuit.can_execute():
+            raise NaukriAPIError(503, f"Circuit breaker open — API unavailable (resets in {int(_api_circuit._reset_timeout - (time.time() - _api_circuit._last_failure))}s)")
     token = await browser.token_manager.ensure_token()
     cookie_str = _cookie_header()
     headers = {**API_HEADERS, "Authorization": f"Bearer {token}", "cookie": cookie_str}
@@ -158,6 +205,7 @@ async def _api_request(method: str, path: str, params: dict = None,
             logger.info("API %s %s -> %s", method, path, resp.status)
             if resp.status in SUCCESS_STATUSES:
                 api_metrics.success += 1
+                _api_circuit.record_success()
                 if resp.status == 204:
                     return {}
                 content_type = resp.headers.get("content-type", "").lower()
@@ -214,6 +262,7 @@ async def _api_request(method: str, path: str, params: dict = None,
                                           extra_headers, _attempt=_attempt + 1)
 
             api_metrics.errors += 1
+            _api_circuit.record_failure()
             _raise_api_error(resp.status, text)
     except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
         if _attempt < API_MAX_RETRIES:
@@ -225,6 +274,7 @@ async def _api_request(method: str, path: str, params: dict = None,
             return await _api_request(method, path, params, body,
                                       extra_headers, _attempt=_attempt + 1)
         api_metrics.errors += 1
+        _api_circuit.record_failure()
         raise NaukriAPIError(0, f"Connection failed after {API_MAX_RETRIES} retries: {type(e).__name__}: {e}")
 
 

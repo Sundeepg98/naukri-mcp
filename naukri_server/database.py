@@ -677,3 +677,76 @@ async def migrate_json_to_sqlite():
         )
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Repository pattern — thin wrappers formalizing aggregate persistence
+# ---------------------------------------------------------------------------
+
+
+class ApplicationRepository:
+    """Repository for Application aggregate — delegates to existing CRUD helpers."""
+
+    @staticmethod
+    async def list(status=None, date_from=None, date_to=None, limit=50, offset=0):
+        return await list_applications(status, date_from, date_to, limit, offset)
+
+    @staticmethod
+    async def get(job_id: str):
+        return await get_application(job_id)
+
+    @staticmethod
+    async def save(app: dict):
+        return await upsert_application(app)
+
+    @staticmethod
+    async def delete_before(date: str) -> int:
+        return await delete_applications_before(date)
+
+    @staticmethod
+    async def count_by_status():
+        return await count_applications_by_status()
+
+    @staticmethod
+    async def get_applied_ids() -> set:
+        return await get_applied_job_ids()
+
+
+class SavedJobRepository:
+    """Repository for SavedJob aggregate — delegates to existing CRUD helpers."""
+
+    @staticmethod
+    async def list(limit=50, offset=0):
+        return await list_saved_jobs(limit, offset)
+
+    @staticmethod
+    async def get(job_id: str):
+        return await get_saved_job(job_id)
+
+    @staticmethod
+    async def save(sj: dict):
+        return await upsert_saved_job(sj)
+
+    @staticmethod
+    async def delete(job_id: str) -> bool:
+        return await delete_saved_job(job_id)
+
+
+class ReminderRepository:
+    """Repository for Reminder aggregate — delegates to existing CRUD helpers."""
+
+    @staticmethod
+    async def list():
+        return await list_reminders()
+
+    @staticmethod
+    async def get(job_id: str):
+        return await get_reminder(job_id)
+
+    @staticmethod
+    async def save(rem: dict):
+        return await upsert_reminder(rem)
+
+    @staticmethod
+    async def delete(job_id: str) -> bool:
+        return await delete_reminder(job_id)
