@@ -13,6 +13,7 @@ from naukri_server.interfaces import api_client
 from naukri_server.config import (
     logger, SAVED_JOBS_API, UNSAVE_JOB_API,
 )
+from naukri_server.domain import safe_get
 from naukri_server.validation import validate_limit, validate_page
 
 __all__ = [
@@ -36,16 +37,16 @@ async def list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     # Emit SavedJobExpiring for jobs saved 27+ days ago
     from naukri_server.events import event_bus, SavedJobExpiring
     for sj in saved:
-        saved_at = sj.get("saved_at", "")
+        saved_at = safe_get(sj, "saved_at", default="")
         if saved_at:
             try:
                 saved_dt = datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
                 days_old = (datetime.now(timezone.utc) - saved_dt).days
                 if days_old >= 27:
                     await event_bus.emit(SavedJobExpiring(
-                        job_id=sj.get("job_id", ""),
-                        title=sj.get("title", ""),
-                        company=sj.get("company", ""),
+                        job_id=safe_get(sj, "job_id", default=""),
+                        title=safe_get(sj, "title", default=""),
+                        company=safe_get(sj, "company", default=""),
                         expires_in_days=max(0, 30 - days_old),
                     ))
             except Exception:
