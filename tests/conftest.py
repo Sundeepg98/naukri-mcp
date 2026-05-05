@@ -46,6 +46,17 @@ def sample_application():
     }
 
 
+@pytest.fixture(autouse=True)
+def _clear_route_caches():
+    """Reset dashboard route caches between tests so cached state doesn't leak."""
+    yield
+    try:
+        from naukri_server.dashboard.routes import _reset_caches
+        _reset_caches()
+    except ImportError:
+        pass
+
+
 @pytest.fixture
 def sample_profile():
     """Standard profile for reuse."""

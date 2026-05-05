@@ -107,6 +107,55 @@ CREATE TABLE IF NOT EXISTS endpoint_audit (
     page_source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_endpoint_url ON endpoint_audit(url);
+
+CREATE TABLE IF NOT EXISTS scheduled_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT DEFAULT 'running',  -- running, completed, failed, skipped
+    result TEXT,  -- JSON blob with task output summary
+    error TEXT,
+    duration_ms REAL
+);
+CREATE INDEX IF NOT EXISTS idx_sched_task ON scheduled_runs(task_name);
+CREATE INDEX IF NOT EXISTS idx_sched_started ON scheduled_runs(started_at);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id TEXT UNIQUE NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT DEFAULT 'running',
+    mode TEXT,
+    searches_run INTEGER DEFAULT 0,
+    jobs_found INTEGER DEFAULT 0,
+    jobs_matched INTEGER DEFAULT 0,
+    applied_count INTEGER DEFAULT 0,
+    skipped_count INTEGER DEFAULT 0,
+    duration_ms REAL,
+    error TEXT,
+    metadata TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_cycle ON agent_runs(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_started ON agent_runs(started_at);
+
+CREATE TABLE IF NOT EXISTS agent_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    company TEXT,
+    title TEXT,
+    search_query TEXT,
+    fit_score INTEGER,
+    decision TEXT NOT NULL,
+    skip_reason TEXT,
+    apply_status TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(cycle_id, job_id) ON CONFLICT REPLACE
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_cycle ON agent_decisions(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_decisions_job ON agent_decisions(job_id);
 """
 
 
@@ -121,6 +170,7 @@ async def get_db() -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")  # Write-ahead logging for concurrency
     await db.execute("PRAGMA foreign_keys=ON")
+    await db.execute("PRAGMA busy_timeout=5000")  # 5 second wait on lock
     return db
 
 
@@ -423,7 +473,7 @@ async def add_interview_round(rd: dict) -> int:
         await db.close()
 
 
-async def list_interview_rounds(job_id: str = None):
+async def list_interview_rounds(job_id: Optional[str] = None):
     """List interview rounds, optionally filtered by job_id."""
     db = await get_db()
     try:
@@ -514,7 +564,7 @@ async def count_undelivered_notifications() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def log_event(event_type: str, timestamp: str, data: str = None, subscriber_count: int = 0) -> int:
+async def log_event(event_type: str, timestamp: str, data: Optional[str] = None, subscriber_count: int = 0) -> int:
     """Persist a domain event to the event_log table. Returns the new row id."""
     db = await get_db()
     try:
@@ -763,6 +813,271 @@ class ReminderRepository:
         return await delete_reminder(job_id)
 
 
+class ScheduledRunRepository:
+    """Repository for scheduled task run records."""
+
+    @staticmethod
+    async def insert(task_name: str, started_at: str) -> int:
+        return await insert_scheduled_run(task_name, started_at)
+
+    @staticmethod
+    async def update(run_id: int, status: str, finished_at: str,
+                     duration_ms: float, result: Optional[str] = None, error: Optional[str] = None):
+        return await update_scheduled_run(run_id, status, finished_at, duration_ms, result, error)
+
+    @staticmethod
+    async def get_last(task_name: str):
+        return await get_last_run(task_name)
+
+    @staticmethod
+    async def list(task_name: Optional[str] = None, limit: int = 20):
+        return await list_scheduled_runs(task_name, limit)
+
+
+# ---------------------------------------------------------------------------
+# Agent runs CRUD
+# ---------------------------------------------------------------------------
+
+async def insert_agent_run(run: dict) -> int:
+    """Insert an agent cycle run record. Returns row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO agent_runs
+               (cycle_id, started_at, status, mode, metadata)
+               VALUES (?, ?, ?, ?, ?)""",
+            (run["cycle_id"], run["started_at"], run.get("status", "running"),
+             run.get("mode"), run.get("metadata")),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def update_agent_run(cycle_id: str, **fields):
+    """Update an agent run with completion info."""
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [cycle_id]
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE agent_runs SET {set_clause} WHERE cycle_id = ?",
+            values,
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_agent_run(cycle_id: str) -> Optional[dict]:
+    """Get an agent run by cycle_id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM agent_runs WHERE cycle_id = ?", (cycle_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_agent_runs(limit: int = 20) -> list[dict]:
+    """List recent agent runs."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def insert_agent_decision(cycle_id: str, job_id: str, decision: str,
+                                 company: str = "", title: str = "",
+                                 search_query: str = "", fit_score: int = 0,
+                                 skip_reason: Optional[str] = None,
+                                 apply_status: Optional[str] = None) -> int:
+    """Insert an agent decision for a specific job."""
+    from datetime import datetime, timezone
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO agent_decisions
+               (cycle_id, job_id, company, title, search_query, fit_score,
+                decision, skip_reason, apply_status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cycle_id, job_id, company, title, search_query, fit_score,
+             decision, skip_reason, apply_status,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def update_agent_decision(cycle_id: str, job_id: str, apply_status: str):
+    """Update the apply_status of an agent decision."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE agent_decisions SET apply_status = ? WHERE cycle_id = ? AND job_id = ?",
+            (apply_status, cycle_id, job_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_agent_decisions(cycle_id: str) -> list[dict]:
+    """List all decisions for a cycle."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM agent_decisions WHERE cycle_id = ? ORDER BY fit_score DESC",
+            (cycle_id,),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def count_daily_applied(date_str: str) -> int:
+    """Count applications actually submitted on a date (excludes synced imports).
+
+    Only counts source != 'naukri_sync' to avoid inflated counts from
+    bulk-synced historical applications that get today's timestamp.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM applications WHERE DATE(applied_at) = ? AND source != 'naukri_sync'",
+            (date_str,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+    finally:
+        await db.close()
+
+
+class AgentRepository:
+    """Repository for agent cycle run records."""
+
+    @staticmethod
+    async def insert_run(run: dict) -> int:
+        return await insert_agent_run(run)
+
+    @staticmethod
+    async def update_run(cycle_id: str, **fields):
+        return await update_agent_run(cycle_id, **fields)
+
+    @staticmethod
+    async def get_run(cycle_id: str):
+        return await get_agent_run(cycle_id)
+
+    @staticmethod
+    async def list_runs(limit: int = 20):
+        return await list_agent_runs(limit)
+
+    @staticmethod
+    async def insert_decision(cycle_id: str, job_id: str, decision: str, **kw) -> int:
+        return await insert_agent_decision(cycle_id, job_id, decision, **kw)
+
+    @staticmethod
+    async def update_decision(cycle_id: str, job_id: str, apply_status: str):
+        return await update_agent_decision(cycle_id, job_id, apply_status)
+
+    @staticmethod
+    async def list_decisions(cycle_id: str):
+        return await list_agent_decisions(cycle_id)
+
+    @staticmethod
+    async def count_daily(date_str: str) -> int:
+        return await count_daily_applied(date_str)
+
+
+# ---------------------------------------------------------------------------
+# Retention / cleanup
+# ---------------------------------------------------------------------------
+
+async def cleanup_old_records(days: int = 90) -> dict:
+    """Delete old event_log, scheduled_runs, and agent data beyond retention period."""
+    db = await get_db()
+    try:
+        cutoff = f"-{days} days"
+
+        cursor = await db.execute(
+            "DELETE FROM event_log WHERE timestamp < datetime('now', ?)", (cutoff,))
+        event_count = cursor.rowcount
+
+        cursor = await db.execute(
+            "DELETE FROM scheduled_runs WHERE started_at < datetime('now', ?)", (cutoff,))
+        sched_count = cursor.rowcount
+
+        cursor = await db.execute(
+            "DELETE FROM agent_runs WHERE started_at < datetime('now', ?)", (cutoff,))
+        agent_count = cursor.rowcount
+
+        # agent_decisions cleaned by cascade if FK exists, otherwise manual
+        cursor = await db.execute(
+            "DELETE FROM agent_decisions WHERE created_at < datetime('now', ?)", (cutoff,))
+        decision_count = cursor.rowcount
+
+        await db.commit()
+        return {
+            "event_log": event_count,
+            "scheduled_runs": sched_count,
+            "agent_runs": agent_count,
+            "agent_decisions": decision_count,
+        }
+    finally:
+        await db.close()
+
+
+async def get_agent_metrics(days: int = 7) -> dict:
+    """Agent performance metrics over time period."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT
+                COUNT(*) as cycle_count,
+                COALESCE(SUM(jobs_found), 0) as total_found,
+                COALESCE(SUM(jobs_matched), 0) as total_matched,
+                COALESCE(SUM(applied_count), 0) as total_applied,
+                COALESCE(SUM(skipped_count), 0) as total_skipped,
+                ROUND(AVG(duration_ms), 0) as avg_duration_ms
+            FROM agent_runs
+            WHERE started_at >= datetime('now', ?)
+              AND status = 'completed'
+        """, (f"-{days} days",))
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+    finally:
+        await db.close()
+
+
+async def get_agent_skip_stats(days: int = 7) -> dict:
+    """Aggregate skip reasons for agent decisions."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT skip_reason, COUNT(*) as count
+            FROM agent_decisions
+            WHERE decision = 'skip' AND skip_reason IS NOT NULL
+              AND created_at >= datetime('now', ?)
+            GROUP BY skip_reason ORDER BY count DESC
+        """, (f"-{days} days",))
+        return {row[0]: row[1] for row in await cursor.fetchall()}
+    finally:
+        await db.close()
+
+
 # ---------------------------------------------------------------------------
 # Endpoint audit CRUD
 # ---------------------------------------------------------------------------
@@ -804,5 +1119,73 @@ async def get_known_endpoints() -> list[dict]:
         cursor = await db.execute("SELECT * FROM endpoint_audit ORDER BY first_discovered DESC")
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Scheduled runs CRUD
+# ---------------------------------------------------------------------------
+
+async def insert_scheduled_run(task_name: str, started_at: str) -> int:
+    """Insert a new scheduled run record. Returns the row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO scheduled_runs (task_name, started_at) VALUES (?, ?)",
+            (task_name, started_at),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+    finally:
+        await db.close()
+
+
+async def update_scheduled_run(run_id: int, status: str, finished_at: str,
+                                duration_ms: float, result: Optional[str] = None,
+                                error: Optional[str] = None):
+    """Update a scheduled run with completion info."""
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE scheduled_runs
+               SET status = ?, finished_at = ?, duration_ms = ?, result = ?, error = ?
+               WHERE id = ?""",
+            (status, finished_at, duration_ms, result, error, run_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_last_run(task_name: str) -> Optional[dict]:
+    """Get the most recent run for a task."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM scheduled_runs WHERE task_name = ? ORDER BY started_at DESC LIMIT 1",
+            (task_name,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_scheduled_runs(task_name: Optional[str] = None, limit: int = 20) -> list[dict]:
+    """List recent scheduled runs, optionally filtered by task name."""
+    db = await get_db()
+    try:
+        if task_name:
+            cursor = await db.execute(
+                "SELECT * FROM scheduled_runs WHERE task_name = ? ORDER BY started_at DESC LIMIT ?",
+                (task_name, limit),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM scheduled_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [dict(row) for row in await cursor.fetchall()]
     finally:
         await db.close()

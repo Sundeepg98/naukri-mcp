@@ -3,6 +3,7 @@ API helpers — aiohttp-based GET/POST/PUT/DELETE for Naukri REST endpoints.
 """
 
 import asyncio
+from typing import Optional
 import json
 import random
 import time
@@ -89,14 +90,14 @@ _api_circuit = ApiCircuitBreaker()
 
 class NaukriAPIError(Exception):
     """Structured API error with status code and parsed message."""
-    def __init__(self, status: int, message: str, code: str = None):
+    def __init__(self, status: int, message: str, code: Optional[str] = None):
         self.status = status
         self.message = message
         self.code = code
         super().__init__(f"HTTP {status}: {message}")
 
 
-def api_tool(context: str = None):
+def api_tool(context: Optional[str] = None):
     """Decorator: wraps async MCP tool with standardized error handling.
 
     Catches NaukriAPIError and Exception, returns {status: "error", message, http_status}.
@@ -173,8 +174,8 @@ async def close_api_session():
         _session = None
 
 
-async def _api_request(method: str, path: str, params: dict = None,
-                       body=None, extra_headers: dict = None,
+async def _api_request(method: str, path: str, params: Optional[dict] = None,
+                       body=None, extra_headers: Optional[dict] = None,
                        _attempt: int = 0) -> dict:
     """Unified HTTP request handler with retry, 401 refresh, circuit breaker, and error parsing."""
     if _attempt == 0:
@@ -280,7 +281,7 @@ async def _api_request(method: str, path: str, params: dict = None,
 
 # --- Public thin wrappers (preserve existing signatures) ---
 
-async def api_get(path: str, params: dict = None, extra_headers: dict = None,
+async def api_get(path: str, params: Optional[dict] = None, extra_headers: Optional[dict] = None,
                   _attempt: int = 0) -> dict:
     """GET request to Naukri API."""
     return await _api_request("GET", path, params=params,
@@ -297,6 +298,6 @@ async def api_put(path: str, body: dict, _attempt: int = 0) -> dict:
     return await _api_request("PUT", path, body=body, _attempt=_attempt)
 
 
-async def api_delete(path: str, body: dict = None, _attempt: int = 0) -> dict:
+async def api_delete(path: str, body: Optional[dict] = None, _attempt: int = 0) -> dict:
     """DELETE request to Naukri API."""
     return await _api_request("DELETE", path, body=body, _attempt=_attempt)

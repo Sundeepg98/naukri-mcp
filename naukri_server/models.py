@@ -6,6 +6,16 @@ from datetime import datetime, timezone
 from typing import Optional, Any, TypedDict, NotRequired
 
 
+def _safe_int(val) -> Optional[int]:
+    """Safely cast API value to int (handles strings like '3', None, etc)."""
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # DDD: Ubiquitous Language — canonical glossary for the Naukri job-hunting domain
 # ---------------------------------------------------------------------------
@@ -153,7 +163,10 @@ class Job(AggregateRoot):
 
     def matches_experience(self, years: float) -> bool:
         if self.experience_min is not None and self.experience_max is not None:
-            return self.experience_min <= years <= self.experience_max
+            try:
+                return float(self.experience_min) <= years <= float(self.experience_max)
+            except (ValueError, TypeError):
+                return True
         return True
 
     @classmethod
@@ -168,8 +181,8 @@ class Job(AggregateRoot):
             salary_max_lakhs=data.get("salary_max_lakhs"),
             location=data.get("location", ""),
             experience=data.get("experience", ""),
-            experience_min=data.get("experience_min"),
-            experience_max=data.get("experience_max"),
+            experience_min=_safe_int(data.get("experience_min")),
+            experience_max=_safe_int(data.get("experience_max")),
             tags=data.get("tags", []),
             is_applied=data.get("is_applied", False),
             is_agent_eligible=data.get("is_agent_eligible", False),

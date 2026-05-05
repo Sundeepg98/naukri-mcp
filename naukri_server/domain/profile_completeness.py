@@ -164,7 +164,7 @@ class CompletionReport:
             tips.append("Update your skills regularly to match trending job requirements")
         else:
             tips.append("Profiles with 15+ skills appear in more search results")
-        tips.append("Use naukri_profile(action='boost') daily to stay in 'recently active' searches")
+        tips.append("Use naukri_boost_profile() daily to stay in 'recently active' searches")
         if gaps:
             high_impact = [g for g in gaps if g.impact == "high"]
             if high_impact:

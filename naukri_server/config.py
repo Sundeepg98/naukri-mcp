@@ -26,6 +26,12 @@ class StructuredFormatter(logging.Formatter):
         }
         if hasattr(record, "request_id"):
             log_data["request_id"] = record.request_id
+        if hasattr(record, "cycle_id"):
+            log_data["cycle_id"] = record.cycle_id
+        if hasattr(record, "step"):
+            log_data["step"] = record.step
+        if hasattr(record, "extras") and isinstance(record.extras, dict):
+            log_data.update(record.extras)
         if record.exc_info and record.exc_info[1]:
             log_data["exception"] = str(record.exc_info[1])
         return json.dumps(log_data)

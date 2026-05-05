@@ -1,66 +1,36 @@
-"""Naukri.com Job Automation MCP Server — Tier 22 (26 tools, 1010+ tests)
+"""Naukri.com Job Automation MCP Server — atomic single-purpose tool design.
+
+Atomic tools are loaded progressively by Claude Code's Tool Search (default since Jan 2026),
+so a large catalog of focused tools is cheaper than a small catalog of multi-purpose dispatchers.
 
 Quick Start for AI consumers:
-  1. naukri_auth(action="login|verify_otp|status") → authenticate first
+  1. Auth: naukri_login → naukri_verify_otp (if needed) → naukri_auth_status
   2. naukri_daily_brief → morning dashboard (16 sources + recommended actions)
   3. naukri_search_jobs / naukri_get_recommendations → find jobs
-  4. naukri_smart_apply(job_id) → fit assessment before applying
-  5. naukri_smart_apply(action="apply_top_fits") → score saved jobs + auto-apply top fits
-  6. naukri_applications(action="apply", set_reminder_days=7) → apply with auto-reminder
-  7. naukri_applications(action="batch_apply", keywords=...) → bulk apply with reminders
-  8. naukri_jobs(action="similar|compare") → similar jobs + side-by-side comparison
-  9. naukri_jobs(action="get|bulk|detail_v1|report_fraud") → job details + V1 detail + bulk fetch + fraud reporting
-  10. naukri_sync(entity="applications|saved_jobs|export") → sync + export
-  11. naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark")
-  12. naukri_inbox(action="list|read|mark_interested|accept_nvite") → recruiter messages (REST API)
-  13. naukri_company(action="search|jobs|slug|research|follow_status|follow|unfollow") / naukri_company_intel → company intel
-  14. naukri_profile(action="dashboard") → profile dashboard + assessments + feature flags
-  15. naukri_settings(action="subscription") → subscription status + consent flags
-  16. naukri_resume_builder(action="templates|status|tailor") → resume building + tailoring
-  17. naukri_debug(action="browser_*|api_*|discover_*") → debugging tools
+  4. naukri_assess_fit(job_id) → fit assessment before applying
+  5. naukri_apply_top_fits() → score saved jobs + auto-apply top fits
+  6. naukri_apply(job_id, set_reminder_days=7) → apply with auto-reminder
+  7. naukri_batch_apply(keywords=...) → bulk apply with reminders
+  8. naukri_similar_jobs / naukri_compare_jobs → similar jobs + side-by-side comparison
+  9. naukri_get_job / naukri_bulk_fetch_jobs / naukri_job_detail_v1 / naukri_report_fraud
+  10. naukri_sync_applications / naukri_sync_saved / naukri_export_data
+  11. naukri_application_insights / naukri_salary_position / naukri_cached_answers /
+     naukri_match_analytics / naukri_skill_gap / naukri_salary_benchmark / naukri_taxonomy /
+     naukri_profile_prompts / naukri_conversion_funnel / naukri_status_changes
+  12. Inbox: naukri_list_inbox / naukri_read_message / naukri_mark_interested / naukri_accept_nvite
+  13. Companies: naukri_search_companies / naukri_company_jobs / naukri_company_slug /
+     naukri_research_company / naukri_follow_company / naukri_follow_status / naukri_company_intel
+  14. Profile: naukri_get_profile / naukri_update_profile / naukri_audit_profile /
+     naukri_boost_profile / naukri_dashboard / naukri_profile_targeting
+  15. Resume/Photo: naukri_resume_info / naukri_upload_resume / naukri_download_resume /
+     naukri_photo_info / naukri_upload_photo / naukri_delete_photo
+  16. naukri_settings(action=...) → settings management (action-parameter still used here)
+  17. naukri_resume_builder(action="templates|status|tailor") → resume building + tailoring
+  18. naukri_debug(action="browser_*|api_*|discover_*") → debugging tools
 
-Consolidated tools (action-parameter pattern — 21 dispatchers):
-  - naukri_auth(action="login|verify_otp|status")
-  - naukri_profile(action="get|update|audit|boost|dashboard")
-  - naukri_inbox(action="list|read|mark_interested|accept_nvite")
-  - naukri_performance(metric="impressions|recruiter_activity|activity_level")
-  - naukri_mock_interview(action="topics|history|start|answer|prep")
-  - naukri_smart_apply(action="bulk_saved|apply_top_fits") or naukri_smart_apply(job_id=...)
-  - naukri_company_intel(company, intel_type="salary|reviews|interviews")
-  - naukri_company(action="search|jobs|slug|research|follow_status|follow|unfollow")
-  - naukri_applications(action="list|detail|purge|stale|follow_up|apply|batch_apply")
-  - naukri_saved_jobs(action="list|save|unsave")
-  - naukri_early_access(action="list|share")
-  - naukri_profile_media(media_type="resume|photo", action="info|upload|download|delete")
-  - naukri_insights(insight_type="applications|salary|cached_answers|match_analytics|skill_gap|salary_benchmark|taxonomy")
-  - naukri_reminders(action="list|set")
-  - naukri_sync(entity="applications|saved_jobs|export")
-  - naukri_resume_builder(action="templates|status|tailor")
-  - naukri_notifications(action="list|count|mark_read|mark_all_read|summary")
-  - naukri_settings(action="get|update|blocked_companies|check_email|visibility|notification_prefs|subscription")
-  - naukri_job_alerts(action="list|detail|create|update|delete")
-  - naukri_jobs(action="get|report_fraud|similar|compare")
-  - naukri_debug(action="browser_*|api_*|discover_*")
-
-Tier 22 changes (performance widget headers fix):
-  - naukri_performance(metric="impressions|activity_level") now use appid:109 widget headers
-  - Search keyword frequency API now uses widget headers for faster response times
-
-Tier 17 changes (from 38→30 tools):
-  - Consolidated: naukri_get_dashboard→naukri_profile(action="dashboard"),
-    naukri_get_subscription_status→naukri_settings(action="subscription"),
-    naukri_get_similar_jobs+naukri_compare_jobs→naukri_jobs(action="similar|compare"),
-    naukri_research_company→naukri_company(action="research"),
-    naukri_resume_tailor→naukri_resume_builder(action="tailor"),
-    naukri_skill_gap_analysis+naukri_salary_benchmark→naukri_insights(insight_type="skill_gap|salary_benchmark")
-  - Internal callers updated to use private helpers (_get_dashboard, _get_subscription_status)
-  - Backward-compat aliases preserved for all renamed functions
-
-Tier 18 changes (from 30→26 tools):
-  - Consolidated: naukri_company_follow→naukri_company(action="follow_status|follow|unfollow"),
-    naukri_debug_browser+naukri_debug_api+naukri_debug_discovery→naukri_debug(action="browser_*|api_*|discover_*"),
-    naukri_assessments removed as MCP tool (still callable via backward-compat alias)
-  - Backward-compat aliases preserved for all renamed functions
+Remaining action-parameter dispatchers (kept where actions truly differ in shape or are
+real workflows): naukri_settings, naukri_resume_builder, naukri_debug, naukri_job_alerts,
+naukri_company_intel, naukri_mock_interview, naukri_early_access, naukri_agent, naukri_scheduler.
 
 For debugging: naukri_health_check, naukri_debug
 """
@@ -102,6 +72,13 @@ async def lifespan(server):
             import naukri_server.health as _health_module
             _health_module._scheduler = HealthProbeScheduler(probe_registry, watchdog=_watchdog_module.watchdog)
             await _health_module._scheduler.start()
+            # Start task scheduler for autonomous background operations
+            from naukri_server.scheduler import TaskScheduler
+            from naukri_server.scheduler_tasks import register_all as register_scheduler_tasks
+            import naukri_server.scheduler as _scheduler_module
+            _scheduler_module.scheduler = TaskScheduler()
+            register_scheduler_tasks(_scheduler_module.scheduler)
+            await _scheduler_module.scheduler.start()
             # Startup health check — validates core services after browser is ready
             logger.info("Running startup health check...")
             try:
@@ -119,6 +96,10 @@ async def lifespan(server):
         async with _lifespan_lock:
             _lifespan_refs -= 1
             if _lifespan_refs == 0:
+                # Stop task scheduler
+                import naukri_server.scheduler as _scheduler_module
+                if _scheduler_module.scheduler:
+                    await _scheduler_module.scheduler.stop()
                 import naukri_server.health as _health_module
                 if hasattr(_health_module, '_scheduler') and _health_module._scheduler:
                     await _health_module._scheduler.stop()
@@ -131,8 +112,83 @@ async def lifespan(server):
                 await close_api_session()
 
 
-mcp = FastMCP("naukri", lifespan=lifespan)
+# --- Remote auth wiring (opt-in via env vars) ---------------------------------
+# Stdio mode and existing local HTTP usage are unaffected: when neither
+# MCP_SHARED_SECRET nor MCP_OAUTH_ENABLED is set, FastMCP starts without auth.
+#
+# Modes:
+#   1. Neither env var set     → no auth (current local behavior)
+#   2. MCP_SHARED_SECRET only  → bearer-only (Claude Code CLI / Desktop)
+#   3. MCP_OAUTH_ENABLED=1     → OAuth provider (also accepts shared secret if
+#                                MCP_SHARED_SECRET is set, so single server
+#                                handles both Claude.ai web AND Claude Code)
+import os as _os
+from typing import Any as _Any
+
+from pydantic import AnyHttpUrl as _AnyHttpUrl
+
+from naukri_server.auth.bearer_verifier import build_verifier_from_env as _build_bearer
+
+# Explicit annotation: FastMCP kwargs can be any type (lifespan callable,
+# auth provider instance, settings object, ...) — declare as dict[str, Any]
+# so mypy/pyright don't infer a narrow type from the first key.
+_fastmcp_kwargs: dict[str, _Any] = {"lifespan": lifespan}
+_bearer_verifier = _build_bearer()  # may raise ValueError if secret too short
+_oauth_enabled = _os.environ.get("MCP_OAUTH_ENABLED", "").strip() == "1"
+_oauth_provider = None  # set below if OAuth enabled (referenced for consent route)
+
+if _oauth_enabled:
+    # OAuth mode — provider handles BOTH OAuth flow AND shared-secret bearer
+    from mcp.server.auth.settings import (
+        AuthSettings,
+        ClientRegistrationOptions,
+        RevocationOptions,
+    )
+    from naukri_server.auth.oauth_provider import build_oauth_provider_from_env
+
+    _oauth_provider = build_oauth_provider_from_env(bearer_verifier=_bearer_verifier)
+    _public_url = _os.environ.get("MCP_PUBLIC_URL", "http://localhost:8321").rstrip("/")
+    _public_url_obj = _AnyHttpUrl(_public_url)
+    _fastmcp_kwargs["auth_server_provider"] = _oauth_provider
+    _fastmcp_kwargs["auth"] = AuthSettings(
+        issuer_url=_public_url_obj,
+        resource_server_url=_public_url_obj,
+        required_scopes=["naukri:full"],
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=["naukri:full"],
+            default_scopes=["naukri:full"],
+        ),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+    logger.info("Auth: OAuth provider enabled (issuer=%s, bearer-fallback=%s)",
+                _public_url, "yes" if _bearer_verifier else "no")
+elif _bearer_verifier is not None:
+    # Bearer-only mode — TokenVerifier alone, no OAuth flow
+    from mcp.server.auth.settings import AuthSettings
+
+    _public_url = _os.environ.get("MCP_PUBLIC_URL", "http://localhost:8321").rstrip("/")
+    _public_url_obj = _AnyHttpUrl(_public_url)
+    _fastmcp_kwargs["token_verifier"] = _bearer_verifier
+    _fastmcp_kwargs["auth"] = AuthSettings(
+        issuer_url=_public_url_obj,
+        resource_server_url=_public_url_obj,
+        required_scopes=["naukri:full"],
+    )
+    logger.info("Auth: bearer-only mode (resource=%s)", _public_url)
+else:
+    logger.info("Auth: disabled (no MCP_SHARED_SECRET / MCP_OAUTH_ENABLED set)")
+
+mcp = FastMCP("naukri", **_fastmcp_kwargs)
+
+# Register OAuth consent UI route only when OAuth is enabled and not in
+# auto-approve mode (otherwise the consent endpoint is unreachable).
+if _oauth_enabled and _oauth_provider is not None and not _oauth_provider._auto_approve:
+    from naukri_server.auth import consent_route as _consent_route
+    _consent_route.register(mcp, _oauth_provider)
 
 # Import tool modules to register @mcp.tool() decorators
-from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders  # noqa: E402, F401
+from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders, scheduler_tool, agent_tool  # noqa: E402, F401
 from naukri_server import subscribers  # noqa: F401 — registers event handlers
+from naukri_server import resources  # noqa: F401 — registers @mcp.resource() handlers
+from naukri_server.dashboard import routes  # noqa: F401 — registers @mcp.custom_route() endpoints

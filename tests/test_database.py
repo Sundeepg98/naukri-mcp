@@ -53,6 +53,8 @@ async def test_init_db_creates_tables(tmp_path):
         await db.close()
 
     expected = [
+        "agent_decisions",
+        "agent_runs",
         "applications",
         "endpoint_audit",
         "event_log",
@@ -60,19 +62,26 @@ async def test_init_db_creates_tables(tmp_path):
         "notifications",
         "reminders",
         "saved_jobs",
+        "scheduled_runs",
         "screening_questions",
     ]
     assert tables == expected
 
     expected_indexes = [
+        "idx_agent_runs_cycle",
+        "idx_agent_runs_started",
         "idx_apps_applied_at",
         "idx_apps_status",
+        "idx_decisions_cycle",
+        "idx_decisions_job",
         "idx_endpoint_url",
         "idx_event_log_ts",
         "idx_event_log_type",
         "idx_notif_created",
         "idx_notif_read",
         "idx_rounds_job_id",
+        "idx_sched_started",
+        "idx_sched_task",
     ]
     assert indexes == expected_indexes
 
