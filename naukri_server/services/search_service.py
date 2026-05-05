@@ -26,6 +26,9 @@ __all__ = [
     "build_rest_search_params",
     "build_search_url",
     "build_search_filters",
+    "parse_job_detail_v1",
+    "parse_similar_jobs_rest",
+    "flatten_match_score_rest",
     "JOB_TYPE_MAP",
     "WORK_MODE_MAP",
     "COMPANY_TYPE_MAP",
@@ -517,3 +520,158 @@ def build_similar_jobs_result(
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+# ---------------------------------------------------------------------------
+# V1 job-detail parser — separated from I/O so it's purely testable.
+# ---------------------------------------------------------------------------
+
+_V1_WORK_MODE_MAP = {"0": "office", "2": "remote", "3": "hybrid"}
+
+
+def parse_job_detail_v1(data: dict) -> dict:
+    """Parse the v1 job-detail API response into our flat result shape.
+
+    The v1 endpoint exposes walk-in / contact / metrics fields not present in
+    v3/v4. All field reads route through ``safe_get`` so the anti-corruption
+    layer logs missing fields. Returns a dict with ``None`` values stripped.
+    """
+    job = safe_get(data, "job", default=data)
+    if not isinstance(job, dict):
+        job = {}
+
+    job_id = safe_get(job, "jobId", field_name="jobId", warn=True, context="job_detail_v1")
+    ctx = f"job_id={job_id}" if job_id else ""
+
+    result = {
+        "status": "success",
+        "job_id": job_id,
+        "title": safe_get(job, "post", field_name="title", warn=True, context=ctx),
+        "company": safe_get(job, "companyName", field_name="company", warn=True, context=ctx),
+        "company_id": safe_get(job, "companyId", field_name="company_id", warn=False),
+        "group_id": safe_get(job, "groupId", field_name="group_id", warn=False),
+        # Walk-in (v1-unique)
+        "is_walk_in": safe_get(job, "isWalkIn", field_name="is_walk_in", warn=False, default=False),
+        "walkin_time": safe_get(job, "walkinTime", field_name="walkin_time", warn=False),
+        "walkin_venue": safe_get(job, "walkinVenue", field_name="walkin_venue", warn=False),
+        "walkin_date_from": safe_get(job, "walkingDateFrom", field_name="walkin_date_from", warn=False),
+        "walkin_date_to": safe_get(job, "walkingDateTo", field_name="walkin_date_to", warn=False),
+        # Contact (v1-unique)
+        "contact_name": safe_get(job, "contactName", field_name="contact_name", warn=False),
+        "contact_email": safe_get(job, "email", field_name="contact_email", warn=False) or None,
+        "contact_phone": safe_get(job, "tel", field_name="contact_phone", warn=False) or None,
+        "contact_designation": safe_get(job, "CONTDESIG", field_name="contact_designation", warn=False),
+        # Metrics (v1-unique)
+        "jd_views": safe_get(job, "jdViews", field_name="jd_views", warn=False),
+        "jd_applies": safe_get(job, "jdApplies", field_name="jd_applies", warn=False),
+        "vacancy": safe_get(job, "noOfVacancy", field_name="vacancy", warn=False) or None,
+        # Dates
+        "closing_date": safe_get(job, "closingDate", field_name="closing_date", warn=False),
+        "is_expired": safe_get(job, "isExpiredJob", field_name="is_expired", warn=False, default=False),
+        "posted_date": safe_get(job, "addDate", field_name="posted_date", warn=False),
+        # Salary
+        "salary_min": safe_get(job, "minSal", field_name="salary_min", warn=False),
+        "salary_max": safe_get(job, "maxSal", field_name="salary_max", warn=False),
+        "salary_hidden": safe_get(job, "showSal", field_name="salary_hidden", warn=False) == "n",
+        # Experience
+        "experience_min": safe_get(job, "minExp", field_name="experience_min", warn=False),
+        "experience_max": safe_get(job, "maxExp", field_name="experience_max", warn=False),
+        # Location
+        "location": safe_get(job, "city", field_name="location", warn=False),
+        "work_mode": _V1_WORK_MODE_MAP.get(
+            safe_get(job, "wfhType", field_name="wfhType", warn=False, default="0"),
+            "unknown",
+        ),
+        # Content
+        "description": safe_get(job, "jobDesc", field_name="description", warn=False),
+        "company_profile": safe_get(job, "companyProfile", field_name="company_profile", warn=False) or None,
+        "keywords": safe_get(job, "keywords", field_name="keywords", warn=False),
+        "employment_type": safe_get(job, "employmentType", field_name="employment_type", warn=False),
+        # Education
+        "ug_course": safe_get(job, "ugCourse", field_name="ug_course", warn=False),
+        "pg_course": safe_get(job, "pgCourse", field_name="pg_course", warn=False),
+        # Internship (v1-unique)
+        "internship_start": safe_get(job, "internshipStartDate", field_name="internship_start", warn=False),
+        "internship_duration": safe_get(job, "internshipDuration", field_name="internship_duration", warn=False),
+        "internship_ppo": safe_get(job, "internshipPpo", field_name="internship_ppo", warn=False),
+        # Status
+        "is_saved": bool(safe_get(job, "isSavedJob", field_name="is_saved", warn=False, default=0)),
+        "is_consultant": safe_get(job, "cons", field_name="is_consultant", warn=False) == "y",
+        "hiring_for": safe_get(job, "hiringFor", field_name="hiring_for", warn=False) or None,
+    }
+
+    # Strip None values (preserve False, 0, "")
+    return {k: v for k, v in result.items() if v is not None}
+
+
+# ---------------------------------------------------------------------------
+# Similar-jobs REST parser (lightweight, used by jobs._get_similar_jobs_rest)
+# ---------------------------------------------------------------------------
+
+def parse_similar_jobs_rest(data: dict, job_id: str, limit: int) -> dict:
+    """Parse the /jobapi/v2/search/simjobs/{id} REST response into our shape.
+
+    Pure function — extracted from tools/jobs._get_similar_jobs_rest so the
+    JSON-shape logic is testable in isolation.
+    """
+    sim = safe_get(data, "simJobDetails", field_name="simJobDetails", warn=False, default={})
+    jobs_raw = sim.get("content", []) + sim.get("collaborative", [])
+    jobs = []
+    for j in jobs_raw:
+        if not isinstance(j, dict):
+            continue
+        placeholders = j.get("placeholders", []) or []
+        location = ""
+        for ph in placeholders:
+            if isinstance(ph, dict) and ph.get("type") == "location":
+                location = ph.get("label", "")
+                break
+        if not location and placeholders and isinstance(placeholders[0], dict):
+            location = placeholders[0].get("label", "")
+
+        tags_raw = j.get("tagsAndSkills") or ""
+        if isinstance(tags_raw, str):
+            tags = [s.strip() for s in tags_raw.split(",") if s.strip()][:5]
+        elif isinstance(tags_raw, list):
+            tags = tags_raw[:5]
+        else:
+            tags = []
+
+        jobs.append({
+            "job_id": safe_get(j, "jobId", field_name="job_id", warn=False),
+            "title": safe_get(j, "title", field_name="title", warn=False),
+            "company": safe_get(j, "companyName", field_name="company", warn=False),
+            "salary": safe_get(
+                j.get("salaryDetail", {}) if isinstance(j.get("salaryDetail"), dict) else {},
+                "label", field_name="salary", warn=False, default="Not Disclosed",
+            ),
+            "location": location,
+            "experience": j.get("experienceText", ""),
+            "tags": tags,
+            "url": j.get("jdURL", ""),
+        })
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "source": "rest_api",
+        "total": safe_get(data, "noOfJobs", field_name="total", warn=False, default=len(jobs)),
+        "count": len(jobs[:limit]),
+        "jobs": jobs[:limit],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Match-score REST flattener (used by tools/jobs._fetch_match_score)
+# ---------------------------------------------------------------------------
+
+def flatten_match_score_rest(score_data: dict) -> dict:
+    """Flatten the /matchscore REST response into our normalized dict."""
+    return {
+        "education": safe_get(score_data, "education", field_name="education", warn=False),
+        "functional_area": safe_get(score_data, "functionalArea", field_name="functional_area", warn=False),
+        "key_skills": safe_get(score_data, "Keyskills", field_name="key_skills", warn=False),
+        "work_experience": safe_get(score_data, "workExperience", field_name="work_experience", warn=False),
+        "industry": safe_get(score_data, "industry", field_name="industry", warn=False),
+        "location": safe_get(score_data, "location", field_name="location", warn=False),
+        "early_applicant": safe_get(score_data, "earlyApplicant", field_name="early_applicant", warn=False),
+    }

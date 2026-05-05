@@ -27,6 +27,9 @@ from naukri_server.services.search_service import (
     parse_company_data as _parse_company_data,
     parse_match_score as _parse_match_score,
     parse_job_detail as _parse_job_detail,
+    parse_job_detail_v1,
+    parse_similar_jobs_rest,
+    flatten_match_score_rest,
 )
 
 
@@ -34,15 +37,7 @@ async def _fetch_match_score(job_id: str) -> dict | None:
     """Fetch per-job match score — optional enrichment, returns None on failure."""
     try:
         score_data = await api_client.get(f"{JOB_MATCH_SCORE_API}{job_id}/matchscore")
-        return {
-            "education": score_data.get("education"),
-            "functional_area": score_data.get("functionalArea"),
-            "key_skills": score_data.get("Keyskills"),
-            "work_experience": score_data.get("workExperience"),
-            "industry": score_data.get("industry"),
-            "location": score_data.get("location"),
-            "early_applicant": score_data.get("earlyApplicant"),
-        }
+        return flatten_match_score_rest(score_data)
     except Exception:
         return None
 
@@ -177,75 +172,24 @@ async def _bulk_fetch_jobs(job_ids: list) -> dict:
 
 
 async def _get_job_v1(job_id: str) -> dict:
-    """Get enriched job detail from V1 API — walk-in, contact, metrics, closing date."""
+    """Get enriched job detail from V1 API — walk-in, contact, metrics, closing date.
+
+    Thin orchestrator: fetches the raw response, then delegates field extraction
+    to ``parse_job_detail_v1`` (search_service). All field reads route through
+    ``safe_get`` for anti-corruption-layer logging.
+    """
     if not job_id:
         return {"status": "error", "message": "job_id is required", "error_code": "VALIDATION_ERROR"}
 
     data = await api_client.get(JOB_DETAIL_V1_API + job_id)
-    job = data.get("job", data)
-
-    result = {
-        "status": "success",
-        "job_id": job.get("jobId"),
-        "title": job.get("post"),
-        "company": job.get("companyName"),
-        "company_id": job.get("companyId"),
-        "group_id": job.get("groupId"),
-        # Walk-in (V1-unique)
-        "is_walk_in": job.get("isWalkIn", False),
-        "walkin_time": job.get("walkinTime"),
-        "walkin_venue": job.get("walkinVenue"),
-        "walkin_date_from": job.get("walkingDateFrom"),
-        "walkin_date_to": job.get("walkingDateTo"),
-        # Contact (V1-unique)
-        "contact_name": job.get("contactName"),
-        "contact_email": job.get("email") or None,
-        "contact_phone": job.get("tel") or None,
-        "contact_designation": job.get("CONTDESIG"),
-        # Metrics (V1-unique)
-        "jd_views": job.get("jdViews"),
-        "jd_applies": job.get("jdApplies"),
-        "vacancy": job.get("noOfVacancy") or None,
-        # Dates
-        "closing_date": job.get("closingDate"),
-        "is_expired": job.get("isExpiredJob", False),
-        "posted_date": job.get("addDate"),
-        # Salary
-        "salary_min": job.get("minSal"),
-        "salary_max": job.get("maxSal"),
-        "salary_hidden": job.get("showSal") == "n",
-        # Experience
-        "experience_min": job.get("minExp"),
-        "experience_max": job.get("maxExp"),
-        # Location
-        "location": job.get("city"),
-        "work_mode": {"0": "office", "2": "remote", "3": "hybrid"}.get(job.get("wfhType", "0"), "unknown"),
-        # Content
-        "description": job.get("jobDesc"),
-        "company_profile": job.get("companyProfile") or None,
-        "keywords": job.get("keywords"),
-        "employment_type": job.get("employmentType"),
-        # Education
-        "ug_course": job.get("ugCourse"),
-        "pg_course": job.get("pgCourse"),
-        # Internship (V1-unique)
-        "internship_start": job.get("internshipStartDate"),
-        "internship_duration": job.get("internshipDuration"),
-        "internship_ppo": job.get("internshipPpo"),
-        # Status
-        "is_saved": bool(job.get("isSavedJob", 0)),
-        "is_consultant": job.get("cons") == "y",
-        "hiring_for": job.get("hiringFor") or None,
-    }
-
-    # Strip None values
-    return {k: v for k, v in result.items() if v is not None}
+    return parse_job_detail_v1(data)
 
 
 async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
     """Fetch similar jobs via v2 REST API (no browser needed).
 
-    Uses /jobapi/v2/search/simjobs/{jobId} with lightweight parsing.
+    Uses /jobapi/v2/search/simjobs/{jobId}. Parsing/normalization is delegated
+    to ``parse_similar_jobs_rest`` (search_service).
 
     Args:
         job_id: Naukri job ID
@@ -258,40 +202,7 @@ async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
         "noOfResults": str(limit),
         "searchType": "sim",
     })
-    sim = data.get("simJobDetails", {})
-    jobs_raw = sim.get("content", []) + sim.get("collaborative", [])
-    jobs = []
-    for j in jobs_raw:
-        placeholders = j.get("placeholders", [])
-        location = ""
-        for ph in placeholders:
-            if ph.get("type") == "location":
-                location = ph.get("label", "")
-                break
-        if not location and placeholders:
-            location = placeholders[0].get("label", "")
-
-        tags_raw = j.get("tagsAndSkills") or ""
-        tags = [s.strip() for s in tags_raw.split(",") if s.strip()][:5] if isinstance(tags_raw, str) else tags_raw[:5]
-
-        jobs.append({
-            "job_id": j.get("jobId"),
-            "title": j.get("title"),
-            "company": j.get("companyName"),
-            "salary": j.get("salaryDetail", {}).get("label", "Not Disclosed"),
-            "location": location,
-            "experience": j.get("experienceText", ""),
-            "tags": tags,
-            "url": j.get("jdURL", ""),
-        })
-    return {
-        "status": "success",
-        "job_id": job_id,
-        "source": "rest_api",
-        "total": data.get("noOfJobs", len(jobs)),
-        "count": len(jobs[:limit]),
-        "jobs": jobs[:limit],
-    }
+    return parse_similar_jobs_rest(data, job_id, limit)
 
 
 # ---------------------------------------------------------------------------
