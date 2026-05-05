@@ -1,6 +1,6 @@
 # Naukri MCP Server
 
-26-tool MCP server for automating [Naukri.com](https://www.naukri.com) (India's largest job portal). Search jobs, apply in bulk, manage your profile, track applications, research companies, and monitor recruiter activity -- all from your MCP client.
+117-tool atomic MCP server for automating [Naukri.com](https://www.naukri.com) (India's largest job portal). Search jobs, apply in bulk, manage your profile, track applications, research companies, and monitor recruiter activity -- all from your MCP client. Designed for Claude Code's progressive Tool Search loading (default since Jan 2026), so each tool is single-purpose and discoverable on demand.
 
 **Tech stack:** Python 3.10+, [FastMCP](https://github.com/jlowin/fastmcp), Playwright (persistent Chromium), aiohttp
 
@@ -8,10 +8,10 @@
 
 - **Search & Apply** -- keyword search, personalized recommendations, single or batch apply with auto-answered screening questions
 - **Application Tracking** -- local JSON persistence + 3-tier sync from Naukri's backend (REST, browser intercept, HTML scrape)
-- **Profile Management** -- view/edit profile, boost visibility to appear "recently active" to recruiters
-- **Company Research** -- unified `naukri_company(action="research")` plus AmbitionBox bridge for salary data and employee reviews
-- **Performance Analytics** -- search impressions, recruiter activity (who viewed/downloaded/contacted you), match scores
-- **Smart Automation** -- `naukri_auto_hunt` (one-call job hunting with fit scoring), `naukri_daily_brief` (morning dashboard), `naukri_resume_builder(action="tailor")`
+- **Profile Management** -- view/edit profile (`naukri_get_profile`, `naukri_update_profile`), boost visibility (`naukri_boost_profile`)
+- **Company Research** -- `naukri_research_company` plus AmbitionBox bridge for salary data and employee reviews
+- **Performance Analytics** -- `naukri_search_impressions`, `naukri_recruiter_activity`, `naukri_activity_level`
+- **Smart Automation** -- `naukri_auto_hunt` (one-call job hunting with fit scoring), `naukri_daily_brief` (morning dashboard), `naukri_tailor_resume`, `naukri_apply_top_fits` (auto-apply to best matches)
 
 ---
 
@@ -62,9 +62,9 @@ Naukri's Akamai CDN blocks direct REST calls for several endpoints. The server u
 
 | Strategy | Used By | Why |
 |----------|---------|-----|
-| **Direct REST API** | `naukri_applications(action="apply")`, `naukri_profile(action="get")`, `naukri_get_recommendations`, `naukri_sync`, most reads | Fast, no browser tab needed. Uses JWT token extracted from browser cookies. |
-| **Browser intercept** | `naukri_search_jobs`, `naukri_company(action="jobs")`, `naukri_jobs` (fallback) | Search API returns 406 on direct REST. Browser navigates to the page and intercepts the XHR response. |
-| **Browser UI automation** | `naukri_auth(action="login")`, `naukri_profile(action="boost")`, `naukri_profile(action="update")`, `naukri_job_alerts` | Requires clicking buttons, filling forms, handling SSO popups. Akamai blocks PUT/DELETE via REST. |
+| **Direct REST API** | `naukri_apply()`, `naukri_get_profile()`, `naukri_get_recommendations`, `naukri_sync`, most reads | Fast, no browser tab needed. Uses JWT token extracted from browser cookies. |
+| **Browser intercept** | `naukri_search_jobs`, `naukri_company_jobs()`, `naukri_jobs` (fallback) | Search API returns 406 on direct REST. Browser navigates to the page and intercepts the XHR response. |
+| **Browser UI automation** | `naukri_login(method="google")`, `naukri_boost_profile()`, `naukri_update_profile()`, `naukri_update_alert()`, `naukri_delete_alert()` | Requires clicking buttons, filling forms, handling SSO popups. Akamai blocks PUT/DELETE via REST. |
 | **AmbitionBox scraping** | `naukri_company_intel` (salary, reviews, interviews) | Extracts `__NEXT_DATA__` from server-rendered Next.js pages. |
 
 ### PagePool
@@ -77,7 +77,7 @@ JWT authentication token (`nauk_at` cookie) is extracted from the Playwright bro
 
 ### 3-Tier Sync Fallback
 
-`naukri_sync(entity="applications")` tries three strategies in order:
+`naukri_sync_applications()` tries three strategies in order:
 
 1. **REST API** -- paginated GET to the history endpoint (fastest, most reliable)
 2. **Browser intercept** -- navigate to the applied-jobs page and capture the XHR response
@@ -88,59 +88,199 @@ JWT authentication token (`nauk_at` cookie) is extracted from the Playwright bro
 ## Quick Start for AI Consumers
 
 ```
-1.  naukri_auth(action="status")             # Check session
-    naukri_auth(action="login")              # Authenticate (Google SSO or email)
+1.  naukri_auth_status()             # Check session
+    naukri_login(method="google")              # Authenticate (Google SSO or email)
 2.  naukri_daily_brief()                     # Morning dashboard: recommendations + analytics
 3.  naukri_auto_hunt(keywords="...", location="...")  # One-call job hunt with fit scoring
-4.  naukri_smart_apply(job_id=...)           # Pre-flight check before applying
-    naukri_applications(action="apply", job_id=...)   # Submit application
-5.  naukri_jobs(action="compare", job_ids=[id1, id2, id3])  # Side-by-side with fit scores
-6.  naukri_inbox(action="accept_nvite", nvite_id="...")  # Respond to recruiter NVites
-7.  naukri_sync(entity="applications")       # Pull latest from Naukri backend
-    naukri_applications(action="list")       # Query local tracking
-8.  naukri_company(action="research", company_name="...")  # Unified: Naukri + AmbitionBox data
+4.  naukri_assess_fit(job_id=...)           # Pre-flight check before applying
+    naukri_apply(job_id=...)   # Submit application
+5.  naukri_compare_jobs(job_ids=[id1, id2, id3])  # Side-by-side with fit scores
+6.  naukri_accept_nvite(nvite_job_id="...")  # Respond to recruiter NVites
+7.  naukri_sync_applications()       # Pull latest from Naukri backend
+    naukri_list_applications()       # Query local tracking
+8.  naukri_research_company(keyword="...")  # Unified: Naukri + AmbitionBox data
     naukri_company_intel(company="slug", intel_type="interviews")  # Interview tips
-9.  naukri_resume_builder(action="tailor", job_id=...)  # Get tailoring suggestions
-    naukri_profile(action="update", ...)     # Apply them
-10. naukri_profile_media(media_type="resume", action="download")  # Download resume
+9.  naukri_tailor_resume(job_id=...)  # Get tailoring suggestions
+    naukri_update_profile(...)     # Apply them
+10. naukri_download_resume(save_path="...")  # Download resume
 ```
 
-**Apply flow detail:** If a job has screening questions, the first `naukri_applications(action="apply")` call returns them. Pass answers back in the second call. Answer keys are fuzzy-matched -- `"current ctc"` matches `"What is your current CTC?"`. Answers are cached in `questions.json` so you only answer each question type once.
+**Apply flow detail:** If a job has screening questions, the first `naukri_apply()` call returns them. Pass answers back in the second call. Answer keys are fuzzy-matched -- `"current ctc"` matches `"What is your current CTC?"`. Answers are cached in `questions.json` so you only answer each question type once.
 
 ---
 
-## Tools (26)
+## Tools (117 atomic)
 
-All tools use the **action-parameter pattern** -- a single MCP tool with an `action` (or `intel_type` / `media_type`) parameter that dispatches to sub-operations. This keeps the tool count at 26 while exposing full functionality.
+Almost every tool follows the **single-purpose atomic pattern** — one MCP tool per operation.
+Only `naukri_company_intel` and `naukri_debug` keep an `action`/`intel_type` parameter (see the
+"Dispatcher tools" subsection below for why). This catalog is designed for Claude Code's
+progressive Tool Search loading (default since Jan 2026), so a large number of focused tools
+costs no more than a few multi-purpose ones.
 
-| # | Tool | Dispatch Parameter | Actions / Notes |
-|---|------|--------------------|-----------------|
-| 1 | `naukri_auth` | `action` | `login` \| `verify_otp` \| `status` |
-| 2 | `naukri_search_jobs` | -- | Keyword search with browser intercept (single purpose) |
-| 3 | `naukri_get_recommendations` | -- | Personalized job recommendations (single purpose) |
-| 4 | `naukri_jobs` | `action` | `get` \| `similar` \| `compare` \| `report_fraud` \| `detail_v1` \| `bulk` |
-| 5 | `naukri_applications` | `action` | `list` \| `detail` \| `purge` \| `stale` \| `follow_up` \| `apply` \| `batch_apply` |
-| 6 | `naukri_saved_jobs` | `action` | `list` \| `save` \| `unsave` \| `sync` |
-| 7 | `naukri_smart_apply` | `action` | *(default)* \| `bulk_saved` \| `apply_top_fits` |
-| 8 | `naukri_auto_hunt` | -- | One-call automated job hunting with fit scoring (single purpose) |
-| 9 | `naukri_company` | `action` | `search` \| `jobs` \| `slug` \| `batch_slugs` \| `research` \| `follow_status` \| `follow` \| `unfollow` |
-| 10 | `naukri_company_intel` | `intel_type` | `salary` \| `reviews` \| `interviews` |
-| 11 | `naukri_sync` | `entity` | `applications` \| `saved_jobs` \| `export` |
-| 12 | `naukri_insights` | `insight_type` | `applications` \| `salary` \| `cached_answers` \| `match_analytics` \| `match_quality` \| `skill_gap` \| `salary_benchmark` \| `taxonomy` |
-| 13 | `naukri_performance` | `metric` | `impressions` \| `recruiter_activity` \| `activity_level` |
-| 14 | `naukri_inbox` | `action` | `list` \| `read` \| `mark_interested` \| `accept_nvite` |
-| 15 | `naukri_notifications` | `action` | `list` \| `count` \| `mark_read` \| `mark_all_read` \| `summary` |
-| 16 | `naukri_job_alerts` | `action` | `list` \| `detail` \| `create` \| `update` \| `delete` |
-| 17 | `naukri_reminders` | `action` | `list` \| `set` |
-| 18 | `naukri_settings` | `action` | `get` \| `update` \| `blocked_companies` \| `check_email` \| `visibility` \| `notification_prefs` \| `subscription` |
-| 19 | `naukri_early_access` | `action` | `list` \| `share` |
-| 20 | `naukri_mock_interview` | `action` | `topics` \| `history` \| `start` \| `answer` \| `prep` |
-| 21 | `naukri_resume_builder` | `action` | `templates` \| `status` \| `tailor` |
-| 22 | `naukri_profile` | `action` | `get` \| `update` \| `audit` \| `boost` \| `dashboard` |
-| 23 | `naukri_profile_media` | `media_type` + `action` | `resume` / `photo` x `info` / `upload` / `download` / `delete` |
-| 24 | `naukri_daily_brief` | -- | Morning dashboard: inbox, notifications, recs, activity (single purpose) |
-| 25 | `naukri_health_check` | -- | Endpoint validation + browser pool + AmbitionBox checks (single purpose) |
-| 26 | `naukri_debug` | `action` | 16 actions across browser (`snapshot` \| `screenshot` \| `scan` \| `deepscan` \| `explore` \| `notif_explore`), API (`fetch_api` \| `post_api` \| `put_api` \| `delete_api` \| `fetch_widget` \| `settings_api`), discovery (`discover` \| `fetch_all_statuses` \| `intercept_requests` \| `click_discover`) |
+### Auth
+- `naukri_login(method=...)` — Google SSO or email/password
+- `naukri_verify_otp(otp)` — Submit OTP after login
+- `naukri_auth_status()` — Check session validity
+
+### Job Search & Discovery
+- `naukri_search_jobs` — Keyword search with browser intercept
+- `naukri_get_recommendations` — Personalized job recommendations
+- `naukri_get_job(job_id)` — Full job details
+- `naukri_similar_jobs(job_id)` — Find similar jobs
+- `naukri_compare_jobs(job_ids)` — Side-by-side with fit scores
+- `naukri_bulk_fetch_jobs(job_ids)` — Up to 20 jobs in one call
+- `naukri_job_detail_v1(job_id)` — Walk-in info, contact details
+- `naukri_report_fraud(job_id, reason)` — Report fraudulent listing
+- `naukri_auto_hunt` — One-call automated job hunting with fit scoring
+
+### Apply & Track
+- `naukri_apply(job_id, set_reminder_days=...)` — Single apply with auto-reminder
+- `naukri_batch_apply(keywords=...)` — Bulk apply from search
+- `naukri_assess_fit(job_id, apply_if_fit=False)` — Fit assessment (auto-apply optional)
+- `naukri_score_saved_jobs(min_fit_score=60)` — Score all saved jobs
+- `naukri_apply_top_fits(min_fit_score=70, limit=10)` — Score + auto-apply top matches
+- `naukri_list_applications(...)` — Query local tracking
+- `naukri_get_application(job_id)` — Detailed application status
+- `naukri_purge_applications(before_date)` — Delete old records
+- `naukri_stale_applications(...)` — Detect stale applications
+- `naukri_follow_up_priority(...)` — Cross-reference inbox + reminders
+- `naukri_draft_follow_up(job_id)` — Generate follow-up message
+- `naukri_recruiter_history()` — Per-company communication history
+
+### Sync & Export
+- `naukri_sync_applications(force_browser=False, days_back=365)` — 3-tier sync
+- `naukri_sync_saved(force_browser=False)` — Sync saved jobs
+- `naukri_export_data(data_type, export_format="json")` — Export to JSON/CSV
+
+### Saved Jobs
+- `naukri_list_saved_jobs(limit=50, page=1)` — List saved/bookmarked jobs
+- `naukri_save_job(job_id, ...)` — Save a job
+- `naukri_unsave_job(job_id)` — Remove a saved job
+- `naukri_sync_saved_jobs()` — Pull from Naukri server
+
+### Inbox (recruiter messages)
+- `naukri_list_inbox(limit=20, unread_only=False)` — List messages
+- `naukri_read_message(message_id, vcard_id, unique_id)` — Read full message
+- `naukri_mark_interested(mail_id, conversation_id, interested=True)` — Signal interest
+- `naukri_accept_nvite(nvite_job_id, ...)` — Apply via NVite
+
+### Notifications
+- `naukri_list_notifications(limit=20, page=1, notif_type=None)` — Filtered list
+- `naukri_notification_count()` — Unread count
+- `naukri_mark_notification_read(notification_id, date)` — Mark single
+- `naukri_mark_all_notifications_read()` — Mark all
+- `naukri_notification_summary()` — Unified dashboard
+
+### Profile
+- `naukri_get_profile()` — Full profile
+- `naukri_update_profile(fields, ...)` — Update profile fields
+- `naukri_audit_profile()` — Completeness + tips
+- `naukri_boost_profile(randomize=False)` — Re-save headline for visibility
+- `naukri_dashboard()` — Profile dashboard data
+- `naukri_profile_targeting()` — DFP targeting view
+
+### Resume & Photo
+- `naukri_resume_info()` — Resume metadata
+- `naukri_upload_resume(file_path)` — Upload PDF/DOC/DOCX
+- `naukri_download_resume(save_path)` — Download to local file
+- `naukri_photo_info()` — Photo metadata
+- `naukri_upload_photo(file_path)` — Upload PNG/JPG/JPEG/GIF
+- `naukri_delete_photo()` — Remove profile photo
+
+### Insights & Analytics
+- `naukri_application_insights(days=30)` — Status breakdown + velocity
+- `naukri_salary_position(designation=...)` — Salary positioning
+- `naukri_cached_answers(action="list|update|delete", key=..., new_answer=...)` — Manage cached answers
+- `naukri_match_analytics(days=30)` — Match-score per-field breakdowns
+- `naukri_match_quality(days=30)` — Aggregate match quality
+- `naukri_skill_gap(...)` — Skill gap vs market demand
+- `naukri_salary_benchmark(keywords, ...)` — Market salary benchmark
+- `naukri_taxonomy()` — Naukri's role taxonomy (37 dept × 167 categories × 1461 roles)
+- `naukri_profile_prompts()` — Pending profile-completion actions
+- `naukri_conversion_funnel(days=30)` — Application-to-interview funnel
+- `naukri_status_changes(days=30)` — Detect status transitions
+
+### Performance
+- `naukri_search_impressions(days=7)` — Search appearance stats
+- `naukri_recruiter_activity(page=1, limit=100, filter_by=None)` — Recruiter actions on profile
+- `naukri_activity_level()` — Current profile activity level
+
+### Companies
+- `naukri_search_companies(keyword, page=1, limit=10)` — Find companies
+- `naukri_company_jobs(group_id, ...)` — Jobs at a company
+- `naukri_company_slug(group_id)` — AmbitionBox slug (single or batch comma-separated)
+- `naukri_research_company(keyword, ...)` — Naukri + AmbitionBox combined
+- `naukri_follow_company(group_id|group_ids, action="follow|unfollow")` — Follow/unfollow
+- `naukri_follow_status(group_id|group_ids)` — Check follow status
+- `naukri_company_intel(company, intel_type="salary|reviews|interviews")` — AmbitionBox intel
+
+### Settings
+- `naukri_get_settings()` — All current account settings (job-search status, notifications, consent flags)
+- `naukri_update_settings(...)` — Modify settings (pass only fields to change)
+- `naukri_blocked_companies()` — List blocked companies
+- `naukri_check_email()` — Email/mobile verification status
+- `naukri_visibility()` — Resdex visibility toggles
+- `naukri_notification_prefs()` — Email/SMS/push/WhatsApp preferences
+- `naukri_subscription_status()` — Naukri 360 subscription + features
+
+### Job Alerts
+- `naukri_list_alerts()` — All your saved-search job alerts
+- `naukri_alert_detail(alert_id)` — Single alert details
+- `naukri_create_alert(name, keywords, ...)` — Create new alert
+- `naukri_update_alert(alert_id, ...)` — Edit alert fields
+- `naukri_delete_alert(alert_id)` — Delete an alert
+
+### Early Access (pre-posted roles)
+- `naukri_list_early_access(...)` — Browse pre-posted roles from top companies
+- `naukri_share_early_access(job_id)` — Express interest (instant, no screening)
+
+### Resume Builder
+- `naukri_resume_templates()` — Available templates (free + pro)
+- `naukri_resume_builder_status()` — AI rewrite attempts left, subscription tier
+- `naukri_tailor_resume(job_id, ...)` — Tailoring suggestions for a specific job
+
+### Mock Interview (AI)
+- `naukri_mock_interview_topics()` — Available topics + completion status
+- `naukri_mock_interview_history()` — Past interviews with scores/feedback
+- `naukri_start_mock_interview(job_id)` — Start a JD-based mock interview
+- `naukri_answer_mock_interview(test_id, topic_id, question_id, answer)` — Submit answer
+- `naukri_mock_interview_prep(job_id)` — Interview prep bundle
+
+### Autonomous Agent
+- `naukri_agent_status()` — Agent state + last 5 runs + config summary
+- `naukri_agent_config()` — Full configuration
+- `naukri_agent_update_config(updates)` — Patch config with JSON
+- `naukri_agent_run_now(ctx=None)` — Execute one observe→decide→act→learn cycle
+- `naukri_agent_approve(cycle_id)` — Apply pending decisions
+- `naukri_agent_reject(cycle_id)` — Reject pending decisions
+- `naukri_agent_history(limit=10)` — Recent run history
+- `naukri_agent_decisions(cycle_id)` — Per-job decisions for one cycle
+
+### Background Scheduler
+- `naukri_scheduler_status()` — Scheduler state + per-task last-run info
+- `naukri_enable_task(task_name)` — Enable a disabled task
+- `naukri_disable_task(task_name)` — Disable a task
+- `naukri_run_task_now(task_name)` — Execute a task immediately
+- `naukri_task_history(task_name=None, limit=20)` — Recent run history
+
+### Reminders & Interviews
+- `naukri_list_reminders(include_past=True, include_app_status=True)` — All reminders with due status
+- `naukri_set_reminder(job_id, days=7, ...)` — Create/update reminder
+- `naukri_interview_prep(job_id)` — Interview prep package
+- `naukri_add_interview_round(job_id, round_type, ...)` — Track interview round
+- `naukri_list_interview_rounds(job_id=None)` — List rounds
+- `naukri_compare_offers(job_ids)` — Compare multiple job offers
+
+### Dispatcher tools (only 2 left — kept by design)
+- `naukri_company_intel(company, intel_type="salary|reviews|interviews")` — Three actions
+  share the same `company` resolution + AmbitionBox auth flow; splitting would duplicate
+  that orchestration.
+- `naukri_debug(action=...)` — 16 dev-only debug actions across browser/API/discovery;
+  catalog cost is real here even with progressive loading since most users never invoke them.
+
+### Other
+- `naukri_daily_brief` — Morning dashboard: 16 sources + recommended actions
+- `naukri_health_check` — Endpoint validation + browser pool + AmbitionBox
 
 ---
 
@@ -168,7 +308,7 @@ Start the server:
 python naukri.py
 ```
 
-Then call `naukri_auth(action="login")` from your MCP client. It opens a visible Chromium window where you can:
+Then call `naukri_login(method="google")` from your MCP client. It opens a visible Chromium window where you can:
 
 1. **Google SSO (recommended):** Click "Login with Google" -- uses the Chrome profile's saved Google session, no credentials needed.
 2. **Email/password:** Pass `method="email"`, `email="..."`, `password="..."`.
@@ -177,7 +317,7 @@ The browser session is stored in `chrome-profile/` (auto-created, gitignored). T
 
 ### Session Lifetime
 
-Sessions persist for approximately 30 days. When expired, the server detects it at startup or on the first API call and returns a `"Not logged in"` error. Re-authenticate with `naukri_auth(action="login")`.
+Sessions persist for approximately 30 days. When expired, the server detects it at startup or on the first API call and returns a `"Not logged in"` error. Re-authenticate with `naukri_login(method="google")`.
 
 ### MCP Client Config
 
@@ -239,10 +379,10 @@ All data files live in the project root and are gitignored.
 Naukri uses Akamai Bot Manager. Several endpoints return `406 Not Acceptable` or `403 Forbidden` when called directly via REST without a browser session:
 
 - **Search** (`naukri_search_jobs`) -- always uses browser intercept; direct REST is blocked
-- **Profile mutations** (`naukri_profile(action="update")`) -- PUT/DELETE blocked by Akamai; browser automation used instead
+- **Profile mutations** (`naukri_update_profile()`) -- PUT/DELETE blocked by Akamai; browser automation used instead
 - **Job alerts** -- CRUD operations go through browser UI automation for the same reason
 
-This is expected behavior. Tools that require browser interaction are documented as such. If you see 406 errors from tools that should use REST, check login status with `naukri_auth(action="status")` -- an expired token causes Akamai to classify requests as bot traffic.
+This is expected behavior. Tools that require browser interaction are documented as such. If you see 406 errors from tools that should use REST, check login status with `naukri_auth_status()` -- an expired token causes Akamai to classify requests as bot traffic.
 
 ### AmbitionBox Scraping
 
@@ -254,7 +394,7 @@ AmbitionBox is a Next.js SSR site. Salary and review tools extract `__NEXT_DATA_
 
 | Problem | Solution |
 |---------|----------|
-| **"Not logged in" errors** | Session expired (~30 days). Call `naukri_auth(action="login")` to re-authenticate. |
+| **"Not logged in" errors** | Session expired (~30 days). Call `naukri_login(method="google")` to re-authenticate. |
 | **Search returns empty / 406** | Expected for direct REST. `naukri_search_jobs` uses browser intercept and should work. If it fails, run `naukri_health_check`. |
 | **Timeouts on slow connections** | Increase `NAUKRI_NAV_TIMEOUT` (e.g., `30000`) and `NAUKRI_API_TIMEOUT` (e.g., `60`). |
 | **Rate limits / daily apply cap** | Naukri limits daily applications by account type. The `daily_applied` field in apply responses shows your count. Naukri 360 subscribers get higher limits. |
@@ -268,3 +408,176 @@ AmbitionBox is a Next.js SSR site. Salary and review tools extract `__NEXT_DATA_
 Run `naukri_health_check()` to validate all integrations at once. It tests login session, profile API, search API (406 is normal here), recommendations, dashboard, browser pool liveness, and AmbitionBox scraping.
 
 Returns `{summary: {ok: N, warn: N, fail: N}, checks: [...]}` with per-check timing.
+
+---
+
+## Remote Access
+
+Run the server on your always-on machine and connect from anywhere (web Claude in cowork environments, mobile, etc.). Two auth modes are supported and can run side-by-side on the same server.
+
+### Quick decision
+
+| Client | Auth mode | Why |
+|--------|-----------|-----|
+| Claude Code CLI | Bearer (`MCP_SHARED_SECRET`) | `claude mcp add --transport http ... --header "Authorization: Bearer ..."` works directly |
+| Claude Desktop | Bearer (`MCP_SHARED_SECRET`) | Supports `headers` config in `claude_desktop_config.json` |
+| Claude.ai web | OAuth (`MCP_OAUTH_ENABLED=1`) | Web UI only exposes OAuth client_id/secret fields, not bearer |
+| Both at once | Bearer + OAuth (set both env vars) | Single server, OAuth provider's `load_access_token` falls back to the shared secret |
+
+### Step 1 — Generate secrets
+
+```powershell
+# Bearer secret (for Claude Code / Desktop)
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# OAuth client_id + client_secret (for Claude.ai web)
+python -c "import secrets; print('client_id=claude-ai-web')"
+python -c "import secrets; print('client_secret=' + secrets.token_urlsafe(48))"
+```
+
+### Step 2 — Configure `.env`
+
+Copy `.env.example` to `.env` and fill in. The `.env` file is gitignored. Minimal config to enable BOTH auth modes:
+
+```
+MCP_REMOTE=1
+MCP_PORT=8321
+MCP_PUBLIC_URL=https://naukri.<your-domain>
+
+# Bearer (Claude Code + Desktop)
+MCP_SHARED_SECRET=<paste output from token_urlsafe(48)>
+
+# OAuth (claude.ai web)
+MCP_OAUTH_ENABLED=1
+MCP_OAUTH_CLIENT_ID=claude-ai-web
+MCP_OAUTH_CLIENT_SECRET=<paste output from token_urlsafe(48)>
+MCP_OAUTH_AUTO_APPROVE=1
+```
+
+If `MCP_REMOTE=1` but no auth env var is set, the server **refuses to start** — this is the safety check that prevents accidentally exposing an unauthenticated MCP to the internet.
+
+### Step 3 — Public hostname (Cloudflare Tunnel recommended)
+
+Cloudflare Tunnel gives you a stable public HTTPS URL without opening firewall ports. Free tier, unmetered bandwidth.
+
+```powershell
+winget install Cloudflare.cloudflared
+cloudflared tunnel login
+cloudflared tunnel create naukri-mcp
+cloudflared tunnel route dns naukri-mcp naukri.<your-domain>
+```
+
+Edit `%USERPROFILE%\.cloudflared\config.yml`:
+
+```yaml
+tunnel: <UUID-from-create-command>
+credentials-file: C:\Users\<you>\.cloudflared\<UUID>.json
+ingress:
+  - hostname: naukri.<your-domain>
+    service: http://localhost:8321
+  - service: http_status:404
+```
+
+Run the tunnel: `cloudflared tunnel run naukri-mcp` (or `cloudflared service install` for autostart).
+
+Alternatives: Tailscale Funnel (peer-to-peer, lower latency for trusted devices) or ngrok (simpler but free tier has limits).
+
+### Step 4 — Start the server
+
+```powershell
+# Load env vars from .env (PowerShell — use a one-liner or a helper script)
+Get-Content .env | Where-Object { $_ -match '^[A-Z_]+=.+' } | ForEach-Object {
+    $name, $val = $_ -split '=', 2
+    [Environment]::SetEnvironmentVariable($name, $val, "Process")
+}
+
+python naukri.py --http
+```
+
+Logs should show `Auth: OAuth provider enabled (issuer=https://naukri.<your-domain>, bearer-fallback=yes)` and `HTTP mode: 0.0.0.0:8321`.
+
+### Step 5 — Connect clients
+
+**Claude Code CLI (uses bearer):**
+
+```powershell
+claude mcp add --transport http naukri https://naukri.<your-domain>/mcp `
+  --header "Authorization: Bearer <MCP_SHARED_SECRET>"
+```
+
+**Claude Desktop (uses bearer):**
+
+In `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "naukri": {
+      "url": "https://naukri.<your-domain>/mcp",
+      "transport": "http",
+      "headers": { "Authorization": "Bearer <MCP_SHARED_SECRET>" }
+    }
+  }
+}
+```
+
+**Claude.ai web (uses OAuth):**
+
+Settings → Connectors → Add custom connector
+- URL: `https://naukri.<your-domain>/mcp`
+- OAuth Client ID: `claude-ai-web` (matching `MCP_OAUTH_CLIENT_ID`)
+- OAuth Client Secret: paste `MCP_OAUTH_CLIENT_SECRET`
+
+Claude.ai will discover OAuth metadata automatically (FastMCP serves `.well-known/oauth-authorization-server` and the `/authorize` + `/token` endpoints).
+
+### Smoke test (curl)
+
+```powershell
+# 401 expected — no auth header
+curl -i https://naukri.<your-domain>/mcp
+
+# Bearer flow — should return MCP JSON-RPC instead of 401
+curl -i -H "Authorization: Bearer <MCP_SHARED_SECRET>" `
+  https://naukri.<your-domain>/mcp
+
+# OAuth metadata discovery
+curl https://naukri.<your-domain>/.well-known/oauth-authorization-server | jq .
+```
+
+### Windows host hardening
+
+The MCP needs a headed Chrome session, so the host machine must stay awake and logged in.
+
+```powershell
+# Disable sleep / hibernate while plugged in
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+# Disable screen-off (optional — Chrome stays alive when display sleeps,
+# but this avoids GPU pauses)
+powercfg /change monitor-timeout-ac 0
+```
+
+| Behavior | Result |
+|----------|--------|
+| Lock screen | Chrome stays alive, MCP works |
+| Logout | Chrome dies, MCP fails — keep the user session active |
+| RDP disconnect | Process keeps running on host, MCP works |
+| System sleep | Chrome resumes but in-flight calls fail — disable sleep |
+| Manual Chrome use | Chrome on Windows can't run two instances with different `--user-data-dir`. Don't open the same profile manually while the MCP is running. |
+
+### Monitoring
+
+Cloudflare's "tunnel healthy" status only reflects the edge↔cloudflared link, not the origin. Add an external uptime probe (e.g., UptimeRobot, free) hitting `https://naukri.<your-domain>/.well-known/oauth-authorization-server` (200 expected) so you get notified when the host machine is actually unreachable.
+
+### Auth mode reference
+
+| Env var | Required for | Notes |
+|---------|--------------|-------|
+| `MCP_REMOTE=1` | Public bind | Without this, server stays on 127.0.0.1 |
+| `MCP_PORT` | Custom port | Default 8321 |
+| `MCP_PUBLIC_URL` | OAuth issuer / RS metadata | Defaults to `http://localhost:8321` |
+| `MCP_SHARED_SECRET` | Bearer auth | >=32 chars; rotate by changing env + restart |
+| `MCP_OAUTH_ENABLED=1` | OAuth flow | Enables `/authorize`, `/token`, `/register`, `/revoke` |
+| `MCP_OAUTH_CLIENT_ID` | OAuth | Pre-registered client id for claude.ai |
+| `MCP_OAUTH_CLIENT_SECRET` | OAuth | >=32 chars |
+| `MCP_OAUTH_AUTO_APPROVE` | OAuth UX | `1` skips consent screen (default), `0` shows Approve/Deny page at `/oauth/consent` |

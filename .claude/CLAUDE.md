@@ -1,25 +1,65 @@
 # Naukri MCP Server — Developer Guide
 
 ## Architecture
-- **26 tools** across 24 tool modules using FastMCP (`@mcp.tool()` decorators)
+- **~117 atomic single-purpose MCP tools** across 24 tool modules using FastMCP (`@mcp.tool()` decorators)
 - **Playwright** persistent Chrome profile for browser automation
 - **aiohttp** global session for REST API calls
 - **PagePool** (3 tabs) for concurrent browser operations
 
 ## Tool Patterns
 
-### Action-Parameter Pattern
-Most consolidated tools use `action` as first param to dispatch to private helpers:
+### Atomic Single-Purpose Pattern (default)
+Every MCP tool does one job. Atomic tools are correct for this codebase given Claude Code's
+progressive Tool Search loading (default since Jan 2026): tool names load at session start,
+schemas only when needed, so a large catalog of focused tools costs no more than a small
+catalog of multi-purpose dispatchers — and gives the AI clearer affordances.
+
 ```python
 @mcp.tool()
-async def naukri_tool(action: str = "list", ...) -> dict:
-    if action == "list":
-        return await _list_items(...)
-    elif action == "detail":
-        return await _get_detail(...)
-    else:
-        return {"status": "error", "message": f"Unknown action: {action}", "error_code": "VALIDATION_ERROR"}
+async def naukri_list_applications(status: Optional[str] = None, ...) -> dict:
+    return await handle_tool_action(
+        lambda: _list_applications(status=status, ...),
+        "applications.list",
+    )
+
+@mcp.tool()
+async def naukri_get_application(job_id: str) -> dict:
+    return await handle_tool_action(
+        lambda: _get_application_detail(job_id),
+        "applications.detail",
+    )
 ```
+
+### Action-Parameter Pattern (rare — only 2 tools left)
+Only `naukri_company_intel` and `naukri_debug` still take an `action`/`intel_type` first param.
+Both were intentionally kept consolidated:
+- `naukri_company_intel(company, intel_type="salary|reviews|interviews")` — three actions share
+  the same `company` resolution + AmbitionBox auth flow; splitting would duplicate that orchestration.
+- `naukri_debug(action="browser_*|api_*|discover_*")` — 16 dev-only debug actions; tool-catalog
+  cost is real here even with progressive loading, since most users never invoke them.
+
+```python
+@mcp.tool()
+async def naukri_debug(action: str, ...) -> dict:
+    # routes to ~16 internal helpers
+    ...
+```
+
+### Removed dispatchers (history)
+21 consolidated dispatchers were removed in favor of atomic equivalents:
+
+**First wave (14 deprecated tools):** `naukri_auth`, `naukri_jobs`, `naukri_saved_jobs`,
+`naukri_inbox`, `naukri_performance`, `naukri_reminders`, `naukri_notifications`, `naukri_sync`,
+`naukri_insights`, `naukri_company`, `naukri_profile`, `naukri_smart_apply`,
+`naukri_profile_media`, `naukri_applications`.
+
+**Second wave (7 surviving consolidated tools):** `naukri_settings`, `naukri_early_access`,
+`naukri_job_alerts`, `naukri_resume_builder`, `naukri_mock_interview`, `naukri_agent`,
+`naukri_scheduler`.
+
+The `framework/registry.py` (`@action_dispatcher`, `dispatch_action`) is no longer used by
+production code but remains in the codebase as a reusable pattern for any future tool that
+might need it.
 
 ### @api_tool Decorator
 Simple REST tools use `@api_tool("context")` from `api.py` for standardized error handling:
@@ -105,7 +145,7 @@ Check the implementation plan for file assignments before starting.
 - **New tools SHOULD use interfaces for testability** � depend on `api_client` / `browser_provider` singletons instead of importing `api_get` / `api_post` directly
 
 ## Key File Paths
-- Tools: `naukri_server/tools/*.py` (100 MCP tools)
+- Tools: `naukri_server/tools/*.py` (~117 atomic MCP tools after all consolidation removal)
 - Services: `naukri_server/services/*.py` (7 service modules)
 - Domain: `naukri_server/domain/*.py` (9 domain objects)
 - Database: `naukri_server/database.py` (SQLite, 7 tables, 24+ CRUD helpers)
