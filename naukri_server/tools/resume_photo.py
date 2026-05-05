@@ -1,4 +1,9 @@
-"""Profile media management — unified tool for resume and photo operations."""
+"""Profile media management — unified tool for resume and photo operations.
+
+DDD: API-response reads in _resume_info now route through ``safe_get``.
+Browser-driven mutations (upload/delete) stay on plain ``page.evaluate(...)``
+results because those are local DOM scrapes, not external API responses.
+"""
 
 import asyncio
 from pathlib import Path
@@ -14,6 +19,7 @@ from naukri_server.config import (
     BROWSER_PAGE_LOAD, BROWSER_MODAL_APPEAR, BROWSER_UPLOAD_COMPLETE, BROWSER_FORM_SAVE,
     BROWSER_PAGE_SETTLE, BROWSER_DOM_SETTLE,
 )
+from naukri_server.domain import safe_get
 from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
 
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
@@ -30,23 +36,31 @@ RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
 async def _resume_info() -> dict:
     data = await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
-    profiles = data.get("profile", [])
-    profile = profiles[0] if isinstance(profiles, list) and profiles else data.get("profile", {})
+    # 'profile' may be a list (v3+ shape) or a dict (older shape) — handle both.
+    profiles = safe_get(data, "profile", field_name="profile", warn=True, default=[])
+    if isinstance(profiles, list) and profiles:
+        profile = profiles[0]
+    elif isinstance(profiles, dict):
+        profile = profiles
+    else:
+        profile = {}
     if not isinstance(profile, dict):
         profile = {}
 
-    cv_info = profile.get("cvInfo", {})
+    cv_info = safe_get(profile, "cvInfo", field_name="cvInfo", warn=False, default={})
     if not isinstance(cv_info, dict):
         cv_info = {}
 
     return {
         "status": "success",
-        "resume_headline": profile.get("resumeHeadline", ""),
-        "file_name": cv_info.get("cvName", cv_info.get("fileName", "")),
-        "upload_date": cv_info.get("cvUploadDate", cv_info.get("uploadDate", "")),
-        "file_size": cv_info.get("cvSize", cv_info.get("fileSize", "")),
+        "resume_headline": safe_get(profile, "resumeHeadline", field_name="resumeHeadline", warn=False, default=""),
+        # cv_* and *_old key duplication is API-versioning churn (v3 vs v4) —
+        # safe_get's multi-key form picks the first present key.
+        "file_name": safe_get(cv_info, "cvName", "fileName", field_name="cv.file_name", warn=False, default=""),
+        "upload_date": safe_get(cv_info, "cvUploadDate", "uploadDate", field_name="cv.upload_date", warn=False, default=""),
+        "file_size": safe_get(cv_info, "cvSize", "fileSize", field_name="cv.file_size", warn=False, default=""),
         "download_url": f"{NAUKRI_BASE}{RESUME_DOWNLOAD_API}",
-        "cv_id": cv_info.get("cvId", cv_info.get("id", "")),
+        "cv_id": safe_get(cv_info, "cvId", "id", field_name="cv.id", warn=False, default=""),
     }
 
 
