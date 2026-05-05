@@ -10,8 +10,7 @@ from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
-from naukri_server.interfaces import api_client
-from naukri_server.browser import browser, page_goto, page_intercept_json
+from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import (
     logger, APPLIED_JOBS_PAGE, SAVED_JOBS_PAGE,
     APPLIED_JOBS_API, SAVED_JOBS_API,
@@ -250,14 +249,17 @@ async def _fetch_applied_jobs_rest(max_pages: int = 10, days_back: int = 365) ->
 async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
                               timeout: float = 10) -> Optional[dict]:
     """Fetch data by navigating in browser and intercepting JSON responses."""
-    async with browser.page_pool.acquire() as page:
+    async with browser_provider.acquire_page() as page:
         # Try targeted capture first
         if url_pattern:
-            data = await page_intercept_json(page, page_url, url_pattern=url_pattern, timeout=timeout)
+            data = await browser_provider.intercept_json(page, page_url, url_pattern=url_pattern, timeout=timeout)
             if data:
                 return data
 
-        # Fallback: capture all JSON responses and return the largest
+        # Fallback: capture all JSON responses and return the largest.
+        # The Page object is opaque to the interface, so we use Playwright's
+        # native event API directly here — that's intentional (see
+        # BrowserProvider docstring on opaque Page typing).
         captured_responses = []
         response_event = asyncio.Event()
 
@@ -273,7 +275,7 @@ async def _fetch_via_browser(page_url: str, url_pattern: Optional[str] = None,
 
         page.on("response", on_response)
         try:
-            await page_goto(page, page_url)
+            await browser_provider.safe_goto(page, page_url)
             try:
                 await asyncio.wait_for(response_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -297,13 +299,13 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 
     Returns a list of normalized job dicts, or None if scraping failed.
     """
-    async with browser.page_pool.acquire() as page:
+    async with browser_provider.acquire_page() as page:
         all_jobs = []
         current_page = 1
 
         while current_page <= max_pages:
             url = page_url if current_page == 1 else f"{page_url}?pageNo={current_page}"
-            await page_goto(page, url)
+            await browser_provider.safe_goto(page, url)
             await asyncio.sleep(BROWSER_MODAL_APPEAR)  # let server-rendered content settle
 
             # Detect login redirect
