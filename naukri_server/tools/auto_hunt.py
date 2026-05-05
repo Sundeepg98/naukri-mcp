@@ -7,9 +7,14 @@ from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
 from naukri_server.config import logger
+from naukri_server.domain import safe_get
 from naukri_server.domain.fit_score import FitScore
 from naukri_server.models import Job
 from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
+from naukri_server.services.auto_hunt_service import (
+    parse_profile_experience_years,
+    build_ranked_entry,
+)
 from naukri_server.validation import validate_limit
 
 
@@ -155,20 +160,13 @@ async def naukri_auto_hunt(
                     "jobs_matched": 0, "ranked_jobs": [],
                     "note": "All matching jobs already applied to."}
 
-        profile_skills = parse_skills(profile_result.get("key_skills", []))
-        profile_exp = profile_result.get("total_experience")
-        profile_location = profile_result.get("current_location")
-        profile_expected_ctc = profile_result.get("expected_ctc")
+        profile_skills = parse_skills(safe_get(profile_result, "key_skills", field_name="key_skills", warn=False, default=[]))
+        profile_exp = safe_get(profile_result, "total_experience", field_name="total_experience", warn=False)
+        profile_location = safe_get(profile_result, "current_location", field_name="current_location", warn=False)
+        profile_expected_ctc = safe_get(profile_result, "expected_ctc", field_name="expected_ctc", warn=False)
 
         # Parse profile experience to float for Job.matches_experience
-        import re
-        _p_exp_nums = re.findall(r'(\d+)', str(profile_exp or ""))
-        profile_exp_years = (
-            float(_p_exp_nums[0]) + float(_p_exp_nums[1]) / 12.0
-            if len(_p_exp_nums) >= 2
-            else float(_p_exp_nums[0]) if _p_exp_nums
-            else 0.0
-        )
+        profile_exp_years = parse_profile_experience_years(profile_exp)
 
         if ctx:
             try:
@@ -183,12 +181,12 @@ async def naukri_auto_hunt(
             job_skills = parse_skills(job.tags or [])
             fit = FitScore.compute(
                 job_skills, profile_skills,
-                job_dict.get("experience", ""),
+                safe_get(job_dict, "experience", field_name="experience", warn=False, default=""),
                 profile_exp,
                 job_location=job.location,
                 profile_location=profile_location,
                 job_work_mode=job.work_mode,
-                job_salary=job_dict.get("salary"),
+                job_salary=safe_get(job_dict, "salary", field_name="salary", warn=False),
                 profile_expected_ctc=profile_expected_ctc,
                 experience_min=job.experience_min,
                 experience_max=job.experience_max,
@@ -199,29 +197,7 @@ async def naukri_auto_hunt(
             )
 
             if fit.overall_score >= min_fit_score:
-                ranked.append({
-                    "job_id": job.job_id,
-                    "title": job.title,
-                    "company": job.company,
-                    "salary": job_dict.get("salary"),
-                    "location": job.location,
-                    "work_mode": job.work_mode,
-                    "experience": job_dict.get("experience"),
-                    "is_applied": job.is_applied,
-                    "salary_disclosed": job.salary_disclosed,
-                    "experience_match": job.matches_experience(profile_exp_years),
-                    "fit_score": fit.overall_score,
-                    "matched_skills": sorted(fit.skill_match.matched),
-                    "missing_skills": sorted(fit.skill_match.missing),
-                    "recommendation": fit.recommendation,
-                    "bonuses": {
-                        "location": fit.bonuses.location,
-                        "work_mode": fit.bonuses.work_mode,
-                        "salary": fit.bonuses.salary,
-                        "agent_eligible": fit.bonuses.agent_eligible,
-                        "total": fit.bonuses.total,
-                    } if fit._has_enrichment else None,
-                })
+                ranked.append(build_ranked_entry(job, job_dict, fit, profile_exp_years))
 
         # Sort by fit score descending
         ranked.sort(key=lambda x: x["fit_score"], reverse=True)
