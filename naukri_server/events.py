@@ -200,6 +200,20 @@ class SettingsUpdated(DomainEvent):
 
 
 @dataclass
+class InboxMessageRead(DomainEvent):
+    """Fired when a recruiter inbox message is opened/read."""
+    thread_id: str = ""
+    message_id: str = ""
+
+
+@dataclass
+class InboxInviteAccepted(DomainEvent):
+    """Fired when a recruiter NVite invitation is accepted (job apply succeeded)."""
+    invite_id: str = ""
+    recruiter_id: str = ""
+
+
+@dataclass
 class BrowserCrashed(DomainEvent):
     """Emitted when browser becomes unresponsive or context dies."""
     reason: str = ""
@@ -237,6 +251,87 @@ class NewEndpointDiscovered(DomainEvent):
     url: str = ""
     method: str = "GET"
     page_source: str = ""
+
+
+@dataclass
+class ScheduledTaskCompleted(DomainEvent):
+    """Emitted when a scheduled task finishes (success or failure)."""
+    task_name: str = ""
+    duration_ms: float = 0
+    status: str = ""  # completed, failed
+    error: str = ""
+
+
+@dataclass
+class ScheduledTaskSkipped(DomainEvent):
+    """Emitted when a scheduled task is skipped (disabled or outside schedule)."""
+    task_name: str = ""
+    reason: str = ""
+
+
+@dataclass
+class AgentCycleStarted(DomainEvent):
+    """Emitted when an autonomous agent cycle begins."""
+    cycle_id: str = ""
+    mode: str = ""
+    search_count: int = 0
+
+
+@dataclass
+class AgentCycleCompleted(DomainEvent):
+    """Emitted when an autonomous agent cycle finishes."""
+    cycle_id: str = ""
+    applied_count: int = 0
+    skipped_count: int = 0
+    duration_ms: float = 0
+    status: str = ""
+
+
+@dataclass
+class AgentJobApplied(DomainEvent):
+    """Emitted when the agent successfully applies to a job."""
+    cycle_id: str = ""
+    job_id: str = ""
+    company: str = ""
+    title: str = ""
+    fit_score: int = 0
+
+
+@dataclass
+class AgentJobSkipped(DomainEvent):
+    """Emitted when the agent skips a job."""
+    cycle_id: str = ""
+    job_id: str = ""
+    company: str = ""
+    reason: str = ""
+    fit_score: int = 0
+
+
+@dataclass
+class AgentObserveCompleted(DomainEvent):
+    """Emitted when agent observe step completes."""
+    cycle_id: str = ""
+    applied_ids_count: int = 0
+    daily_remaining: int = 0
+
+
+@dataclass
+class AgentDecideCompleted(DomainEvent):
+    """Emitted when agent decide step completes."""
+    cycle_id: str = ""
+    searches_run: int = 0
+    total_found: int = 0
+    total_matched: int = 0
+    candidates_count: int = 0
+
+
+@dataclass
+class AgentActCompleted(DomainEvent):
+    """Emitted when agent act step completes."""
+    cycle_id: str = ""
+    mode: str = ""
+    applied_count: int = 0
+    pending_approval: int = 0
 
 
 class EventBus:

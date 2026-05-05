@@ -9,7 +9,6 @@ from naukri_server.interfaces import api_client
 from naukri_server.config import logger, INBOX_API, MESSAGE_API, INBOX_MARK_INTERESTED_API, INBOX_REST_API
 from naukri_server.domain import safe_get
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -161,6 +160,18 @@ async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
     raw_content = safe_get(mail, "titleText", "body", "content", default="", field_name="content", warn=True, context="read_message")
     content = _strip_html(raw_content) if "<" in raw_content else raw_content
 
+    conversation_id = safe_get(mail, "conversationId", default=None)
+
+    # Emit InboxMessageRead so subscribers can react (last-read tracking, cache invalidation)
+    try:
+        from naukri_server.events import event_bus, InboxMessageRead
+        await event_bus.emit(InboxMessageRead(
+            thread_id=str(conversation_id or ""),
+            message_id=str(message_id or ""),
+        ))
+    except Exception as e:
+        logger.warning("Failed to emit InboxMessageRead: %s", e)
+
     return {
         "status": "success",
         "message_id": message_id,
@@ -168,7 +179,7 @@ async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
         "content": content,
         "date": safe_get(mail, "dateTime", "date", default=""),
         "type": safe_get(mail, "messageType", "type", default=""),
-        "conversation_id": safe_get(mail, "conversationId", default=None),
+        "conversation_id": conversation_id,
     }
 
 
@@ -183,6 +194,20 @@ async def _mark_interested(mail_id: str, conversation_id: str, interested: bool)
         },
     )
     action = "interested" if interested else "not interested"
+
+    # Emit RecruiterEngaged so subscribers can react (notifications, scoring updates)
+    try:
+        from naukri_server.events import event_bus, RecruiterEngaged
+        await event_bus.emit(RecruiterEngaged(
+            recruiter_name="",
+            company="",
+            action="MARKED_INTERESTED" if interested else "MARKED_NOT_INTERESTED",
+            job_id="",
+            title="",
+        ))
+    except Exception as e:
+        logger.warning("Failed to emit RecruiterEngaged: %s", e)
+
     return {"status": "success", "mail_id": mail_id, "interested": interested, "message": f"Marked as {action}."}
 
 
@@ -190,7 +215,7 @@ async def _accept_nvite(nvite_job_id: str, answers: Optional[dict], title: Optio
     """Accept a recruiter NVite by applying to the associated job."""
     from naukri_server.tools.apply import _apply_single
 
-    return await _apply_single(
+    result = await _apply_single(
         job_id=nvite_job_id,
         answers=answers,
         title=title,
@@ -198,123 +223,22 @@ async def _accept_nvite(nvite_job_id: str, answers: Optional[dict], title: Optio
         tracking_extra={"source": "nvite"},
     )
 
+    # Emit InboxInviteAccepted only when the underlying apply succeeded
+    if isinstance(result, dict) and result.get("status") == "applied":
+        try:
+            from naukri_server.events import event_bus, InboxInviteAccepted
+            await event_bus.emit(InboxInviteAccepted(
+                invite_id=str(nvite_job_id),
+                recruiter_id="",
+            ))
+        except Exception as e:
+            logger.warning("Failed to emit InboxInviteAccepted: %s", e)
 
-# ---------------------------------------------------------------------------
-# ISP param validation
-# ---------------------------------------------------------------------------
-
-_VALID_PARAMS_PER_ACTION = {
-    "list": {"limit", "unread_only", "mail_type", "page"},
-    "read": {"message_id", "vcard_id", "unique_id"},
-    "mark_interested": {"mail_id", "conversation_id", "interested"},
-    "accept_nvite": {"nvite_job_id", "answers", "title", "company"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_inbox(
-    action: str = "list",
-    message_id: Optional[str] = None,
-    vcard_id: Optional[str] = None,
-    unique_id: Optional[str] = None,
-    mail_id: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    interested: bool = True,
-    nvite_job_id: Optional[str] = None,
-    answers: Optional[dict] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-    limit: int = 20,
-    unread_only: bool = False,
-    mail_type: str = "",
-    page: int = 1,
-) -> dict:
-    """[Deprecated — use naukri_list_inbox, naukri_read_message, naukri_mark_interested, naukri_accept_nvite instead.]
-
-    Unified inbox management — list messages, read, mark interest, accept NVites.
-
-    Actions:
-      - "list": Fetch inbox messages (use limit/page/unread_only/mail_type for filtering)
-      - "read": Read a specific message (requires message_id, vcard_id, unique_id)
-      - "mark_interested": Signal interest to recruiter (requires mail_id, conversation_id; optional interested)
-      - "accept_nvite": Accept recruiter NVite by applying (requires nvite_job_id; optional answers, title, company)
-
-    Args:
-        action: "list" | "read" | "mark_interested" | "accept_nvite"
-        message_id: Required for read — message ID from list results
-        vcard_id: Required for read — VCard ID from list results
-        unique_id: Required for read — unique ID from list results
-        mail_id: Required for mark_interested — mail ID from list/read results
-        conversation_id: Required for mark_interested — from read results
-        interested: For mark_interested — True=interested, False=not interested (default True)
-        nvite_job_id: Required for accept_nvite — from list → job_details.nvite_job_id
-        answers: For accept_nvite — screening question answers {question_id: answer}
-        title: For accept_nvite — job title for tracking
-        company: For accept_nvite — company name for tracking
-        limit: For list — max messages (default 20)
-        unread_only: For list — only unread messages (default False)
-        mail_type: For list — filter by type e.g. "powerNvite" (default "" for all)
-        page: For list — page number (default 1)
-
-    Returns:
-        - list: {status, total, count, page, has_more, unread, total_power_nvite, unread_power_nvite, messages: [...]}
-        - read: {status, message_id, subject, content, date, type, conversation_id}
-        - mark_interested: {status, mail_id, interested, message}
-        - accept_nvite: {status: "applied"|"needs_input"|"already_applied"|"error", ...}
-        - {status: "error", message} on failure
-    """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "message_id": message_id, "vcard_id": vcard_id, "unique_id": unique_id,
-        "mail_id": mail_id, "conversation_id": conversation_id,
-        "interested": interested if not interested else None,
-        "nvite_job_id": nvite_job_id, "answers": answers,
-        "title": title, "company": company,
-        "limit": limit if limit != 20 else None,
-        "unread_only": unread_only if unread_only else None,
-        "mail_type": mail_type if mail_type else None,
-        "page": page if page != 1 else None,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
-
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
-
-    # ── list ───────────────────────────────────────────────────────────
-    if action == "list":
-        return _attach_unused(await handle_tool_action(lambda: _fetch_inbox(limit=limit, unread_only=unread_only, mail_type=mail_type, page=page), "inbox.list"))
-
-    # ── read ───────────────────────────────────────────────────────────
-    elif action == "read":
-        if not message_id or not vcard_id or not unique_id:
-            return {"status": "error", "message": "read requires message_id, vcard_id, and unique_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _read_message(message_id, vcard_id, unique_id), "inbox.read"))
-
-    # ── mark_interested ────────────────────────────────────────────────
-    elif action == "mark_interested":
-        if not mail_id or not conversation_id:
-            return {"status": "error", "message": "mark_interested requires mail_id and conversation_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _mark_interested(mail_id, conversation_id, interested), "inbox.mark_interested"))
-
-    # ── accept_nvite ──────────────────────────────────────────────────
-    elif action == "accept_nvite":
-        if not nvite_job_id:
-            return {"status": "error", "message": "accept_nvite requires nvite_job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _accept_nvite(nvite_job_id, answers, title, company), "inbox.accept_nvite"))
-
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, read, mark_interested, accept_nvite", "error_code": "VALIDATION_ERROR"}
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Single-purpose MCP tools (preferred over deprecated naukri_inbox)
+# Single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()

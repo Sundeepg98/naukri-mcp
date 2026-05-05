@@ -2,6 +2,9 @@
 
 Registered at server startup via import in __init__.py.
 All handlers are async, fire-and-forget, and isolated (exceptions don't propagate).
+
+Migrated to @subscriber decorator (Track 1: unified registry framework).
+Wiring happens in __init__.py via wire_subscribers(event_bus).
 """
 
 import logging
@@ -16,12 +19,18 @@ from naukri_server.events import (
     ProfileUpdated, ProfileBoosted, AlertCreated, AlertUpdated, AlertDeleted,
     ApplicationsPurged, ResumeUploaded, PhotoUploaded, PhotoDeleted,
     CachedAnswerUpdated, CachedAnswerDeleted, SettingsUpdated,
+    InboxMessageRead, InboxInviteAccepted,
     NewEndpointDiscovered,
+    AgentCycleStarted, AgentCycleCompleted, AgentJobApplied, AgentJobSkipped,
+    AgentObserveCompleted, AgentDecideCompleted, AgentActCompleted,
+    ScheduledTaskCompleted,
 )
+from naukri_server.framework.registry import subscriber
 
 logger = logging.getLogger(__name__)
 
 
+@subscriber(ApplicationSubmitted)
 async def _on_application_submitted(event: ApplicationSubmitted):
     """Auto-set 7-day follow-up reminder on successful apply."""
     if not event.job_id:
@@ -41,6 +50,7 @@ async def _on_application_submitted(event: ApplicationSubmitted):
         logger.warning("Subscriber _on_application_submitted failed: %s", e)
 
 
+@subscriber(ApplicationStatusChanged)
 async def _on_status_change(event: ApplicationStatusChanged):
     """Store notification on meaningful status changes."""
     if not event.job_id or not event.new_status:
@@ -70,6 +80,7 @@ async def _on_status_change(event: ApplicationStatusChanged):
         logger.warning("Subscriber _on_status_change failed: %s", e)
 
 
+@subscriber(ApplicationStale)
 async def _on_application_stale(event: ApplicationStale):
     """Store notification + trigger follow-up workflow for high-priority stale apps."""
     try:
@@ -98,6 +109,7 @@ async def _on_application_stale(event: ApplicationStale):
         logger.warning("Subscriber _on_application_stale failed: %s", e)
 
 
+@subscriber(ApplicationInterviewScheduled)
 async def _on_interview_scheduled(event: ApplicationInterviewScheduled):
     """Store notification + trigger interview lifecycle workflow."""
     try:
@@ -126,6 +138,7 @@ async def _on_interview_scheduled(event: ApplicationInterviewScheduled):
         logger.warning("Subscriber _on_interview_scheduled failed: %s", e)
 
 
+@subscriber(SyncCompleted)
 async def _on_sync_completed(event: SyncCompleted):
     """Store notification if sync found changes."""
     if event.status_changes_count == 0 and event.new_added == 0:
@@ -148,6 +161,7 @@ async def _on_sync_completed(event: SyncCompleted):
         logger.warning("Subscriber _on_sync_completed failed: %s", e)
 
 
+@subscriber(RecruiterEngaged)
 async def _on_recruiter_engaged(event: RecruiterEngaged):
     """Store notification when recruiter contacts you."""
     try:
@@ -164,6 +178,7 @@ async def _on_recruiter_engaged(event: RecruiterEngaged):
         logger.warning("Subscriber _on_recruiter_engaged failed: %s", e)
 
 
+@subscriber(ReminderDue)
 async def _on_reminder_due(event: ReminderDue):
     """Store notification for due reminders."""
     try:
@@ -180,6 +195,7 @@ async def _on_reminder_due(event: ReminderDue):
         logger.warning("Subscriber _on_reminder_due failed: %s", e)
 
 
+@subscriber(ProfileScoreChanged)
 async def _on_profile_score_changed(event: ProfileScoreChanged):
     """Store notification when profile completeness score is assessed."""
     try:
@@ -195,6 +211,7 @@ async def _on_profile_score_changed(event: ProfileScoreChanged):
         logger.warning("Subscriber _on_profile_score_changed failed: %s", e)
 
 
+@subscriber(SavedJobExpiring)
 async def _on_saved_job_expiring(event: SavedJobExpiring):
     """Store high-priority notification when a saved job is about to expire."""
     try:
@@ -211,6 +228,7 @@ async def _on_saved_job_expiring(event: SavedJobExpiring):
         logger.warning("Subscriber _on_saved_job_expiring failed: %s", e)
 
 
+@subscriber(SavedJobAdded)
 async def _on_saved_job_added(event: SavedJobAdded):
     """Store low-priority notification when a job is saved."""
     try:
@@ -227,6 +245,7 @@ async def _on_saved_job_added(event: SavedJobAdded):
         logger.warning("Subscriber _on_saved_job_added failed: %s", e)
 
 
+@subscriber(SavedJobRemoved)
 async def _on_saved_job_removed(event: SavedJobRemoved):
     """Store low-priority notification when a saved job is removed."""
     try:
@@ -243,6 +262,7 @@ async def _on_saved_job_removed(event: SavedJobRemoved):
         logger.warning("Subscriber _on_saved_job_removed failed: %s", e)
 
 
+@subscriber(ReminderSet)
 async def _on_reminder_set(event: ReminderSet):
     """Store low-priority notification when a reminder is created."""
     try:
@@ -259,6 +279,7 @@ async def _on_reminder_set(event: ReminderSet):
         logger.warning("Subscriber _on_reminder_set failed: %s", e)
 
 
+@subscriber(BrowserCrashed)
 async def _on_browser_crashed(event: BrowserCrashed):
     """Store notification when browser crashes."""
     try:
@@ -275,6 +296,7 @@ async def _on_browser_crashed(event: BrowserCrashed):
         logger.warning("Subscriber _on_browser_crashed failed: %s", e)
 
 
+@subscriber(BrowserRecovered)
 async def _on_browser_recovered(event: BrowserRecovered):
     """Store notification on successful recovery."""
     try:
@@ -290,6 +312,7 @@ async def _on_browser_recovered(event: BrowserRecovered):
         logger.warning("Subscriber _on_browser_recovered failed: %s", e)
 
 
+@subscriber(ProbeStateChanged)
 async def _on_probe_state_changed(event: ProbeStateChanged):
     """Store notification when critical probe changes to unhealthy."""
     if event.criticality != "critical" or event.new_status != "unhealthy":
@@ -308,6 +331,7 @@ async def _on_probe_state_changed(event: ProbeStateChanged):
         logger.warning("Subscriber _on_probe_state_changed failed: %s", e)
 
 
+@subscriber(ProfileUpdated)
 async def _on_profile_updated(event: ProfileUpdated):
     """Store notification when profile fields are updated."""
     try:
@@ -324,6 +348,7 @@ async def _on_profile_updated(event: ProfileUpdated):
         logger.warning("Subscriber _on_profile_updated failed: %s", e)
 
 
+@subscriber(ProfileBoosted)
 async def _on_profile_boosted(event: ProfileBoosted):
     """Store notification when profile is boosted for visibility."""
     try:
@@ -340,6 +365,7 @@ async def _on_profile_boosted(event: ProfileBoosted):
         logger.warning("Subscriber _on_profile_boosted failed: %s", e)
 
 
+@subscriber(AlertCreated)
 async def _on_alert_created(event: AlertCreated):
     """Store notification when a job alert is created."""
     try:
@@ -356,6 +382,7 @@ async def _on_alert_created(event: AlertCreated):
         logger.warning("Subscriber _on_alert_created failed: %s", e)
 
 
+@subscriber(AlertUpdated)
 async def _on_alert_updated(event: AlertUpdated):
     """Store notification when a job alert is modified."""
     try:
@@ -372,6 +399,7 @@ async def _on_alert_updated(event: AlertUpdated):
         logger.warning("Subscriber _on_alert_updated failed: %s", e)
 
 
+@subscriber(AlertDeleted)
 async def _on_alert_deleted(event: AlertDeleted):
     """Store notification when a job alert is deleted."""
     try:
@@ -388,6 +416,7 @@ async def _on_alert_deleted(event: AlertDeleted):
         logger.warning("Subscriber _on_alert_deleted failed: %s", e)
 
 
+@subscriber(ApplicationsPurged)
 async def _on_applications_purged(event: ApplicationsPurged):
     """Store notification when old applications are purged."""
     try:
@@ -404,6 +433,7 @@ async def _on_applications_purged(event: ApplicationsPurged):
         logger.warning("Subscriber _on_applications_purged failed: %s", e)
 
 
+@subscriber(ResumeUploaded)
 async def _on_resume_uploaded(event: ResumeUploaded):
     """Store notification when a resume is uploaded."""
     try:
@@ -420,6 +450,7 @@ async def _on_resume_uploaded(event: ResumeUploaded):
         logger.warning("Subscriber _on_resume_uploaded failed: %s", e)
 
 
+@subscriber(PhotoUploaded)
 async def _on_photo_uploaded(event: PhotoUploaded):
     """Store notification when a photo is uploaded."""
     try:
@@ -436,6 +467,7 @@ async def _on_photo_uploaded(event: PhotoUploaded):
         logger.warning("Subscriber _on_photo_uploaded failed: %s", e)
 
 
+@subscriber(PhotoDeleted)
 async def _on_photo_deleted(event: PhotoDeleted):
     """Store notification when a photo is deleted."""
     try:
@@ -451,6 +483,7 @@ async def _on_photo_deleted(event: PhotoDeleted):
         logger.warning("Subscriber _on_photo_deleted failed: %s", e)
 
 
+@subscriber(CachedAnswerUpdated)
 async def _on_cached_answer_updated(event: CachedAnswerUpdated):
     """Store notification when a cached screening answer is updated."""
     try:
@@ -467,6 +500,7 @@ async def _on_cached_answer_updated(event: CachedAnswerUpdated):
         logger.warning("Subscriber _on_cached_answer_updated failed: %s", e)
 
 
+@subscriber(CachedAnswerDeleted)
 async def _on_cached_answer_deleted(event: CachedAnswerDeleted):
     """Store notification when a cached screening answer is deleted."""
     try:
@@ -483,6 +517,7 @@ async def _on_cached_answer_deleted(event: CachedAnswerDeleted):
         logger.warning("Subscriber _on_cached_answer_deleted failed: %s", e)
 
 
+@subscriber(SettingsUpdated)
 async def _on_settings_updated(event: SettingsUpdated):
     """Store notification when account settings change."""
     try:
@@ -499,6 +534,7 @@ async def _on_settings_updated(event: SettingsUpdated):
         logger.warning("Subscriber _on_settings_updated failed: %s", e)
 
 
+@subscriber(NewEndpointDiscovered)
 async def _on_new_endpoint_discovered(event: NewEndpointDiscovered):
     """Store notification when a new API endpoint is discovered."""
     try:
@@ -516,40 +552,166 @@ async def _on_new_endpoint_discovered(event: NewEndpointDiscovered):
 
 
 # ---------------------------------------------------------------------------
+# Agent & scheduler event handlers
+# ---------------------------------------------------------------------------
+
+@subscriber(AgentCycleCompleted)
+async def _on_agent_cycle_completed(event):
+    """Store notification for completed agent cycles."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "AgentCycleCompleted",
+            "title": f"Agent cycle: {event.applied_count} applied, {event.skipped_count} skipped",
+            "body": f"Cycle {event.cycle_id} completed in {event.duration_ms:.0f}ms — status: {event.status}",
+            "priority": "medium" if event.applied_count == 0 else "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("Failed to handle AgentCycleCompleted: %s", e)
+
+
+@subscriber(AgentJobApplied)
+async def _on_agent_job_applied(event):
+    """Store notification when agent applies to a job."""
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "AgentJobApplied",
+            "title": f"Agent applied: {event.title} at {event.company}",
+            "body": f"Fit score: {event.fit_score} — Cycle: {event.cycle_id}",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("Failed to handle AgentJobApplied: %s", e)
+
+
+@subscriber(ScheduledTaskCompleted)
+async def _on_scheduled_task_completed(event):
+    """Log scheduled task completions for monitoring."""
+    if event.status == "failed":
+        try:
+            from naukri_server.database import store_notification
+            await store_notification({
+                "event_type": "ScheduledTaskFailed",
+                "title": f"Scheduled task failed: {event.task_name}",
+                "body": f"Error: {event.error}" if event.error else f"Task {event.task_name} failed after {event.duration_ms:.0f}ms",
+                "priority": "high",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.warning("Failed to handle ScheduledTaskCompleted: %s", e)
+
+
+@subscriber(AgentCycleStarted)
+async def _on_agent_cycle_started(event):
+    """Log agent cycle start."""
+    try:
+        logger.info("Agent cycle %s started: mode=%s, %d searches",
+                    event.cycle_id, event.mode, event.search_count)
+    except Exception as e:
+        logger.warning("Failed to handle AgentCycleStarted: %s", e)
+
+
+@subscriber(AgentJobSkipped)
+async def _on_agent_job_skipped(event):
+    """Store notification for skipped jobs (aggregated)."""
+    try:
+        logger.info("Agent skipped job %s at %s: %s (fit: %d)",
+                    event.job_id, event.company, event.reason, event.fit_score)
+    except Exception as e:
+        logger.warning("Failed to handle AgentJobSkipped: %s", e)
+
+
+@subscriber(AgentObserveCompleted)
+async def _on_agent_observe_completed(event):
+    """Log agent observe step completion."""
+    try:
+        logger.info("Agent %s: observe done — %d applied IDs, %d remaining",
+                    event.cycle_id, event.applied_ids_count, event.daily_remaining)
+    except Exception as e:
+        logger.warning("Failed to handle AgentObserveCompleted: %s", e)
+
+
+@subscriber(AgentDecideCompleted)
+async def _on_agent_decide_completed(event):
+    """Log agent decide step completion."""
+    try:
+        logger.info("Agent %s: decide done — %d searches, %d found, %d candidates",
+                    event.cycle_id, event.searches_run, event.total_found, event.candidates_count)
+    except Exception as e:
+        logger.warning("Failed to handle AgentDecideCompleted: %s", e)
+
+
+@subscriber(AgentActCompleted)
+async def _on_agent_act_completed(event):
+    """Log agent act step completion."""
+    try:
+        logger.info("Agent %s: act done — mode=%s, applied=%d",
+                    event.cycle_id, event.mode, event.applied_count)
+    except Exception as e:
+        logger.warning("Failed to handle AgentActCompleted: %s", e)
+
+
+@subscriber(InboxMessageRead)
+async def _on_inbox_message_read(event: InboxMessageRead):
+    """Track last-read timestamp for inbox messages.
+
+    Persists a tiny notification entry so the read activity is auditable
+    via event_log/notifications. Lazy import + try/except — never crash caller.
+    """
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "InboxMessageRead",
+            "title": "Inbox message read",
+            "body": f"Message {event.message_id} (thread {event.thread_id}) read",
+            "priority": "low",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"thread_id": event.thread_id, "message_id": event.message_id},
+        })
+        logger.debug("Inbox message read: thread=%s msg=%s", event.thread_id, event.message_id)
+    except Exception as e:
+        logger.warning("Failed to handle InboxMessageRead: %s", e)
+
+
+@subscriber(InboxInviteAccepted)
+async def _on_inbox_invite_accepted(event: InboxInviteAccepted):
+    """React to a recruiter NVite acceptance — log + notify.
+
+    Stores a high-priority notification so the user sees the accepted invite
+    in the daily brief. Lazy import + try/except — never crash caller.
+    """
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "InboxInviteAccepted",
+            "title": "Recruiter invite accepted",
+            "body": f"Invite {event.invite_id} accepted",
+            "priority": "high",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"invite_id": event.invite_id, "recruiter_id": event.recruiter_id},
+        })
+        logger.info("Invite accepted: %s", event.invite_id)
+    except Exception as e:
+        logger.warning("Failed to handle InboxInviteAccepted: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Register all subscribers with the global EventBus
 # ---------------------------------------------------------------------------
 
 def register_all():
-    """Register all subscribers. Called once at server startup."""
-    event_bus.subscribe(ApplicationSubmitted, _on_application_submitted)
-    event_bus.subscribe(ApplicationStatusChanged, _on_status_change)
-    event_bus.subscribe(ApplicationStale, _on_application_stale)
-    event_bus.subscribe(ApplicationInterviewScheduled, _on_interview_scheduled)
-    event_bus.subscribe(SyncCompleted, _on_sync_completed)
-    event_bus.subscribe(RecruiterEngaged, _on_recruiter_engaged)
-    event_bus.subscribe(ReminderDue, _on_reminder_due)
-    event_bus.subscribe(ProfileScoreChanged, _on_profile_score_changed)
-    event_bus.subscribe(SavedJobExpiring, _on_saved_job_expiring)
-    event_bus.subscribe(SavedJobAdded, _on_saved_job_added)
-    event_bus.subscribe(SavedJobRemoved, _on_saved_job_removed)
-    event_bus.subscribe(ReminderSet, _on_reminder_set)
-    event_bus.subscribe(BrowserCrashed, _on_browser_crashed)
-    event_bus.subscribe(BrowserRecovered, _on_browser_recovered)
-    event_bus.subscribe(ProbeStateChanged, _on_probe_state_changed)
-    event_bus.subscribe(ProfileUpdated, _on_profile_updated)
-    event_bus.subscribe(ProfileBoosted, _on_profile_boosted)
-    event_bus.subscribe(AlertCreated, _on_alert_created)
-    event_bus.subscribe(AlertUpdated, _on_alert_updated)
-    event_bus.subscribe(AlertDeleted, _on_alert_deleted)
-    event_bus.subscribe(ApplicationsPurged, _on_applications_purged)
-    event_bus.subscribe(ResumeUploaded, _on_resume_uploaded)
-    event_bus.subscribe(PhotoUploaded, _on_photo_uploaded)
-    event_bus.subscribe(PhotoDeleted, _on_photo_deleted)
-    event_bus.subscribe(CachedAnswerUpdated, _on_cached_answer_updated)
-    event_bus.subscribe(CachedAnswerDeleted, _on_cached_answer_deleted)
-    event_bus.subscribe(SettingsUpdated, _on_settings_updated)
-    event_bus.subscribe(NewEndpointDiscovered, _on_new_endpoint_discovered)
-    logger.info("Registered %d reactive subscribers", 28)
+    """Register all subscribers. Called once at server startup.
+
+    Replaced 36 hand-written event_bus.subscribe() calls with the unified
+    @subscriber decorator framework. This function now wires the registered
+    handlers to the event bus.
+    """
+    from naukri_server.framework.registry import wire_subscribers
+    count = wire_subscribers(event_bus)
+    logger.info("Registered %d reactive subscribers", count)
 
 
 # Auto-register on import
