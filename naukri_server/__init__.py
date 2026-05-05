@@ -191,4 +191,5 @@ if _oauth_enabled and _oauth_provider is not None and not _oauth_provider._auto_
 from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders, scheduler_tool, agent_tool  # noqa: E402, F401
 from naukri_server import subscribers  # noqa: F401 — registers event handlers
 from naukri_server import resources  # noqa: F401 — registers @mcp.resource() handlers
+from naukri_server import prompts  # noqa: F401 — registers @mcp.prompt() handlers
 from naukri_server.dashboard import routes  # noqa: F401 — registers @mcp.custom_route() endpoints
