@@ -12,6 +12,11 @@ Used by:
   - ambitionbox.py (_enrich_with_rest) for supplementary data
   - research.py for parallel data fetching
   - daily_brief.py for applied-job salary insights
+
+DDD: every read from an AmbitionBox response routes through ``safe_get`` so
+the anti-corruption layer logs missing fields. Cookie management + the
+``_ab_rest_get`` retry loop stay here because tests patch
+``tools.ambitionbox_rest._ab_rest_get`` directly.
 """
 
 import asyncio
@@ -28,6 +33,7 @@ from naukri_server.config import (
     AB_COMPANY_COMPARE_API, AB_COMPANY_LOCATIONS_API, AB_INSIGHTS_APPLIED_API,
     AB_COOKIE_TTL,
 )
+from naukri_server.domain import safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +109,11 @@ async def ab_get_benefits(company_id: str) -> dict:
     logger.info("AB REST: fetching benefits for company %s", company_id)
     url = f"{AB_BENEFITS_API}/{company_id}/benefits-stats"
     data = await _ab_rest_get(url)
-    benefits_data = data.get("data", {})
+    benefits_data = safe_get(data, "data", field_name="data", warn=False, default={})
     return {
         "status": "success",
-        "total_benefits": benefits_data.get("totalBenefits", 0),
-        "benefits": benefits_data.get("benefits", []),
+        "total_benefits": safe_get(benefits_data, "totalBenefits", field_name="totalBenefits", warn=False, default=0),
+        "benefits": safe_get(benefits_data, "benefits", field_name="benefits", warn=False, default=[]),
     }
 
 
@@ -116,26 +122,26 @@ async def ab_get_work_culture(company_id: str) -> dict:
     logger.info("AB REST: fetching work culture for company %s", company_id)
     url = f"{AB_REVIEW_DIST_API}/{company_id}"
     data = await _ab_rest_get(url)
-    dist = data.get("data", {})
+    dist = safe_get(data, "data", field_name="data", warn=False, default={})
     return {
         "status": "success",
-        "reviews_count": dist.get("reviewsCount", 0),
+        "reviews_count": safe_get(dist, "reviewsCount", field_name="reviewsCount", warn=False, default=0),
         "work_timing": {
-            "labels": dist.get("workMonitorLabels", []),
-            "values": dist.get("workMonitorSeries", []),
-            "insight": dist.get("workMonitorInsight", ""),
+            "labels": safe_get(dist, "workMonitorLabels", field_name="workMonitorLabels", warn=False, default=[]),
+            "values": safe_get(dist, "workMonitorSeries", field_name="workMonitorSeries", warn=False, default=[]),
+            "insight": safe_get(dist, "workMonitorInsight", field_name="workMonitorInsight", warn=False, default=""),
         },
         "travel": {
-            "labels": dist.get("travelTagsLabels", []),
-            "values": dist.get("travelTagsSeries", []),
+            "labels": safe_get(dist, "travelTagsLabels", field_name="travelTagsLabels", warn=False, default=[]),
+            "values": safe_get(dist, "travelTagsSeries", field_name="travelTagsSeries", warn=False, default=[]),
         },
         "work_days": {
-            "labels": dist.get("workDaysLabels", []),
-            "values": dist.get("workDaysSeries", []),
+            "labels": safe_get(dist, "workDaysLabels", field_name="workDaysLabels", warn=False, default=[]),
+            "values": safe_get(dist, "workDaysSeries", field_name="workDaysSeries", warn=False, default=[]),
         },
         "shifts": {
-            "labels": dist.get("shiftsLabels", []),
-            "values": dist.get("shiftsSeries", []),
+            "labels": safe_get(dist, "shiftsLabels", field_name="shiftsLabels", warn=False, default=[]),
+            "values": safe_get(dist, "shiftsSeries", field_name="shiftsSeries", warn=False, default=[]),
         },
     }
 
@@ -147,12 +153,12 @@ async def ab_get_interview_questions(company_id: str, designation_id: Optional[s
     if designation_id:
         params["designation"] = designation_id
     data = await _ab_rest_get(AB_INTERVIEW_QS_API, params=params)
-    meta = data.get("meta", {})
+    meta = safe_get(data, "meta", field_name="meta", warn=False, default={})
     return {
         "status": "success",
-        "total_interviews": data.get("totalInterviewExperiencesLive", 0),
-        "count": meta.get("count", 0),
-        "questions": data.get("data", []),
+        "total_interviews": safe_get(data, "totalInterviewExperiencesLive", field_name="totalInterviewExperiencesLive", warn=False, default=0),
+        "count": safe_get(meta, "count", field_name="count", warn=False, default=0),
+        "questions": safe_get(data, "data", field_name="data", warn=False, default=[]),
     }
 
 
@@ -161,7 +167,10 @@ async def ab_get_competitors(company_id: str) -> dict:
     logger.info("AB REST: fetching competitors for company %s", company_id)
     url = f"{AB_COMPANY_COMPARE_API}/{company_id}"
     data = await _ab_rest_get(url)
-    competitors = data if isinstance(data, list) else data.get("data", [])
+    if isinstance(data, list):
+        competitors = data
+    else:
+        competitors = safe_get(data, "data", field_name="data", warn=False, default=[])
     return {
         "status": "success",
         "count": len(competitors),
@@ -174,7 +183,7 @@ async def ab_get_locations(company_id: str) -> dict:
     logger.info("AB REST: fetching locations for company %s", company_id)
     url = f"{AB_COMPANY_LOCATIONS_API}/{company_id}/sectionalDetails"
     data = await _ab_rest_get(url, params={"sections": "companyLocations"})
-    locations = data.get("companyLocations", [])
+    locations = safe_get(data, "companyLocations", field_name="companyLocations", warn=False, default=[])
     return {
         "status": "success",
         "count": len(locations),
@@ -190,7 +199,10 @@ async def ab_get_applied_jobs_insights() -> dict:
     """
     logger.info("AB REST: fetching applied jobs insights")
     data = await _ab_rest_get(AB_INSIGHTS_APPLIED_API)
-    insights = data if isinstance(data, list) else data.get("data", [])
+    if isinstance(data, list):
+        insights = data
+    else:
+        insights = safe_get(data, "data", field_name="data", warn=False, default=[])
     return {
         "status": "success",
         "count": len(insights),
@@ -203,14 +215,13 @@ async def ab_get_salary_rest(company_id: str, job_profile_id: str) -> dict:
     logger.info("AB REST: fetching salary for company %s, profile %s", company_id, job_profile_id)
     url = f"{AB_SALARY_API}/{company_id}/jobProfile/{job_profile_id}/salaryData"
     data = await _ab_rest_get(url)
-    salary_data = data.get("data", {})
-    summary = salary_data.get("summaryData", {})
+    salary_data = safe_get(data, "data", field_name="data", warn=False, default={})
     return {
         "status": "success",
-        "profile_info": salary_data.get("profileInfo", {}),
-        "summary": summary,
-        "confidence": salary_data.get("confidence", ""),
-        "experience_levels": salary_data.get("experienceLevels", []),
-        "ctc_comparison": salary_data.get("ctcComparison", {}),
-        "take_home": salary_data.get("takeHomeSalary", {}),
+        "profile_info": safe_get(salary_data, "profileInfo", field_name="profileInfo", warn=False, default={}),
+        "summary": safe_get(salary_data, "summaryData", field_name="summaryData", warn=False, default={}),
+        "confidence": safe_get(salary_data, "confidence", field_name="confidence", warn=False, default=""),
+        "experience_levels": safe_get(salary_data, "experienceLevels", field_name="experienceLevels", warn=False, default=[]),
+        "ctc_comparison": safe_get(salary_data, "ctcComparison", field_name="ctcComparison", warn=False, default={}),
+        "take_home": safe_get(salary_data, "takeHomeSalary", field_name="takeHomeSalary", warn=False, default={}),
     }
