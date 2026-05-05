@@ -1,11 +1,18 @@
-"""Company tools — search, browse jobs, get slug, follow/unfollow."""
+"""Company tools — search, browse jobs, get slug, follow/unfollow.
+
+Tool layer — all business logic lives in
+``services/company_service.py`` (uses ``safe_get``, ``Salary`` domain
+object, and the ``api_client`` interface). This module is a thin
+``@mcp.tool()`` registry plus back-compat re-exports for
+test patches at ``naukri_server.tools.companies._*``.
+"""
 
 from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.interfaces import api_client  # noqa: F401 — tests patch via this module
-from naukri_server.services.company_service import (
+from naukri_server.services.company_service import (  # noqa: F401
     parse_company as _parse_company,
     first as _first,
     extract_slug_from_url as _extract_slug_from_url,
@@ -17,7 +24,21 @@ from naukri_server.services.company_service import (
     get_follow_status as _get_follow_status,
     follow_or_unfollow as _follow_or_unfollow,
 )
-from naukri_server.utils import derive_slug
+from naukri_server.utils import derive_slug  # noqa: F401 — back-compat re-export
+
+__all__ = [
+    "_parse_company",
+    "_first",
+    "_extract_slug_from_url",
+    "_search_companies",
+    "_get_company_jobs",
+    "_get_company_slug",
+    "_batch_get_slugs",
+    "_batch_follow_status",
+    "_get_follow_status",
+    "_follow_or_unfollow",
+    "derive_slug",
+]
 
 
 # ---------------------------------------------------------------------------
