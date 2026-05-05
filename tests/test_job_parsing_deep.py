@@ -444,17 +444,17 @@ class TestGetJobV1:
 # 14. Bulk fetch via unified tool
 # ---------------------------------------------------------------------------
 
-class TestBulkFetchJobsViaUnifiedTool:
+class TestBulkFetchJobsViaAtomicTools:
     @pytest.mark.asyncio
     async def test_bulk_without_job_ids_returns_error(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="bulk")
+        from naukri_server.tools.jobs import _tool_bulk_fetch_jobs
+        result = await _tool_bulk_fetch_jobs(job_ids=[])
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_detail_v1_without_job_id_returns_error(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="detail_v1")
+        from naukri_server.tools.jobs import _tool_job_detail_v1
+        result = await _tool_job_detail_v1(job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"

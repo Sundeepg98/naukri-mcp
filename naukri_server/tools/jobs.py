@@ -8,7 +8,6 @@ from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -295,18 +294,8 @@ async def _get_similar_jobs_rest(job_id: str, limit: int = 10) -> dict:
     }
 
 
-_VALID_PARAMS_PER_ACTION = {
-    "get": {"job_id"},
-    "similar": {"job_id", "limit", "page"},
-    "compare": {"job_ids", "timeout_seconds"},
-    "report_fraud": {"job_id", "reason"},
-    "detail_v1": {"job_id"},
-    "bulk": {"job_ids"},
-}
-
-
 # ---------------------------------------------------------------------------
-# Jobs registry — maps action to handler(kwargs) -> awaitable[dict]
+# Helpers used by the atomic single-purpose tools below
 # ---------------------------------------------------------------------------
 
 async def _do_similar(**kw) -> dict:
@@ -326,97 +315,8 @@ async def _do_compare(**kw) -> dict:
     return await _compare_jobs(job_ids=kw["job_ids"], timeout_seconds=kw.get("timeout_seconds", 120))
 
 
-_JOBS_REGISTRY: dict[str, callable] = {
-    "get": lambda **kw: _get_job(job_id_or_url=kw["job_id"]),
-    "similar": _do_similar,
-    "compare": _do_compare,
-    "bulk": lambda **kw: _bulk_fetch_jobs(job_ids=kw["job_ids"]),
-    "detail_v1": lambda **kw: _get_job_v1(job_id=kw["job_id"]),
-    "report_fraud": lambda **kw: _report_fraud(job_id=kw["job_id"], reason=kw["reason"]),
-}
-
-
-@mcp.tool()
-async def naukri_jobs(
-    action: str = "get",
-    job_id: Optional[str] = None,
-    reason: Optional[str] = None,
-    # similar params
-    limit: int = 10,
-    page: int = 1,
-    # compare params
-    job_ids: Optional[list[str]] = None,
-    timeout_seconds: int = 120,
-) -> dict:
-    """[Deprecated — use naukri_get_job, naukri_similar_jobs, naukri_compare_jobs, naukri_report_fraud, naukri_job_detail_v1, naukri_bulk_fetch_jobs instead] Unified job operations.
-
-    Actions:
-        get: Fetch full job details (REST-first, browser fallback). Accepts job_id or full URL.
-        similar: Find jobs similar to a given job_id.
-        compare: Compare 2-5 jobs side-by-side with fit scores.
-        report_fraud: Report a fraudulent job listing.
-        detail_v1: Get V1 job detail — walk-in info, contact details, jd views/applies, closing date
-        bulk: Fetch multiple jobs at once — up to 20 job IDs in one call
-
-    Args:
-        action: "get", "similar", "compare", "report_fraud", "detail_v1", or "bulk"
-        job_id: Job ID or full Naukri URL (required for get, similar, report_fraud, detail_v1)
-        reason: Reason for fraud report (required for report_fraud)
-        limit: Max similar jobs to return (default 10, for similar action)
-        page: Page number for similar jobs (default 1, for similar action)
-        job_ids: List of 2-5 job IDs to compare (required for compare action), or up to 20 for bulk
-        timeout_seconds: Max seconds for compare before timeout (default 120)
-
-    Returns:
-        get: {status, title, company, salary, experience, location, skills, match_score, is_applied, can_apply, url, ...}
-        similar: {status, job_id, source, total, count, page, has_more, jobs: [...]}
-        compare: {status, count, jobs: [...], common_skills, all_skills, best_match_job_id, average_fit_score}
-        report_fraud: {status, message}
-        detail_v1: {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}
-        bulk: {status, count, jobs: [...]}
-    """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id, "reason": reason,
-        "limit": limit if limit != 10 else None,
-        "page": page if page != 1 else None,
-        "job_ids": job_ids,
-        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
-
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
-
-    # ── Pre-validation ─────────────────────────────────────────────────
-    if action in ("get", "similar", "detail_v1", "report_fraud") and not job_id:
-        return {"status": "error", "message": f"job_id required for {action}", "error_code": "VALIDATION_ERROR"}
-    if action in ("compare", "bulk") and not job_ids:
-        msg = "compare requires job_ids (list of 2-5 IDs)." if action == "compare" else "bulk requires job_ids (list of 1-20 IDs)."
-        return {"status": "error", "message": msg, "error_code": "VALIDATION_ERROR"}
-    if action == "report_fraud" and not reason:
-        return {"status": "error", "message": "reason required for report_fraud", "error_code": "VALIDATION_ERROR"}
-
-    # ── Registry lookup ─────────────────────────────────────────────────
-    handler = _JOBS_REGISTRY.get(action)
-    if handler:
-        kw = {
-            "job_id": job_id, "reason": reason, "limit": limit,
-            "page": page, "job_ids": job_ids, "timeout_seconds": timeout_seconds,
-        }
-        return _attach_unused(await handle_tool_action(lambda: handler(**kw), f"jobs.{action}"))
-
-    return {
-        "status": "error",
-        "message": f"Unknown action '{action}'. Use: {', '.join(_JOBS_REGISTRY)}",
-        "error_code": "VALIDATION_ERROR",
-    }
-
-
 # ============================================================================
-# Single-purpose job tools (preferred over consolidated naukri_jobs)
+# Single-purpose job tools
 # ============================================================================
 
 

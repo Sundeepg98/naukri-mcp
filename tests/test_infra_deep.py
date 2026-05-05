@@ -180,12 +180,12 @@ class TestDebugRouting:
 # =====================================================================
 
 class TestCompanyFollowRouting:
-    """Tests for company follow_status, follow, and unfollow routing in naukri_company."""
+    """Tests for atomic follow_status / follow / unfollow tools."""
 
     @pytest.mark.asyncio
     async def test_follow_status_requires_id(self):
-        from naukri_server.tools.companies import naukri_company
-        result = await naukri_company(action="follow_status")
+        from naukri_server.tools.companies import naukri_follow_status
+        result = await naukri_follow_status()
         assert result["status"] == "error"
         assert "group_id" in result["message"] or "group_ids" in result["message"]
         assert result["error_code"] == "VALIDATION_ERROR"
@@ -198,8 +198,8 @@ class TestCompanyFollowRouting:
             "followed": ["g1"],
             "not_followed": [],
         }
-        from naukri_server.tools.companies import naukri_company
-        result = await naukri_company(action="follow_status", group_id="g1")
+        from naukri_server.tools.companies import naukri_follow_status
+        result = await naukri_follow_status(group_id="g1")
         assert result["status"] == "success"
         mock_get_status.assert_awaited_once_with(["g1"])
 
@@ -211,8 +211,8 @@ class TestCompanyFollowRouting:
             "action": "followed",
             "followed": ["g1", "g2"],
         }
-        from naukri_server.tools.companies import naukri_company
-        result = await naukri_company(action="follow", group_ids=["g1", "g2"])
+        from naukri_server.tools.companies import naukri_follow_company
+        result = await naukri_follow_company(group_ids=["g1", "g2"], action="follow")
         assert result["status"] == "success"
         mock_follow.assert_awaited_once_with(["g1", "g2"], "follow")
 
@@ -224,18 +224,10 @@ class TestCompanyFollowRouting:
             "action": "unfollowed",
             "unfollowed": ["g1"],
         }
-        from naukri_server.tools.companies import naukri_company
-        result = await naukri_company(action="unfollow", group_id="g1")
+        from naukri_server.tools.companies import naukri_follow_company
+        result = await naukri_follow_company(group_id="g1", action="unfollow")
         assert result["status"] == "success"
         mock_unfollow.assert_awaited_once_with(["g1"], "unfollow")
-
-    @pytest.mark.asyncio
-    async def test_company_invalid_action(self):
-        from naukri_server.tools.companies import naukri_company
-        result = await naukri_company(action="nonexistent")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
 
 
 # =====================================================================

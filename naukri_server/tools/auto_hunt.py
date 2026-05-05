@@ -3,6 +3,8 @@
 import asyncio
 from typing import Optional
 
+from mcp.server.fastmcp import Context
+
 from naukri_server import mcp
 from naukri_server.config import logger
 from naukri_server.domain.fit_score import FitScore
@@ -23,6 +25,7 @@ async def naukri_auto_hunt(
     salary_min: Optional[int] = None,
     salary_max: Optional[int] = None,
     timeout_seconds: int = 120,
+    ctx: Context | None = None,
 ) -> dict:
     """Automated job hunting — search, score against your profile, return ranked matches.
 
@@ -31,7 +34,7 @@ async def naukri_auto_hunt(
     Skills are alias-normalized (JS = JavaScript, k8s = Kubernetes).
     Returns only jobs above the minimum fit score, ranked from best to worst match.
 
-    Does NOT auto-apply — use naukri_smart_apply or naukri_apply for that.
+    Does NOT auto-apply — use naukri_apply_top_fits or naukri_apply for that.
 
     Args:
         keywords: Job search keywords (e.g., "Python developer", "data engineer")
@@ -59,12 +62,20 @@ async def naukri_auto_hunt(
         from naukri_server.tools.search import naukri_search_jobs
         from naukri_server.tools.profile import get_cached_profile
 
-        # Parallel: search jobs + fetch profile
+        if ctx:
+            try:
+                await ctx.info(f"Searching '{keywords}' in '{location or 'any'}'")
+            except Exception:
+                pass
+
+        # Parallel: first page of search + fetch profile
+        per_page = min(limit, 20)  # Naukri API caps at 20 per page
         search_result, profile_result = await asyncio.gather(
             naukri_search_jobs(
                 keywords=keywords, location=location, limit=limit,
                 freshness=freshness, work_mode=work_mode,
                 experience=experience, salary_min=salary_min, salary_max=salary_max,
+                page=1,
             ),
             get_cached_profile(),
             return_exceptions=True,
@@ -78,7 +89,52 @@ async def naukri_auto_hunt(
             msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
             return {"status": "error", "message": f"Profile fetch failed: {msg}", "error_code": "API_ERROR"}
 
-        jobs = search_result.get("jobs", [])
+        # Paginate: fetch up to 3 pages (60 jobs max)
+        all_jobs = list(search_result.get("jobs", []))
+        max_pages = min(3, (limit + per_page - 1) // per_page)  # enough pages to cover limit
+
+        if ctx:
+            try:
+                await ctx.report_progress(
+                    1, max_pages,
+                    message=f"Page 1: {len(all_jobs)} jobs",
+                )
+            except Exception:
+                pass
+
+        if all_jobs and search_result.get("has_more", False) and max_pages > 1:
+            for page_num in range(2, max_pages + 1):
+                try:
+                    next_result = await naukri_search_jobs(
+                        keywords=keywords, location=location, limit=limit,
+                        freshness=freshness, work_mode=work_mode,
+                        experience=experience, salary_min=salary_min, salary_max=salary_max,
+                        page=page_num,
+                    )
+                except Exception:
+                    break  # Later pages failing is OK
+
+                if isinstance(next_result, Exception) or next_result.get("status") == "error":
+                    break
+
+                page_jobs = next_result.get("jobs", [])
+                if not page_jobs:
+                    break
+                all_jobs.extend(page_jobs)
+
+                if ctx:
+                    try:
+                        await ctx.report_progress(
+                            page_num, max_pages,
+                            message=f"Page {page_num}: {len(page_jobs)} jobs",
+                        )
+                    except Exception:
+                        pass
+
+                if not next_result.get("has_more", False):
+                    break
+
+        jobs = all_jobs[:limit]  # Respect the original limit
         if not jobs:
             return {"status": "success", "jobs_found": 0, "jobs_matched": 0, "ranked_jobs": []}
 
@@ -113,6 +169,12 @@ async def naukri_auto_hunt(
             else float(_p_exp_nums[0]) if _p_exp_nums
             else 0.0
         )
+
+        if ctx:
+            try:
+                await ctx.info(f"Scoring {len(jobs)} jobs against profile")
+            except Exception:
+                pass
 
         # Score each job
         ranked = []
@@ -163,6 +225,14 @@ async def naukri_auto_hunt(
 
         # Sort by fit score descending
         ranked.sort(key=lambda x: x["fit_score"], reverse=True)
+
+        if ctx:
+            try:
+                await ctx.info(
+                    f"Hunt complete: {len(ranked)} matches at >= {min_fit_score}"
+                )
+            except Exception:
+                pass
 
         return {
             "status": "success",

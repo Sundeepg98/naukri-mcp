@@ -236,58 +236,50 @@ class TestGetActivityLevel:
 
 
 # ---------------------------------------------------------------------------
-# 4. naukri_performance — routing + validation
+# 4. Performance atomic tools — routing + validation
 # ---------------------------------------------------------------------------
 
-class TestNaukriPerformanceRouting:
+class TestPerformanceAtomic:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.performance._get_search_impressions", new_callable=AsyncMock)
-    async def test_impressions_metric_routes(self, mock_impressions):
+    async def test_search_impressions_routes(self, mock_impressions):
         mock_impressions.return_value = {"status": "success"}
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="impressions", days=7)
+        from naukri_server.tools.performance import naukri_search_impressions
+        result = await naukri_search_impressions(days=7)
         assert result["status"] == "success"
         mock_impressions.assert_awaited_once_with(days=7)
 
     @pytest.mark.asyncio
-    async def test_impressions_invalid_days(self):
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="impressions", days=14)
+    async def test_search_impressions_invalid_days(self):
+        from naukri_server.tools.performance import naukri_search_impressions
+        result = await naukri_search_impressions(days=14)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.performance._get_recruiter_activity", new_callable=AsyncMock)
-    async def test_recruiter_activity_metric_routes(self, mock_ra):
+    async def test_recruiter_activity_routes(self, mock_ra):
         mock_ra.return_value = {"status": "success"}
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="recruiter_activity", page=1, limit=50)
+        from naukri_server.tools.performance import naukri_recruiter_activity
+        result = await naukri_recruiter_activity(page=1, limit=50)
         assert result["status"] == "success"
         mock_ra.assert_awaited_once_with(page=1, size=50, filter_by=None)
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.performance._get_activity_level", new_callable=AsyncMock)
-    async def test_activity_level_metric_routes(self, mock_al):
+    async def test_activity_level_routes(self, mock_al):
         mock_al.return_value = {"status": "success", "level": "MEDIUM"}
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="activity_level")
+        from naukri_server.tools.performance import naukri_activity_level
+        result = await naukri_activity_level()
         assert result["status"] == "success"
         mock_al.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_metric_validation_error(self):
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="foobar")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown metric" in result["message"]
-
-    @pytest.mark.asyncio
     @patch("naukri_server.tools.performance._get_search_impressions", new_callable=AsyncMock)
-    async def test_impressions_api_error_handled(self, mock_impressions):
+    async def test_search_impressions_api_error_handled(self, mock_impressions):
         mock_impressions.side_effect = NaukriAPIError(500, "Internal Server Error")
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="impressions", days=7)
+        from naukri_server.tools.performance import naukri_search_impressions
+        result = await naukri_search_impressions(days=7)
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
         assert result["http_status"] == 500
@@ -296,8 +288,8 @@ class TestNaukriPerformanceRouting:
     @patch("naukri_server.tools.performance._get_recruiter_activity", new_callable=AsyncMock)
     async def test_recruiter_activity_exception_handled(self, mock_ra):
         mock_ra.side_effect = RuntimeError("network down")
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="recruiter_activity")
+        from naukri_server.tools.performance import naukri_recruiter_activity
+        result = await naukri_recruiter_activity()
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
 
@@ -305,8 +297,8 @@ class TestNaukriPerformanceRouting:
     @patch("naukri_server.tools.performance._get_activity_level", new_callable=AsyncMock)
     async def test_activity_level_exception_handled(self, mock_al):
         mock_al.side_effect = NaukriAPIError(401, "Unauthorized")
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="activity_level")
+        from naukri_server.tools.performance import naukri_activity_level
+        result = await naukri_activity_level()
         assert result["status"] == "error"
         assert result["http_status"] == 401
 

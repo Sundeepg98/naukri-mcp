@@ -13,51 +13,43 @@ from unittest.mock import AsyncMock, patch
 # =====================================================================
 
 class TestNotifications:
-    """Tests for naukri_server.tools.notifications.naukri_notifications."""
-
-    @pytest.mark.asyncio
-    async def test_notifications_invalid_action(self):
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+    """Tests for naukri_server.tools.notifications atomic tools."""
 
     @pytest.mark.asyncio
     async def test_notifications_mark_read_requires_id(self):
-        """mark_read without notification_id should fail validation."""
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_read")
+        """naukri_mark_notification_read without notification_id should fail validation."""
+        from naukri_server.tools.notifications import naukri_mark_notification_read
+        result = await naukri_mark_notification_read()
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "notification_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_notifications_mark_read_requires_date(self):
-        """mark_read with notification_id but without date should fail validation."""
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_read", notification_id="n123")
+        """naukri_mark_notification_read with notification_id but without date should fail validation."""
+        from naukri_server.tools.notifications import naukri_mark_notification_read
+        result = await naukri_mark_notification_read(notification_id="n123")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "date" in result["message"]
+        assert "notification_id" in result["message"] or "date" in result["message"]
 
     @pytest.mark.asyncio
     async def test_notifications_list_routes(self):
-        """list action should delegate to _fetch_notifications."""
-        from naukri_server.tools.notifications import naukri_notifications
+        """naukri_list_notifications should delegate to _fetch_notifications."""
+        from naukri_server.tools.notifications import naukri_list_notifications
         with patch("naukri_server.tools.notifications._fetch_notifications", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "count": 0, "notifications": []}
-            result = await naukri_notifications(action="list", limit=10, page=2)
+            result = await naukri_list_notifications(limit=10, page=2)
             mock_helper.assert_awaited_once_with(limit=10, page=2, notif_type=None)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_notifications_count_routes(self):
-        """count action should call api_get with NOTIFICATION_COUNT_API."""
-        from naukri_server.tools.notifications import naukri_notifications
+        """naukri_notification_count should call api_get with NOTIFICATION_COUNT_API."""
+        from naukri_server.tools.notifications import naukri_notification_count
         with patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"count": 5}
-            result = await naukri_notifications(action="count")
+            result = await naukri_notification_count()
             mock_api.assert_awaited_once()
             assert result["status"] == "success"
             assert result["count"] == 5
@@ -68,41 +60,33 @@ class TestNotifications:
 # =====================================================================
 
 class TestSettings:
-    """Tests for naukri_server.tools.settings.naukri_settings."""
-
-    @pytest.mark.asyncio
-    async def test_settings_invalid_action(self):
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+    """Tests for atomic naukri_*_settings tools."""
 
     @pytest.mark.asyncio
     async def test_settings_get_routes(self):
-        """get action should call api_get and return parsed settings."""
-        from naukri_server.tools.settings import naukri_settings
+        """naukri_get_settings should call api_get and return parsed settings."""
+        from naukri_server.tools.settings import naukri_get_settings
         with patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"sections": []}
-            result = await naukri_settings(action="get")
+            result = await naukri_get_settings()
             assert mock_api.await_count >= 1  # formatted + raw settings APIs
             assert result["status"] == "success"
             assert "settings" in result
 
     @pytest.mark.asyncio
     async def test_settings_update_with_no_fields(self):
-        """update with no settings fields should fail validation."""
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="update")
+        """naukri_update_settings with no settings fields should fail validation."""
+        from naukri_server.tools.settings import naukri_update_settings
+        result = await naukri_update_settings()
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "No settings" in result["message"]
 
     @pytest.mark.asyncio
     async def test_settings_update_invalid_job_search_status(self):
-        """update with invalid job_search_status should fail validation."""
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="update", job_search_status="retired")
+        """naukri_update_settings with invalid job_search_status should fail validation."""
+        from naukri_server.tools.settings import naukri_update_settings
+        result = await naukri_update_settings(job_search_status="retired")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "job_search_status" in result["message"].lower() or "retired" in result["message"].lower()
@@ -113,68 +97,60 @@ class TestSettings:
 # =====================================================================
 
 class TestAlerts:
-    """Tests for naukri_server.tools.alerts.naukri_job_alerts."""
-
-    @pytest.mark.asyncio
-    async def test_alerts_invalid_action(self):
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+    """Tests for atomic naukri alert tools (list/detail/create/update/delete)."""
 
     @pytest.mark.asyncio
     async def test_alerts_create_requires_params(self):
-        """create without name and keywords should fail validation."""
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="create")
+        """naukri_create_alert without name and keywords should fail validation."""
+        from naukri_server.tools.alerts import naukri_create_alert
+        result = await naukri_create_alert(name="", keywords="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "name" in result["message"] or "keywords" in result["message"]
 
     @pytest.mark.asyncio
     async def test_alerts_create_requires_keywords(self):
-        """create with name but without keywords should fail validation."""
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="create", name="My Alert")
+        """naukri_create_alert with name but without keywords should fail validation."""
+        from naukri_server.tools.alerts import naukri_create_alert
+        result = await naukri_create_alert(name="My Alert", keywords="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "keywords" in result["message"]
+        assert "keywords" in result["message"] or "name" in result["message"]
 
     @pytest.mark.asyncio
     async def test_alerts_update_requires_alert_id(self):
-        """update without alert_id should fail validation."""
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="update", keywords="python")
+        """naukri_update_alert without alert_id should fail validation."""
+        from naukri_server.tools.alerts import naukri_update_alert
+        result = await naukri_update_alert(alert_id="", keywords="python")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "alert_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_alerts_delete_requires_alert_id(self):
-        """delete without alert_id should fail validation."""
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="delete")
+        """naukri_delete_alert without alert_id should fail validation."""
+        from naukri_server.tools.alerts import naukri_delete_alert
+        result = await naukri_delete_alert(alert_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "alert_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_alerts_detail_requires_alert_id(self):
-        """detail without alert_id should fail validation."""
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="detail")
+        """naukri_alert_detail without alert_id should fail validation."""
+        from naukri_server.tools.alerts import naukri_alert_detail
+        result = await naukri_alert_detail(alert_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "alert_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_alerts_list_routes(self):
-        """list action should delegate to _get_alerts_list."""
-        from naukri_server.tools.alerts import naukri_job_alerts
+        """naukri_list_alerts should delegate to _get_alerts_list."""
+        from naukri_server.tools.alerts import naukri_list_alerts
         with patch("naukri_server.tools.alerts._get_alerts_list", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "count": 0, "alerts": []}
-            result = await naukri_job_alerts(action="list")
+            result = await naukri_list_alerts()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
 

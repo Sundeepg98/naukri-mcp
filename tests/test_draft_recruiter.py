@@ -52,14 +52,11 @@ class TestDraftFollowUp:
 
     @pytest.mark.asyncio
     async def test_draft_follow_up_dispatch_requires_job_id(self):
-        """Calling via naukri_applications with action=draft_follow_up but no job_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.tracking import naukri_applications
+        """naukri_draft_follow_up requires job_id parameter (TypeError if absent)."""
+        from naukri_server.tools.tracking import naukri_draft_follow_up
 
-        result = await naukri_applications(action="draft_follow_up")
-
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]
+        with pytest.raises(TypeError):
+            await naukri_draft_follow_up()
 
 
 class TestRecruiterHistory:

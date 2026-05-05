@@ -99,7 +99,7 @@ async def naukri_search_jobs(
             rest_params["jobAge"] = str(posted_within)
 
         data = await api_client.get(SEARCH_API, params=rest_params)
-        if data and isinstance(data, dict) and data.get("jobDetails"):
+        if data and isinstance(data, dict) and "jobDetails" in data:
             filters = {
                 "experience": experience, "salary_min": salary_min,
                 "salary_max": salary_max, "sort_by": sort_by,

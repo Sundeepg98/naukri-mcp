@@ -51,13 +51,13 @@ async def _export_data(
         from naukri_server.database import list_all_applications
         records = await list_all_applications()
         if not records:
-            return {"status": "error", "message": "No applications data found. Run naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
+            return {"status": "error", "message": "No applications data found. Run naukri_sync_applications() first.", "error_code": "NOT_FOUND"}
 
     elif data_type == "saved_jobs":
         from naukri_server.database import list_all_saved_jobs
         records = await list_all_saved_jobs()
         if not records:
-            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync(entity=\"saved_jobs\") first.", "error_code": "NOT_FOUND"}
+            return {"status": "error", "message": "No saved jobs data found. Run naukri_sync_saved() first.", "error_code": "NOT_FOUND"}
 
     elif data_type == "search_results":
         if not keywords:

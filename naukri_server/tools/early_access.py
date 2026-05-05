@@ -6,7 +6,6 @@ from naukri_server import mcp
 from naukri_server.interfaces import api_client
 from naukri_server.config import EARLY_ACCESS_API, APPLY_WORKFLOW_API, logger, EARLY_ACCESS_TRACKING_FILE
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 from naukri_server.utils import load_json_with_backup, save_json_atomic
 from naukri_server.validation import validate_limit, validate_page
 
@@ -132,106 +131,91 @@ async def _share_interest(job_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ISP param validation
+# Atomic single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
-_VALID_PARAMS_PER_ACTION = {
-    "list": {"page", "limit", "filter_company", "filter_location", "filter_experience"},
-    "share": {"job_id"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_early_access(
-    action: str = "list",
-    job_id: Optional[str] = None,
+async def _list_with_filters(
     page: int = 1,
     limit: int = 20,
     filter_company: Optional[str] = None,
     filter_location: Optional[str] = None,
     filter_experience: Optional[int] = None,
 ) -> dict:
-    """Unified early access management — browse pre-posted roles and share interest.
+    """Fetch early access roles with optional client-side filtering."""
+    result = await _list_early_access_roles(page=page, limit=limit)
+    # Client-side filtering (API doesn't support server-side)
+    if any((filter_company, filter_location, filter_experience is not None)):
+        roles = result.get("roles", [])
+        if filter_company:
+            fc = filter_company.lower()
+            roles = [r for r in roles if fc in (r.get("company_hint") or "").lower()]
+        if filter_location:
+            fl = filter_location.lower()
+            roles = [r for r in roles if fl in (r.get("location") or "").lower()]
+        if filter_experience is not None:
+            import re
+            filtered = []
+            for r in roles:
+                exp_str = r.get("experience", "")
+                nums = re.findall(r'\d+', str(exp_str))
+                if nums and int(nums[0]) <= filter_experience:
+                    filtered.append(r)
+            roles = filtered
+        result["roles"] = roles
+        result["count"] = len(roles)
+        result["filters_applied"] = {
+            k: v for k, v in {
+                "company": filter_company, "location": filter_location,
+                "experience": filter_experience,
+            }.items() if v is not None
+        }
+    return result
 
-    Early access roles are jobs from top companies before they go live.
-    Sharing interest is instant — no screening questions.
 
-    Actions:
-      - "list": Get early access roles (use page/limit for pagination)
-      - "share": Express interest in a role (requires job_id)
+@mcp.tool()
+async def naukri_list_early_access(
+    page: int = 1,
+    limit: int = 20,
+    filter_company: Optional[str] = None,
+    filter_location: Optional[str] = None,
+    filter_experience: Optional[int] = None,
+) -> dict:
+    """Browse pre-posted early access roles from top companies.
+
+    Early access roles are jobs from top companies before they go live publicly.
+    Use naukri_share_early_access(job_id) to express interest instantly (no screening questions).
 
     Args:
-        action: "list" | "share"
-        job_id: Required for share — the early access role job ID
-        page: Page number for list action (default 1)
-        limit: Max roles for list action (default 20)
-        filter_company: Filter roles by company name (case-insensitive substring match)
-        filter_location: Filter by location (case-insensitive substring match)
+        page: Page number (default 1)
+        limit: Max roles per page (default 20)
+        filter_company: Filter by company name (case-insensitive substring)
+        filter_location: Filter by location (case-insensitive substring)
         filter_experience: Filter by max experience years (only roles where min exp <= this value)
 
     Returns:
-        - list: {status, total, count, page, has_more, roles: [{job_id, title, company_hint, location, experience, salary, job_type, tags, url}]}
-        - share: {status, job_id, message, quota}
-        - {status: "error", message} on failure
+        {status, total, count, page, has_more, roles: [{job_id, title, company_hint,
+         location, experience, salary, job_type, tags, url}], filters_applied?}
     """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id,
-        "page": page if page != 1 else None,
-        "limit": limit if limit != 20 else None,
-        "filter_company": filter_company, "filter_location": filter_location,
-        "filter_experience": filter_experience,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+    return await handle_tool_action(
+        lambda: _list_with_filters(
+            page=page, limit=limit,
+            filter_company=filter_company, filter_location=filter_location,
+            filter_experience=filter_experience,
+        ),
+        "early_access.list",
+    )
 
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
 
-    # ── list ───────────────────────────────────────────────────────────
-    if action == "list":
-        async def _list():
-            result = await _list_early_access_roles(page=page, limit=limit)
-            # Client-side filtering (API doesn't support server-side)
-            if any((filter_company, filter_location, filter_experience is not None)):
-                roles = result.get("roles", [])
-                if filter_company:
-                    fc = filter_company.lower()
-                    roles = [r for r in roles if fc in (r.get("company_hint") or "").lower()]
-                if filter_location:
-                    fl = filter_location.lower()
-                    roles = [r for r in roles if fl in (r.get("location") or "").lower()]
-                if filter_experience is not None:
-                    import re
-                    filtered = []
-                    for r in roles:
-                        exp_str = r.get("experience", "")
-                        nums = re.findall(r'\d+', str(exp_str))
-                        if nums and int(nums[0]) <= filter_experience:
-                            filtered.append(r)
-                    roles = filtered
-                result["roles"] = roles
-                result["count"] = len(roles)
-                result["filters_applied"] = {
-                    k: v for k, v in {
-                        "company": filter_company, "location": filter_location,
-                        "experience": filter_experience,
-                    }.items() if v is not None
-                }
-            return result
-        return _attach_unused(await handle_tool_action(_list, "early_access.list"))
+@mcp.tool()
+async def naukri_share_early_access(job_id: str) -> dict:
+    """Express interest in an early access role. Instant — no screening questions.
 
-    # ── share ──────────────────────────────────────────────────────────
-    elif action == "share":
-        if not job_id:
-            return {"status": "error", "message": "share requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _share_interest(job_id), "early_access.share"))
+    Args:
+        job_id: The early access role's job ID (from naukri_list_early_access results)
 
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, share", "error_code": "VALIDATION_ERROR"}
+    Returns:
+        {status, job_id, message, quota: {daily_applied, daily_quota}}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _share_interest(job_id), "early_access.share")

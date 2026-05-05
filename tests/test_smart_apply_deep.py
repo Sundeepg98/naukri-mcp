@@ -220,45 +220,29 @@ class TestApplyTopFitsPriority:
 # 5. naukri_smart_apply — action routing
 # ---------------------------------------------------------------------------
 
-class TestNaukriSmartApply:
-    @pytest.mark.asyncio
-    async def test_missing_job_id_returns_validation_error(self):
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action=None, job_id=None)
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_unknown_action_returns_validation_error(self):
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="nonexistent_action")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
-
+class TestNaukriSmartApplyAtomic:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock)
-    async def test_bulk_saved_action_routes(self, mock_bulk):
+    async def test_score_saved_jobs_routes(self, mock_bulk):
         mock_bulk.return_value = {"status": "success", "scored_jobs": [], "total_saved": 0, "scored_count": 0, "min_fit_score": 60}
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="bulk_saved", min_fit_score=60)
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
+        result = await naukri_score_saved_jobs(min_fit_score=60)
         assert result["status"] == "success"
         mock_bulk.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.smart_apply._apply_top_fits", new_callable=AsyncMock)
-    async def test_apply_top_fits_action_routes(self, mock_atf):
+    async def test_apply_top_fits_routes(self, mock_atf):
         mock_atf.return_value = {"status": "success", "applied": 2}
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="apply_top_fits", min_fit_score=70, limit=5)
+        from naukri_server.tools.smart_apply import naukri_apply_top_fits
+        result = await naukri_apply_top_fits(min_fit_score=70, limit=5)
         assert result["status"] == "success"
         mock_atf.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_invalid_min_fit_score_validation_error(self):
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(job_id="J1", min_fit_score=150)
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        result = await naukri_assess_fit(job_id="J1", min_fit_score=150)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "min_fit_score" in result["message"]
@@ -271,8 +255,8 @@ class TestNaukriSmartApply:
         mock_get_job.return_value = _make_job_result()
         mock_profile.return_value = _make_profile()
         mock_match.return_value = None
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(job_id="J1")
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        result = await naukri_assess_fit(job_id="J1")
         assert result["status"] == "success"
         assert "fit_assessment" in result
         assert "job_summary" in result
@@ -284,7 +268,7 @@ class TestNaukriSmartApply:
     async def test_single_job_fetch_failure(self, mock_get_job, mock_profile):
         mock_get_job.return_value = {"status": "error", "message": "Not found"}
         mock_profile.return_value = _make_profile()
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(job_id="J_BAD")
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        result = await naukri_assess_fit(job_id="J_BAD")
         assert result["status"] == "error"
         assert "fetch job" in result["message"].lower()

@@ -13,7 +13,6 @@ from naukri_server.interfaces import api_client  # noqa: F401 — test patch tar
 from naukri_server.cache import _load_cache, _cache_lock  # noqa: F401 — test patch target
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import ENTITY_TAXONOMY_API
-from naukri_server.models import validate_action_params
 
 from naukri_server.utils import TtlCache
 
@@ -165,14 +164,18 @@ async def _cached_answers(action: str = "list", key: Optional[str] = None, new_a
 
 
 # ---------------------------------------------------------------------------
-# Insight registry — maps insight_type to async handler(kwargs) -> dict
+# Action handlers (registered with the unified registry framework)
+# Note: insights uses 'insights' as tool name; insight_type values map to actions.
 # ---------------------------------------------------------------------------
 
 def _make_match_analytics_handler(**kw):
+    """Internal helper kept for backward-compat with naukri_match_analytics tool."""
     from naukri_server.tools.tracking import _get_match_analytics
     return _get_match_analytics(days=kw.get("days", 30))
 
+
 def _make_skill_gap_handler(**kw):
+    """Internal helper kept for backward-compat with naukri_skill_gap tool."""
     from naukri_server.tools.skill_gap import _skill_gap_analysis
     return _skill_gap_analysis(
         keywords=kw.get("keywords"), use_recommendations=kw.get("use_recommendations", True),
@@ -180,7 +183,9 @@ def _make_skill_gap_handler(**kw):
         timeout_seconds=kw.get("timeout_seconds", 120),
     )
 
+
 def _make_salary_benchmark_handler(**kw):
+    """Internal helper kept for backward-compat with naukri_salary_benchmark tool."""
     from naukri_server.tools.research import _salary_benchmark
     return _salary_benchmark(
         keywords=kw.get("keywords"), location=kw.get("location"),
@@ -188,152 +193,9 @@ def _make_salary_benchmark_handler(**kw):
         timeout_seconds=kw.get("timeout_seconds", 120),
     )
 
-_VALID_PARAMS_PER_INSIGHT = {
-    "applications": {"days"},
-    "salary": {"designation"},
-    "cached_answers": {"action", "key", "new_answer"},
-    "match_analytics": {"days"},
-    "match_quality": {"days"},
-    "skill_gap": {"keywords", "use_recommendations", "sample_size",
-                  "include_assessments", "timeout_seconds"},
-    "salary_benchmark": {"keywords", "location", "sample_size",
-                         "freshness", "timeout_seconds"},
-    "taxonomy": set(),
-    "profile_prompts": set(),
-    "conversion_funnel": {"days"},
-    "status_changes": {"days"},
-}
-
-_INSIGHT_REGISTRY: dict[str, callable] = {
-    "applications":     lambda **kw: _application_insights(days=kw.get("days", 30)),
-    "salary":           lambda **kw: _salary_position(designation=kw.get("designation")),
-    "cached_answers":   lambda **kw: _cached_answers(action=kw.get("action") or "list", key=kw.get("key"), new_answer=kw.get("new_answer")),
-    "match_analytics":  _make_match_analytics_handler,
-    "match_quality":    lambda **kw: _match_quality(days=kw.get("days", 30)),
-    "skill_gap":        _make_skill_gap_handler,
-    "salary_benchmark": _make_salary_benchmark_handler,
-    "taxonomy":         lambda **kw: _get_taxonomy(),
-    "profile_prompts":  lambda **kw: _get_profile_prompts(),
-    "conversion_funnel": lambda **kw: _conversion_funnel(days=kw.get("days", 30)),
-    "status_changes":   lambda **kw: _detect_status_changes(days_back=kw.get("days", 30)),
-}
-
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_insights(
-    insight_type: str = "applications",
-    action: Optional[str] = None,
-    key: Optional[str] = None,
-    new_answer: Optional[str] = None,
-    days: int = 30,
-    designation: Optional[str] = None,
-    # skill_gap / salary_benchmark params
-    keywords: Optional[str] = None,
-    use_recommendations: bool = True,
-    sample_size: int = 20,
-    include_assessments: bool = True,
-    timeout_seconds: int = 120,
-    location: Optional[str] = None,
-    freshness: Optional[int] = None,
-) -> dict:
-    """[Deprecated — use individual insight tools instead: naukri_application_insights, naukri_salary_position, etc.]
-
-    Unified intelligence layer — application insights, salary analysis, cached answers.
-
-    Note: Uses 'insight_type' instead of 'action' because each value selects a different
-    analytical lens (applications, salary, skill_gap, taxonomy, etc.) rather than a CRUD
-    operation. The tool also has a secondary 'action' param for cached_answers sub-dispatch.
-
-    Insight types:
-      - "applications": Analyze application history for patterns (velocity, status, companies)
-      - "salary": Analyze salary positioning across applied jobs
-      - "cached_answers": Manage cached screening question answers (list/update/delete)
-      - "match_analytics": Match-score analytics for recent applications (distribution + per-field breakdowns)
-      - "match_quality": Aggregate apply-match quality — how well recent applications matched your profile (uses days param, default 7)
-      - "skill_gap": Analyze skill gaps between your profile and market demand
-      - "salary_benchmark": Benchmark your salary against market for a given role
-      - "taxonomy": Get Naukri's job taxonomy hierarchy (37 departments → 167 role categories → 1461 roles) with synonyms. Cached for 24h.
-      - "profile_prompts": Fetch CCS widget state keys to identify pending profile completion actions (salary breakup, locations, etc.). Uses browser cookies.
-      - "conversion_funnel": Analyze application-to-interview conversion funnel — status breakdown, company response rates, and dead zones (companies with 3+ applies and 0 responses)
-      - "status_changes": Detect application status changes by syncing with Naukri. Categorizes transitions as positive (applied→viewed, viewed→interview, etc.) or neutral. Uses days param for sync window (default 30).
-
-    Args:
-        insight_type: "applications" | "salary" | "cached_answers" | "match_analytics" | "match_quality" | "skill_gap" | "salary_benchmark" | "taxonomy" | "profile_prompts" | "conversion_funnel" | "status_changes"
-        action: For cached_answers only — "list" | "update" | "delete" (default "list")
-        key: For cached_answers update/delete — the cache key
-        new_answer: For cached_answers update — the new answer value
-        days: For applications/match_quality — analyze last N days (default 30 for applications, 7 for match_quality)
-        designation: For salary — filter by job title keyword (optional)
-        keywords: For skill_gap/salary_benchmark — search keywords (required for salary_benchmark; required for skill_gap if use_recommendations is False)
-        use_recommendations: For skill_gap — use personalized recommendations (default True)
-        sample_size: For skill_gap/salary_benchmark — number of jobs to analyze (default 20, max 50)
-        include_assessments: For skill_gap — fetch assessments and boost passed-skill frequency (default True)
-        timeout_seconds: For skill_gap/salary_benchmark — max seconds before timeout (default 120)
-        location: For salary_benchmark — city to filter (e.g., "Bangalore"). None = all India.
-        freshness: For salary_benchmark — posted within N days (default None). None = no filter.
-
-    Returns:
-        - applications: {status, period_days, total_applications, status_breakdown, velocity, top_companies, insights}
-        - salary: {status, total_with_salary, salary_range: {min, max, median}, distribution, insights}
-        - cached_answers list: {status, total_cached, answers: [{key, question, answer, type, cached_at}]}
-        - cached_answers update: {status, key, new_answer, message}
-        - cached_answers delete: {status, key, message}
-        - match_analytics: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}
-        - match_quality: {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown}
-        - skill_gap: {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}
-        - salary_benchmark: {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}
-        - taxonomy: {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories: [{id, label, roles: [{id, label, synonyms}]}]}]}
-        - profile_prompts: {status, source, pending_count, completed_count, pending_prompts: [{field, action, impact, reason}], completed_prompts, all_state_keys, cache_ttl_seconds, widget_sections_count}
-        - conversion_funnel: {status, days, total_applied, funnel, conversion_rate, top_responsive_companies: [{company, applied, responded, rate}], dead_zones: [{company, applied, responded, rate}]}
-        - status_changes: {status, total_changes, positive_changes, positive: [{job_id, title, old_status, new_status, transition_type}], neutral: [...], sync_method, last_sync}
-        - {status: "error", message} on failure
-    """
-    # ── ISP: warn about params irrelevant to chosen insight_type ────
-    _provided = {
-        "action": action, "key": key, "new_answer": new_answer,
-        "days": days if days != 30 else None, "designation": designation,
-        "keywords": keywords, "use_recommendations": use_recommendations if not use_recommendations else None,
-        "sample_size": sample_size if sample_size != 20 else None,
-        "include_assessments": include_assessments if not include_assessments else None,
-        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
-        "location": location, "freshness": freshness,
-    }
-    _unused = validate_action_params(insight_type, _provided, _VALID_PARAMS_PER_INSIGHT)
-
-    # ── Pre-validation ──────────────────────────────────────────────
-    if insight_type == "salary_benchmark" and not keywords:
-        return {"status": "error", "message": "salary_benchmark requires keywords.", "error_code": "VALIDATION_ERROR"}
-
-    # ── Registry lookup ──────────────────────────────────────────────
-    handler = _INSIGHT_REGISTRY.get(insight_type)
-    if handler is None:
-        return {
-            "status": "error",
-            "message": f"Unknown insight_type '{insight_type}'. Use: {', '.join(_INSIGHT_REGISTRY)}",
-            "error_code": "VALIDATION_ERROR",
-        }
-
-    result = await handle_tool_action(
-        lambda: handler(
-            action=action, key=key, new_answer=new_answer,
-            days=days, designation=designation, keywords=keywords,
-            use_recommendations=use_recommendations, sample_size=sample_size,
-            include_assessments=include_assessments, timeout_seconds=timeout_seconds,
-            location=location, freshness=freshness,
-        ),
-        f"insights.{insight_type}",
-    )
-    if _unused and isinstance(result, dict):
-        result["unused_params"] = _unused
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Individual insight tools (preferred over the deprecated consolidated tool)
+# Individual insight tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()

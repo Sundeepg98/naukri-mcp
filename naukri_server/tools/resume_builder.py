@@ -6,7 +6,6 @@ from naukri_server import mcp
 from naukri_server.interfaces import api_client
 from naukri_server.config import RESUME_BUILDER_CONFIG_API, RESUME_BUILDER_STATUS_API
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 
 
 # ---------------------------------------------------------------------------
@@ -71,74 +70,44 @@ async def _get_status() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ISP param validation
-# ---------------------------------------------------------------------------
-
-_VALID_PARAMS_PER_ACTION = {
-    "templates": set(),
-    "status": set(),
-    "tailor": {"job_id", "timeout_seconds"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool
+# Atomic single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def naukri_resume_builder(
-    action: str = "templates",
-    job_id: Optional[str] = None,
-    timeout_seconds: int = 120,
-) -> dict:
-    """Unified resume builder — browse templates, check builder status, or tailor resume for a job.
-
-    Actions:
-      - "templates": List available resume builder templates (free and pro with preview images)
-      - "status": Get resume builder service status (AI rewrite attempts left, subscription tier, features)
-      - "tailor": Tailor resume for a specific job (requires job_id)
-
-    Args:
-        action: "templates" | "status" | "tailor"
-        job_id: Naukri job ID or URL (required for tailor)
-        timeout_seconds: Max seconds before timeout (default 120, used by tailor)
+async def naukri_resume_templates() -> dict:
+    """List available resume builder templates (free and pro variants with preview images).
 
     Returns:
-        - templates: {status, count, free_count, pro_count, templates: [{id, name, type, preview_url}]}
-        - status: {status, attempts_left, is_paid, show_genai_features, ...}
-        - tailor: {status, job_title, company, suggestions: {headline, skills_to_add, ...}}
-        - {status: "error", message} on failure
+        {status, count, free_count, pro_count, templates: [{id, name, type, preview_url}]}
     """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id,
-        "timeout_seconds": timeout_seconds if timeout_seconds != 120 else None,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+    return await handle_tool_action(_get_templates, "resume_builder.templates")
 
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
 
-    # -- templates ──────────────────────────────────────────────────────
-    if action == "templates":
-        return _attach_unused(await handle_tool_action(_get_templates, "resume_builder.templates"))
+@mcp.tool()
+async def naukri_resume_builder_status() -> dict:
+    """Get resume builder service status — AI rewrite attempts left, subscription tier, features.
 
-    # -- status ─────────────────────────────────────────────────────────
-    elif action == "status":
-        return _attach_unused(await handle_tool_action(_get_status, "resume_builder.status"))
+    Returns:
+        {status, attempts_left, is_paid, show_genai_features, show_rewrite, experiment_variant}
+    """
+    return await handle_tool_action(_get_status, "resume_builder.status")
 
-    # -- tailor ──────────────────────────────────────────────────────────
-    elif action == "tailor":
-        if not job_id:
-            return {"status": "error", "message": "tailor requires job_id.", "error_code": "VALIDATION_ERROR"}
-        from naukri_server.tools.resume_tailor import _tailor_resume
-        return _attach_unused(await handle_tool_action(
-            lambda: _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds),
-            "resume_builder.tailor",
-        ))
 
-    # -- unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: templates, status, tailor", "error_code": "VALIDATION_ERROR"}
+@mcp.tool()
+async def naukri_tailor_resume(job_id: str, timeout_seconds: int = 120) -> dict:
+    """Tailor resume suggestions for a specific job (headline, skills to add, etc.).
+
+    Args:
+        job_id: Naukri job ID or URL
+        timeout_seconds: Max seconds before timeout (default 120)
+
+    Returns:
+        {status, job_title, company, suggestions: {headline, skills_to_add, ...}}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required.", "error_code": "VALIDATION_ERROR"}
+    from naukri_server.tools.resume_tailor import _tailor_resume
+    return await handle_tool_action(
+        lambda: _tailor_resume(job_id=job_id, timeout_seconds=timeout_seconds),
+        "resume_builder.tailor",
+    )

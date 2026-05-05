@@ -13,60 +13,52 @@ from unittest.mock import AsyncMock, patch
 # =====================================================================
 
 class TestSync:
-    """Tests for naukri_server.tools.sync.naukri_sync."""
-
-    @pytest.mark.asyncio
-    async def test_sync_invalid_entity(self):
-        from naukri_server.tools.sync import naukri_sync
-        result = await naukri_sync(entity="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown entity" in result["message"]
+    """Tests for naukri_server.tools.sync atomic tools."""
 
     @pytest.mark.asyncio
     async def test_sync_applications_routes_to_helper(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_applications
         with patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "method": "rest_api", "total_remote": 5}
-            result = await naukri_sync(entity="applications", days_back=30)
+            result = await naukri_sync_applications(days_back=30)
             mock_helper.assert_awaited_once_with(force_browser=False, days_back=30)
             assert result["status"] == "success"
             assert result["method"] == "rest_api"
 
     @pytest.mark.asyncio
     async def test_sync_applications_force_browser(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_applications
         with patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "method": "browser_intercept"}
-            result = await naukri_sync(entity="applications", force_browser=True, days_back=7)
+            result = await naukri_sync_applications(force_browser=True, days_back=7)
             mock_helper.assert_awaited_once_with(force_browser=True, days_back=7)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_sync_saved_jobs_routes_to_helper(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_saved
         with patch("naukri_server.tools.sync._sync_saved_jobs", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "method": "rest_api", "total_remote": 3}
-            result = await naukri_sync(entity="saved_jobs")
+            result = await naukri_sync_saved()
             mock_helper.assert_awaited_once_with(force_browser=False)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_sync_applications_exception_caught(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_applications
         with patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock) as mock_helper:
             mock_helper.side_effect = RuntimeError("connection reset")
-            result = await naukri_sync(entity="applications")
+            result = await naukri_sync_applications()
             assert result["status"] == "error"
             assert result["error_code"] == "API_ERROR"
             assert "connection reset" in result["message"]
 
     @pytest.mark.asyncio
     async def test_sync_saved_jobs_exception_caught(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_saved
         with patch("naukri_server.tools.sync._sync_saved_jobs", new_callable=AsyncMock) as mock_helper:
             mock_helper.side_effect = RuntimeError("timeout")
-            result = await naukri_sync(entity="saved_jobs")
+            result = await naukri_sync_saved()
             assert result["status"] == "error"
             assert result["error_code"] == "API_ERROR"
             assert "timeout" in result["message"]
@@ -208,30 +200,22 @@ class TestResumeTailor:
 # From test_consolidation.py — sync action routing & validation
 # =====================================================================
 
-class TestSyncConsolidation:
-    """Tests for naukri_server.tools.sync.naukri_sync."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_entity(self):
-        from naukri_server.tools.sync import naukri_sync
-        result = await naukri_sync(entity="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown entity" in result["message"]
+class TestSyncAtomicExtras:
+    """Additional routing tests for atomic sync tools."""
 
     @pytest.mark.asyncio
     async def test_applications_routes_to_helper(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_applications
         with patch("naukri_server.tools.sync._sync_applications", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "method": "api"}
-            result = await naukri_sync(entity="applications", days_back=30)
+            result = await naukri_sync_applications(days_back=30)
             mock_helper.assert_awaited_once_with(force_browser=False, days_back=30)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_saved_jobs_routes_to_helper(self):
-        from naukri_server.tools.sync import naukri_sync
+        from naukri_server.tools.sync import naukri_sync_saved
         with patch("naukri_server.tools.sync._sync_saved_jobs", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "method": "api"}
-            result = await naukri_sync(entity="saved_jobs")
+            result = await naukri_sync_saved()
             mock_helper.assert_awaited_once_with(force_browser=False)

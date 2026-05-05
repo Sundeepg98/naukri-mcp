@@ -29,33 +29,14 @@ def _make_api_error(status: int = 500, message: str = "Server error"):
 # 1. Action routing — unknown action
 # ===========================================================================
 
-@pytest.mark.asyncio
-async def test_unknown_action_returns_error():
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="nonexistent")
-    assert result["status"] == "error"
-    assert "Unknown action" in result["message"]
-    assert "nonexistent" in result["message"]
-    assert result["error_code"] == "VALIDATION_ERROR"
-
-
-@pytest.mark.asyncio
-async def test_unknown_action_mentions_valid_actions():
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="refresh")
-    assert "templates" in result["message"]
-    assert "status" in result["message"]
-    assert "tailor" in result["message"]
-
-
 # ===========================================================================
 # 2. Validation — tailor requires job_id
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_tailor_missing_job_id_returns_validation_error():
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="tailor")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_tailor_resume(job_id="")
     assert result["status"] == "error"
     assert result["error_code"] == "VALIDATION_ERROR"
     assert "job_id" in result["message"]
@@ -63,8 +44,8 @@ async def test_tailor_missing_job_id_returns_validation_error():
 
 @pytest.mark.asyncio
 async def test_tailor_empty_string_job_id_returns_validation_error():
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="tailor", job_id="")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_tailor_resume(job_id="")
     assert result["status"] == "error"
     assert result["error_code"] == "VALIDATION_ERROR"
 
@@ -88,8 +69,8 @@ async def test_templates_unwraps_data_envelope(mock_api_get):
             }
         }
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["status"] == "success"
     assert result["count"] == 2
     assert result["free_count"] == 1   # type 1 → free
@@ -111,8 +92,8 @@ async def test_templates_type1_is_free_type2_is_pro(mock_api_get):
             }
         }
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["free_count"] == 2
     assert result["pro_count"] == 1
     types = [t["type"] for t in result["templates"]]
@@ -137,8 +118,8 @@ async def test_templates_preview_url_extracted_from_icons_variant1(mock_api_get)
             }
         }
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["templates"][0]["preview_url"] == "https://cdn/preview.png"
 
 
@@ -153,8 +134,8 @@ async def test_templates_empty_list_returns_zero_counts(mock_api_get):
             }
         }
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["status"] == "success"
     assert result["count"] == 0
     assert result["free_count"] == 0
@@ -171,8 +152,8 @@ async def test_templates_empty_list_returns_zero_counts(mock_api_get):
 async def test_templates_naukri_api_error_caught(mock_api_get):
     """NaukriAPIError from api_get must be caught and returned as status=error."""
     mock_api_get.side_effect = _make_api_error(status=401, message="Unauthorized")
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["status"] == "error"
     assert result["error_code"] == "API_ERROR"
     assert result["http_status"] == 401
@@ -183,8 +164,8 @@ async def test_templates_naukri_api_error_caught(mock_api_get):
 async def test_templates_generic_exception_caught(mock_api_get):
     """Generic exceptions must also be caught and returned as status=error."""
     mock_api_get.side_effect = RuntimeError("network timeout")
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="templates")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_templates()
     assert result["status"] == "error"
     assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
@@ -209,8 +190,8 @@ async def test_status_unwraps_data_resume_builder_envelope(mock_api_get):
             }
         }
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="status")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_builder_status()
     assert result["status"] == "success"
     assert result["attempts_left"] == 3
     assert result["is_paid"] is True
@@ -224,8 +205,8 @@ async def test_status_unwraps_data_resume_builder_envelope(mock_api_get):
 async def test_status_defaults_when_fields_missing(mock_api_get):
     """Missing fields must fall back to safe defaults (0, False, '')."""
     mock_api_get.return_value = {"data": {"resumeBuilder": {}}}
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="status")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_builder_status()
     assert result["status"] == "success"
     assert result["attempts_left"] == 0
     assert result["is_paid"] is False
@@ -243,8 +224,8 @@ async def test_status_defaults_when_fields_missing(mock_api_get):
 async def test_status_naukri_api_error_caught(mock_api_get):
     """NaukriAPIError from api_get must be caught for the status action."""
     mock_api_get.side_effect = _make_api_error(status=403, message="Forbidden")
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="status")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_resume_builder_status()
     assert result["status"] == "error"
     assert result["error_code"] == "API_ERROR"
     assert result["http_status"] == 403
@@ -264,8 +245,8 @@ async def test_tailor_delegates_to_helper(mock_tailor):
         "company": "Acme Corp",
         "suggestions": {},
     }
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="tailor", job_id="JOB123", timeout_seconds=60)
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_tailor_resume(job_id="JOB123", timeout_seconds=60)
     mock_tailor.assert_awaited_once_with(job_id="JOB123", timeout_seconds=60)
     assert result["status"] == "success"
     assert result["job_title"] == "Python Developer"
@@ -276,8 +257,8 @@ async def test_tailor_delegates_to_helper(mock_tailor):
 async def test_tailor_propagates_helper_error_as_internal_error(mock_tailor):
     """Exceptions raised by _tailor_resume must be caught and returned as status=error."""
     mock_tailor.side_effect = RuntimeError("browser crashed")
-    from naukri_server.tools.resume_builder import naukri_resume_builder
-    result = await naukri_resume_builder(action="tailor", job_id="JOB456")
+    from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
+    result = await naukri_tailor_resume(job_id="JOB456")
     assert result["status"] == "error"
     assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
@@ -288,30 +269,22 @@ async def test_tailor_propagates_helper_error_as_internal_error(mock_tailor):
 # From test_consolidation.py — resume builder action routing & validation
 # =====================================================================
 
-class TestResumeBuilderConsolidation:
-    """Tests for naukri_server.tools.resume_builder.naukri_resume_builder."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.resume_builder import naukri_resume_builder
-        result = await naukri_resume_builder(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+class TestResumeBuilderAtomic:
+    """Tests for atomic resume builder tools."""
 
     @pytest.mark.asyncio
     async def test_templates_routes_to_helper(self):
-        from naukri_server.tools.resume_builder import naukri_resume_builder
+        from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
         with patch("naukri_server.tools.resume_builder._get_templates", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "templates": []}
-            result = await naukri_resume_builder(action="templates")
+            result = await naukri_resume_templates()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_status_routes_to_helper(self):
-        from naukri_server.tools.resume_builder import naukri_resume_builder
+        from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
         with patch("naukri_server.tools.resume_builder._get_status", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "attempts_left": 3}
-            result = await naukri_resume_builder(action="status")
+            result = await naukri_resume_builder_status()
             mock_helper.assert_awaited_once()

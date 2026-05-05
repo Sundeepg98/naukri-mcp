@@ -15,34 +15,13 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 
 # ===========================================================================
-# 1. Action routing — unknown action
-# ===========================================================================
-
-@pytest.mark.asyncio
-async def test_unknown_action_returns_validation_error():
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="apply")
-    assert result["status"] == "error"
-    assert "apply" in result["message"]
-    assert result["error_code"] == "VALIDATION_ERROR"
-
-
-@pytest.mark.asyncio
-async def test_unknown_action_mentions_valid_actions():
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="bogus")
-    assert "list" in result["message"]
-    assert "share" in result["message"]
-
-
-# ===========================================================================
-# 2. Validation — missing job_id for share
+# 1. Validation — missing job_id for share
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_share_without_job_id_returns_validation_error():
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id=None)
+    from naukri_server.tools.early_access import naukri_share_early_access
+    result = await naukri_share_early_access(job_id=None)
     assert result["status"] == "error"
     assert "job_id" in result["message"]
     assert result["error_code"] == "VALIDATION_ERROR"
@@ -50,8 +29,8 @@ async def test_share_without_job_id_returns_validation_error():
 
 @pytest.mark.asyncio
 async def test_share_with_empty_job_id_returns_validation_error():
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="")
+    from naukri_server.tools.early_access import naukri_share_early_access
+    result = await naukri_share_early_access(job_id="")
     assert result["status"] == "error"
     assert result["error_code"] == "VALIDATION_ERROR"
 
@@ -65,8 +44,8 @@ async def test_share_with_empty_job_id_returns_validation_error():
 async def test_list_naukri_api_error_returns_http_status(mock_api_get):
     from naukri_server.api import NaukriAPIError
     mock_api_get.side_effect = NaukriAPIError(status=503, message="Service Unavailable")
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access()
     assert result["status"] == "error"
     assert result["http_status"] == 503
     assert result["error_code"] == "API_ERROR"
@@ -76,8 +55,8 @@ async def test_list_naukri_api_error_returns_http_status(mock_api_get):
 @patch("naukri_server.tools.early_access.api_client.get", new_callable=AsyncMock)
 async def test_list_generic_exception_returns_api_error(mock_api_get):
     mock_api_get.side_effect = RuntimeError("connection reset")
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access()
     assert result["status"] == "error"
     assert result["error_code"] == "INTERNAL_ERROR"
     assert "RuntimeError" in result["message"]
@@ -92,8 +71,8 @@ async def test_list_generic_exception_returns_api_error(mock_api_get):
 async def test_list_clamps_page_below_one(mock_api_get):
     """Page values below 1 should be clamped to 1."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list", page=0, limit=10)
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access(page=0, limit=10)
     assert result["status"] == "success"
     assert result["page"] == 1
 
@@ -103,9 +82,9 @@ async def test_list_clamps_page_below_one(mock_api_get):
 async def test_list_clamps_limit_above_max(mock_api_get):
     """Limit values above 50 should be clamped to 50."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
-    from naukri_server.tools.early_access import naukri_early_access
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
     # Limit=200 should be clamped — the api_get call should use "50" as noOfResults
-    await naukri_early_access(action="list", page=1, limit=200)
+    await naukri_list_early_access(page=1, limit=200)
     call_kwargs = mock_api_get.call_args
     params = call_kwargs[1]["params"] if call_kwargs[1] else call_kwargs[0][1]
     assert params["noOfResults"] == "50"
@@ -116,8 +95,8 @@ async def test_list_clamps_limit_above_max(mock_api_get):
 async def test_list_clamps_limit_below_one(mock_api_get):
     """Limit values below 1 should be clamped to 1."""
     mock_api_get.return_value = {"jobDetails": [], "noOfJobs": 0}
-    from naukri_server.tools.early_access import naukri_early_access
-    await naukri_early_access(action="list", page=1, limit=0)
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    await naukri_list_early_access(page=1, limit=0)
     call_kwargs = mock_api_get.call_args
     params = call_kwargs[1]["params"] if call_kwargs[1] else call_kwargs[0][1]
     assert params["noOfResults"] == "1"
@@ -135,8 +114,8 @@ async def test_list_has_more_true_when_more_pages_exist(mock_api_get):
         "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "ACME"}],
         "noOfJobs": 100,
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list", page=1, limit=20)
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access(page=1, limit=20)
     assert result["has_more"] is True
     assert result["total"] == 100
     assert result["page"] == 1
@@ -150,8 +129,8 @@ async def test_list_has_more_false_on_last_page(mock_api_get):
         "jobDetails": [{"jobId": "1", "title": "Dev", "companyName": "ACME"}],
         "noOfJobs": 5,
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list", page=1, limit=20)
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access(page=1, limit=20)
     assert result["has_more"] is False
 
 
@@ -181,8 +160,8 @@ async def test_list_parses_jobdetails_fields(mock_api_get):
         ],
         "noOfJobs": 1,
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access()
     assert result["status"] == "success"
     assert result["count"] == 1
     role = result["roles"][0]
@@ -205,8 +184,8 @@ async def test_list_falls_back_to_jobs_key(mock_api_get):
         "jobs": [{"jobId": "ALT1", "title": "Engineer", "companyHint": "Startup"}],
         "totalJobs": 1,
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access()
     assert result["status"] == "success"
     assert result["roles"][0]["job_id"] == "ALT1"
     assert result["roles"][0]["company_hint"] == "Startup"
@@ -225,8 +204,8 @@ async def test_list_skips_malformed_non_dict_jobs(mock_api_get):
         ],
         "noOfJobs": 4,
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="list")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_list_early_access()
     assert result["status"] == "success"
     # Only the valid dict should appear
     assert result["count"] == 1
@@ -245,8 +224,8 @@ async def test_share_success_with_quota(mock_api_post):
         "jobs": [{"status": 200, "message": "Interest shared!"}],
         "quotaDetails": {"dailyApplied": 5, "dailyQuota": 50},
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB999")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB999")
     assert result["status"] == "success"
     assert result["job_id"] == "JOB999"
     assert result["message"] == "Interest shared!"
@@ -261,8 +240,8 @@ async def test_share_success_quota_defaults_when_absent(mock_api_post):
     mock_api_post.return_value = {
         "jobs": [{"status": 200, "message": "Done"}],
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB888")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB888")
     assert result["status"] == "success"
     assert result["quota"]["daily_applied"] == 0
     assert result["quota"]["daily_quota"] == 50
@@ -279,8 +258,8 @@ async def test_share_non_200_status_returns_error(mock_api_post):
     mock_api_post.return_value = {
         "jobs": [{"status": 429, "message": "Daily limit reached"}],
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB777")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB777")
     assert result["status"] == "error"
     assert "Daily limit reached" in result["message"]
     assert result["error_code"] == "API_ERROR"
@@ -293,8 +272,8 @@ async def test_share_non_200_no_message_uses_fallback(mock_api_post):
     mock_api_post.return_value = {
         "jobs": [{"status": 403}],
     }
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB666")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB666")
     assert result["status"] == "error"
     assert "403" in result["message"]
 
@@ -308,8 +287,8 @@ async def test_share_non_200_no_message_uses_fallback(mock_api_post):
 async def test_share_empty_jobs_returns_api_error(mock_api_post):
     """An empty 'jobs' list in the response should produce status=error."""
     mock_api_post.return_value = {"jobs": []}
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB555")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB555")
     assert result["status"] == "error"
     assert result["error_code"] == "API_ERROR"
     assert "No response" in result["message"]
@@ -325,8 +304,8 @@ async def test_share_naukri_api_error_returns_http_status(mock_api_post):
     """NaukriAPIError raised during share must be caught and expose http_status."""
     from naukri_server.api import NaukriAPIError
     mock_api_post.side_effect = NaukriAPIError(status=401, message="Unauthorized")
-    from naukri_server.tools.early_access import naukri_early_access
-    result = await naukri_early_access(action="share", job_id="JOB444")
+    from naukri_server.tools.early_access import naukri_list_early_access, naukri_share_early_access
+    result = await naukri_share_early_access(job_id="JOB444")
     assert result["status"] == "error"
     assert result["http_status"] == 401
     assert result["error_code"] == "API_ERROR"
@@ -405,30 +384,22 @@ def test_detect_new_roles_all_seen_returns_empty_new(mock_save, mock_load):
 # From test_consolidation.py — early access action routing & validation
 # =====================================================================
 
-class TestEarlyAccessConsolidation:
-    """Tests for naukri_server.tools.early_access.naukri_early_access."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.early_access import naukri_early_access
-        result = await naukri_early_access(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+class TestEarlyAccessAtomic:
+    """Tests for atomic early-access tools."""
 
     @pytest.mark.asyncio
     async def test_share_requires_job_id(self):
-        from naukri_server.tools.early_access import naukri_early_access
-        result = await naukri_early_access(action="share")
+        from naukri_server.tools.early_access import naukri_share_early_access
+        result = await naukri_share_early_access(job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "job_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_list_routes_to_helper(self):
-        from naukri_server.tools.early_access import naukri_early_access
+        from naukri_server.tools.early_access import naukri_list_early_access
         with patch("naukri_server.tools.early_access._list_early_access_roles", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "roles": []}
-            result = await naukri_early_access(action="list", page=2, limit=10)
+            result = await naukri_list_early_access(page=2, limit=10)
             mock_helper.assert_awaited_once_with(page=2, limit=10)
             assert result["status"] == "success"

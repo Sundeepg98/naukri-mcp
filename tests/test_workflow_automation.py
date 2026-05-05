@@ -84,21 +84,21 @@ class TestDailyBriefActions:
 
 
 class TestApplyTopFits:
-    """Tests for naukri_smart_apply action=apply_top_fits."""
+    """Tests for naukri_apply_top_fits."""
 
     @pytest.mark.asyncio
     async def test_apply_top_fits_no_saved_jobs(self):
         """No saved jobs should return success with 0 applied."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_apply_top_fits
         with patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock) as mock_score:
             mock_score.return_value = {"status": "success", "total_saved": 0, "scored_count": 0, "scored_jobs": []}
-            result = await naukri_smart_apply(action="apply_top_fits")
+            result = await naukri_apply_top_fits()
             assert result["applied"] == 0
 
     @pytest.mark.asyncio
     async def test_apply_top_fits_applies_to_scored(self):
         """Should apply to jobs above min_fit_score."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_apply_top_fits
         scored = [
             {"job_id": "1", "title": "Dev", "company": "A", "fit_score": 80},
             {"job_id": "2", "title": "SDE", "company": "B", "fit_score": 70},
@@ -107,26 +107,18 @@ class TestApplyTopFits:
              patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply:
             mock_score.return_value = {"status": "success", "total_saved": 5, "scored_count": 2, "scored_jobs": scored}
             mock_apply.return_value = {"status": "applied", "job_id": "1"}
-            result = await naukri_smart_apply(action="apply_top_fits", min_fit_score=60, limit=5)
+            result = await naukri_apply_top_fits(min_fit_score=60, limit=5)
             assert result["applied"] == 2
             assert mock_apply.await_count == 2
 
     @pytest.mark.asyncio
     async def test_apply_top_fits_scoring_error(self):
         """If scoring fails, should return error."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_apply_top_fits
         with patch("naukri_server.tools.smart_apply._bulk_saved_scoring", new_callable=AsyncMock) as mock_score:
             mock_score.return_value = {"status": "error", "message": "Profile fetch failed"}
-            result = await naukri_smart_apply(action="apply_top_fits")
+            result = await naukri_apply_top_fits()
             assert result["status"] == "error"
-
-    @pytest.mark.asyncio
-    async def test_apply_top_fits_unknown_action(self):
-        """Unknown action should return VALIDATION_ERROR."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="invalid_action")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
 
 
 class TestAutoReminder:
@@ -135,14 +127,14 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_apply_with_reminder_success(self):
         """Successful apply + set_reminder_days should call _set_reminder."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder, \
              patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123", "company": "TestCo"}
             mock_reminder.return_value = {"status": "success"}
-            result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
+            result = await naukri_apply(job_id="123", set_reminder_days=7)
             assert result["status"] == "applied"
             assert result["reminder_set"] is True
             assert result["reminder_days"] == 7
@@ -151,24 +143,24 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_apply_without_reminder(self):
         """Apply without set_reminder_days should NOT call _set_reminder."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123"}
-            result = await naukri_applications(action="apply", job_id="123")
+            result = await naukri_apply(job_id="123")
             assert result["status"] == "applied"
             assert "reminder_set" not in result
 
     @pytest.mark.asyncio
     async def test_apply_failed_no_reminder(self):
         """Failed apply should NOT set reminder even if set_reminder_days provided."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "error", "message": "Failed"}
-            result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
+            result = await naukri_apply(job_id="123", set_reminder_days=7)
             assert result["status"] == "error"
             # Saga runs the reminder step but it returns reminder_set=False since apply failed
             assert result.get("reminder_set") is False or "reminder_set" not in result
@@ -176,14 +168,14 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_reminder_failure_doesnt_block_apply(self):
         """Reminder failure should not block apply success."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._apply_single", new_callable=AsyncMock) as mock_apply, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder, \
              patch("naukri_server.database.get_application", new_callable=AsyncMock, return_value=None), \
              patch("naukri_server.tools.jobs._extract_job_id", return_value="123"):
             mock_apply.return_value = {"status": "applied", "job_id": "123", "company": "TestCo"}
             mock_reminder.side_effect = Exception("Reminder DB error")
-            result = await naukri_applications(action="apply", job_id="123", set_reminder_days=7)
+            result = await naukri_apply(job_id="123", set_reminder_days=7)
             # Apply still succeeds even when reminder saga step fails
             assert result["status"] == "applied"
             # Saga reports the error via saga_errors (compensation path)
@@ -193,7 +185,7 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_batch_apply_with_reminders(self):
         """Batch apply with set_reminder_days should set reminders for successful applications."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._batch_apply", new_callable=AsyncMock) as mock_batch, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder:
             mock_batch.return_value = {
@@ -205,9 +197,7 @@ class TestAutoReminder:
                 ],
             }
             mock_reminder.return_value = {"status": "success"}
-            result = await naukri_applications(
-                action="batch_apply", keywords="python developer", set_reminder_days=5,
-            )
+            result = await naukri_batch_apply(keywords="python developer", set_reminder_days=5)
             assert result["reminders_set"] == 2
             assert result["reminder_days"] == 5
             assert mock_reminder.await_count == 2
@@ -215,7 +205,7 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_batch_apply_without_reminders(self):
         """Batch apply without set_reminder_days should NOT set any reminders."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._batch_apply", new_callable=AsyncMock) as mock_batch:
             mock_batch.return_value = {
                 "status": "success",
@@ -223,13 +213,13 @@ class TestAutoReminder:
                     {"status": "applied", "job_id": "101", "company": "AlphaCo"},
                 ],
             }
-            result = await naukri_applications(action="batch_apply", keywords="python developer")
+            result = await naukri_batch_apply(keywords="python developer")
             assert "reminders_set" not in result
 
     @pytest.mark.asyncio
     async def test_batch_apply_reminder_failures_dont_block(self):
         """Batch apply reminder failures should be silently ignored."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._batch_apply", new_callable=AsyncMock) as mock_batch, \
              patch("naukri_server.tools.reminders._set_reminder", new_callable=AsyncMock) as mock_reminder:
             mock_batch.return_value = {
@@ -241,9 +231,7 @@ class TestAutoReminder:
             }
             # First call succeeds, second fails
             mock_reminder.side_effect = [{"status": "success"}, Exception("DB error")]
-            result = await naukri_applications(
-                action="batch_apply", keywords="python developer", set_reminder_days=3,
-            )
+            result = await naukri_batch_apply(keywords="python developer", set_reminder_days=3)
             # Only one reminder succeeded
             assert result["reminders_set"] == 1
             assert result["reminder_days"] == 3
@@ -251,7 +239,7 @@ class TestAutoReminder:
     @pytest.mark.asyncio
     async def test_batch_apply_no_successful_apps_no_reminders(self):
         """Batch apply with all failures should not set any reminders."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_apply, naukri_batch_apply
         with patch("naukri_server.tools.apply._batch_apply", new_callable=AsyncMock) as mock_batch:
             mock_batch.return_value = {
                 "status": "error",
@@ -260,7 +248,5 @@ class TestAutoReminder:
                     {"status": "needs_input", "job_id": "102"},
                 ],
             }
-            result = await naukri_applications(
-                action="batch_apply", keywords="python developer", set_reminder_days=7,
-            )
+            result = await naukri_batch_apply(keywords="python developer", set_reminder_days=7)
             assert "reminders_set" not in result

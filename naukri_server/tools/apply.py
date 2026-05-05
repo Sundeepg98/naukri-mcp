@@ -3,6 +3,8 @@ import json
 import re
 from typing import Optional
 
+from mcp.server.fastmcp import Context
+
 from naukri_server.interfaces import api_client
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT, logger
@@ -19,8 +21,8 @@ from naukri_server.validation import validate_limit
 
 
 async def _apply_single(job_id: str, answers: Optional[dict] = None,
-                         title: str = None, company: str = None,
-                         tracking_extra: dict = None) -> dict:
+                         title: Optional[str] = None, company: Optional[str] = None,
+                         tracking_extra: Optional[dict] = None) -> dict:
     """Core apply logic — POST to apply endpoint, handle questions from cache.
 
     Used by both naukri_apply (single) and naukri_batch_apply (parallel).
@@ -244,6 +246,7 @@ async def naukri_batch_apply(
     answers: Optional[dict] = None,
     delay_ms: int = BATCH_APPLY_DEFAULT_DELAY_MS,
     max_concurrent: int = 3,
+    ctx: Context | None = None,
 ) -> dict:
     """Search and apply to multiple jobs with rate limiting.
 
@@ -321,6 +324,13 @@ async def naukri_batch_apply(
         }
 
     # Step 3: Rate-limited parallel apply (Phase 1 + auto-answer from cache)
+    total = len(to_apply)
+    if ctx:
+        try:
+            await ctx.info(f"Applying to {total} jobs (concurrency={max_concurrent})")
+        except Exception:
+            pass
+
     semaphore = asyncio.Semaphore(max_concurrent)
     delay_seconds = delay_ms / 1000
 
@@ -426,6 +436,15 @@ async def naukri_batch_apply(
         final_status = "partial_success"
     else:
         final_status = "success"
+
+    if ctx:
+        try:
+            await ctx.info(
+                f"Batch apply complete: {applied} applied, {already} already_applied, "
+                f"{needs_input} needs_input, {errors} errors"
+            )
+        except Exception:
+            pass
 
     return {
         "status": final_status,

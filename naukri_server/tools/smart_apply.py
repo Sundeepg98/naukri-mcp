@@ -3,6 +3,8 @@
 import asyncio
 from typing import Optional
 
+from mcp.server.fastmcp import Context
+
 from naukri_server import mcp
 from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
 from naukri_server.domain.fit_score import FitScore
@@ -33,7 +35,11 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
     return fit.to_dict()
 
 
-async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120) -> dict:
+async def _bulk_saved_scoring(
+    min_fit_score: int = 0,
+    timeout_seconds: int = 120,
+    ctx: Context | None = None,
+) -> dict:
     """Score all saved jobs against profile, return ranked list.
 
     Fetches saved jobs from local tracking, fetches full job details for each
@@ -66,6 +72,12 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
         if not saved_jobs:
             return {"status": "success", "total_saved": 0, "scored_count": 0, "min_fit_score": min_fit_score, "scored_jobs": [], "message": "No saved jobs found"}
 
+        if ctx:
+            try:
+                await ctx.info(f"Fetching details for {len(saved_jobs)} saved jobs")
+            except Exception:
+                pass
+
         # Fetch full details for each saved job (need skills/experience for scoring)
         sem = asyncio.Semaphore(BULK_FETCH_CONCURRENCY)
         errors = []
@@ -90,6 +102,12 @@ async def _bulk_saved_scoring(min_fit_score: int = 0, timeout_seconds: int = 120
             *[_fetch_detail(j) for j in saved_jobs],
             return_exceptions=True,
         )
+
+        if ctx:
+            try:
+                await ctx.info(f"Scoring {len(detail_results)} jobs against profile")
+            except Exception:
+                pass
 
         # Score each job that has valid details
         scored = []
@@ -143,6 +161,7 @@ async def _apply_top_fits(
     set_reminder_days: Optional[int] = None,
     answers: Optional[dict] = None,
     timeout_seconds: int = 120,
+    ctx: Context | None = None,
 ) -> dict:
     """Score saved jobs and apply to top fits above min_fit_score."""
     from naukri_server.tools.apply import _apply_single
@@ -160,7 +179,11 @@ async def _apply_top_fits(
 
     async def step_score():
         nonlocal scored_jobs
-        scored_result = await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+        scored_result = await _bulk_saved_scoring(
+            min_fit_score=min_fit_score,
+            timeout_seconds=timeout_seconds,
+            ctx=ctx,
+        )
         if scored_result.get("status") == "error":
             raise RuntimeError(scored_result.get("message", "Scoring failed"))
 
@@ -184,7 +207,23 @@ async def _apply_top_fits(
 
         to_apply = scored_jobs[:limit]
 
-        for job in to_apply:
+        if ctx:
+            try:
+                await ctx.info(
+                    f"Scored {len(scored_jobs)} jobs, applying to top {len(to_apply)}"
+                )
+            except Exception:
+                pass
+
+        for i, job in enumerate(to_apply, start=1):
+            if ctx:
+                try:
+                    await ctx.report_progress(
+                        i, len(to_apply),
+                        message=f"Applying to {job.get('title')} at {job.get('company')}",
+                    )
+                except Exception:
+                    pass
             jid = job.get("job_id")
             if not jid:
                 continue
@@ -291,134 +330,8 @@ async def _apply_top_fits(
     return result
 
 
-@mcp.tool()
-async def naukri_smart_apply(
-    job_id: Optional[str] = None,
-    action: Optional[str] = None,
-    apply_if_fit: bool = False,
-    min_fit_score: int = 60,
-    answers: Optional[dict] = None,
-    timeout_seconds: int = 120,
-    set_reminder_days: Optional[int] = None,
-    limit: int = 10,
-) -> dict:
-    """DEPRECATED — use naukri_assess_fit, naukri_score_saved_jobs, or naukri_apply_top_fits instead.
-
-    Assess job fit before applying — compares your profile against the job.
-
-    Actions:
-      - None (default): Single-job assessment. Requires job_id. → use naukri_assess_fit
-      - "bulk_saved": Score all saved jobs. → use naukri_score_saved_jobs
-      - "apply_top_fits": Score and auto-apply. → use naukri_apply_top_fits
-
-    Args:
-        job_id: Naukri job ID (required for single-job assessment, ignored for bulk_saved)
-        action: "bulk_saved" to score all saved jobs, or None for single-job assessment
-        apply_if_fit: If True, automatically apply when fit score >= min_fit_score (single-job only)
-        min_fit_score: Minimum fit score threshold (default 60, range 0-100)
-        answers: Optional screening question answers (for auto-apply, single-job only)
-        timeout_seconds: Timeout for bulk operations (default 120)
-        set_reminder_days: Days until follow-up reminder (for apply_top_fits and single-job auto-apply)
-        limit: Max jobs to apply to in apply_top_fits (default 10, max 20)
-    """
-    if not 0 <= min_fit_score <= 100:
-        return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
-
-    # ── Bulk saved scoring ───────────────────────────────────────────
-    if action == "bulk_saved":
-        return await handle_tool_action(
-            lambda: _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds),
-            "smart_apply.bulk_saved",
-        )
-
-    # ── Apply top fits ────────────────────────────────────────────────
-    if action == "apply_top_fits":
-        return await handle_tool_action(
-            lambda: _apply_top_fits(
-                min_fit_score=min_fit_score,
-                limit=limit,
-                set_reminder_days=set_reminder_days,
-                answers=answers,
-                timeout_seconds=timeout_seconds,
-            ),
-            "smart_apply.apply_top_fits",
-        )
-
-    # ── Unknown action ───────────────────────────────────────────────
-    if action is not None:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: bulk_saved, apply_top_fits (or omit for single-job assessment)", "error_code": "VALIDATION_ERROR"}
-
-    # ── Single-job assessment (default) ──────────────────────────────
-    if not job_id:
-        return {"status": "error", "message": "job_id is required for single-job assessment", "error_code": "VALIDATION_ERROR"}
-
-    async def _single_assess():
-        from naukri_server.tools.jobs import naukri_get_job
-        from naukri_server.tools.jobs import _fetch_match_score
-        from naukri_server.tools.profile import get_cached_profile
-        from naukri_server.tools.apply import _apply_single
-
-        # Parallel fetch job + profile
-        job_result, profile_result = await asyncio.gather(
-            naukri_get_job(job_id_or_url=job_id),
-            get_cached_profile(),
-            return_exceptions=True,
-        )
-
-        if isinstance(job_result, Exception) or job_result.get("status") == "error":
-            msg = str(job_result) if isinstance(job_result, Exception) else job_result.get("message")
-            return {"status": "error", "message": f"Failed to fetch job: {msg}", "error_code": "API_ERROR"}
-
-        if isinstance(profile_result, Exception) or profile_result.get("status") == "error":
-            msg = str(profile_result) if isinstance(profile_result, Exception) else profile_result.get("message")
-            return {"status": "error", "message": f"Failed to fetch profile: {msg}", "error_code": "API_ERROR"}
-
-        # Fetch Naukri's own match score (non-blocking — don't fail if unavailable)
-        naukri_match = None
-        try:
-            naukri_match = await _fetch_match_score(job_id)
-        except Exception:
-            pass
-
-        # Compute fit — use tags-or-skills fallback, pass enrichment data
-        fit = _score_job(job_result, profile_result, is_agent_eligible=job_result.get("is_agent_eligible", False))
-
-        result = {
-            "status": "success",
-            "job_summary": {
-                "title": job_result.get("title"),
-                "company": job_result.get("company"),
-                "salary": job_result.get("salary", ""),
-                "experience": job_result.get("experience", ""),
-                "location": job_result.get("location"),
-                "work_mode": job_result.get("work_mode"),
-            },
-            "fit_assessment": fit,
-            "applied": False,
-            "naukri_match": naukri_match,
-        }
-
-        # Auto-apply if requested and fit
-        if apply_if_fit and fit["overall_score"] >= min_fit_score:
-            apply_result = await _apply_single(
-                job_id=job_id, answers=answers,
-                title=job_result.get("title"), company=job_result.get("company"),
-                tracking_extra={"source": "smart_apply", "fit_score": fit["overall_score"]},
-            )
-            result["applied"] = apply_result.get("status") == "applied"
-            result["apply_result"] = apply_result
-            # Quota warning
-            daily = apply_result.get("daily_applied")
-            if daily is not None and daily >= DAILY_APPLY_QUOTA - 5:
-                result["quota_warning"] = f"Daily quota: {daily}/{DAILY_APPLY_QUOTA} used. {DAILY_APPLY_QUOTA - daily} remaining."
-
-        return result
-
-    return await handle_tool_action(_single_assess, "smart_apply.assess")
-
-
 # =====================================================================
-# New single-purpose tools (preferred over naukri_smart_apply)
+# Single-purpose tools
 # =====================================================================
 
 
@@ -524,6 +437,7 @@ async def naukri_assess_fit(
 async def naukri_score_saved_jobs(
     min_fit_score: int = 60,
     timeout_seconds: int = 120,
+    ctx: Context | None = None,
 ) -> dict:
     """Score all saved/bookmarked jobs against your profile.
 
@@ -542,7 +456,11 @@ async def naukri_score_saved_jobs(
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
 
-    return await _bulk_saved_scoring(min_fit_score=min_fit_score, timeout_seconds=timeout_seconds)
+    return await _bulk_saved_scoring(
+        min_fit_score=min_fit_score,
+        timeout_seconds=timeout_seconds,
+        ctx=ctx,
+    )
 
 
 @mcp.tool()
@@ -552,6 +470,7 @@ async def naukri_apply_top_fits(
     set_reminder_days: Optional[int] = None,
     answers: Optional[dict] = None,
     timeout_seconds: int = 120,
+    ctx: Context | None = None,
 ) -> dict:
     """Score saved jobs and auto-apply to top matches above min_fit_score.
 
@@ -579,4 +498,5 @@ async def naukri_apply_top_fits(
         set_reminder_days=set_reminder_days,
         answers=answers,
         timeout_seconds=timeout_seconds,
+        ctx=ctx,
     )

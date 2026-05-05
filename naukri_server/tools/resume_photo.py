@@ -19,100 +19,6 @@ from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
 PHOTO_ALLOWED_FORMATS = {".png", ".jpg", ".jpeg", ".gif"}
 RESUME_ALLOWED_FORMATS = {".pdf", ".doc", ".docx"}
 
-_VALID_ACTIONS = {
-    "resume": {"info", "download", "upload"},
-    "photo": {"info", "upload", "delete"},
-}
-
-
-@mcp.tool()
-async def naukri_profile_media(
-    media_type: str,
-    action: str = "info",
-    file_path: Optional[str] = None,
-    save_path: Optional[str] = None,
-) -> dict:
-    """Unified resume and photo management — info, download, upload, delete.
-
-    Note: Uses two-level dispatch — 'media_type' selects the resource (resume or photo),
-    then 'action' selects the operation (info, upload, download, delete). This avoids
-    combinatorial explosion of action values like "resume_info", "photo_upload", etc.
-
-    DEPRECATED: Use individual tools instead — naukri_resume_info(), naukri_upload_resume(),
-    naukri_download_resume(), naukri_photo_info(), naukri_upload_photo().
-
-    Combines former naukri_resume + naukri_photo into one tool.
-
-    media_type="resume" actions:
-      - "info": Get resume filename, upload date, download URL
-      - "download": Save resume to local file (requires save_path)
-      - "upload": Upload new resume (requires file_path; PDF/DOC/DOCX, max 5MB)
-
-    media_type="photo" actions:
-      - "info": Get current photo URL and dimensions
-      - "upload": Upload new profile photo (requires file_path; PNG/JPG/JPEG/GIF)
-      - "delete": Remove current profile photo
-
-    Args:
-        media_type: "resume" | "photo"
-        action: Depends on media_type — see above
-        file_path: Local file to upload (for upload actions)
-        save_path: Local path to save downloaded resume (for resume download)
-
-    Returns:
-        - resume/info: {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}
-        - resume/download: {status, file_path, file_size_bytes, message}
-        - resume/upload: {status, file, size_mb, message}
-        - photo/info: {status, has_photo, photo_url, format, status_label, upload_date, download_api}
-        - photo/upload: {status, file, message}
-        - photo/delete: {status, message}
-        - {status: "error", message} on failure
-    """
-    # ── validate media_type ───────────────────────────────────────────
-    if media_type not in _VALID_ACTIONS:
-        valid_types = ", ".join(sorted(_VALID_ACTIONS))
-        return {"status": "error", "message": f"Unknown media_type '{media_type}'. Use: {valid_types}", "error_code": "VALIDATION_ERROR"}
-
-    # ── validate action for the chosen media_type ─────────────────────
-    valid = _VALID_ACTIONS[media_type]
-    if action not in valid:
-        return {"status": "error", "message": f"Unknown action '{action}' for media_type '{media_type}'. Use: {', '.join(sorted(valid))}", "error_code": "VALIDATION_ERROR"}
-
-    # ── resume actions ────────────────────────────────────────────────
-    if media_type == "resume":
-        if action == "info":
-            return await _resume_info()
-        elif action == "download":
-            if not save_path:
-                return {"status": "error", "message": "download requires save_path.", "error_code": "VALIDATION_ERROR"}
-            return await _resume_download(save_path)
-        elif action == "upload":
-            if not file_path:
-                return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
-            try:
-                return await asyncio.wait_for(
-                    _resume_upload(file_path),
-                    timeout=BROWSER_OPERATION_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                return {"status": "error", "message": f"Resume upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-
-    # ── photo actions ─────────────────────────────────────────────────
-    elif media_type == "photo":
-        if action == "info":
-            return await _photo_info()
-        elif action == "upload":
-            if not file_path:
-                return {"status": "error", "message": "upload requires file_path.", "error_code": "VALIDATION_ERROR"}
-            try:
-                return await asyncio.wait_for(
-                    _photo_upload(file_path),
-                    timeout=BROWSER_OPERATION_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                return {"status": "error", "message": f"Photo upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-        elif action == "delete":
-            return await _photo_delete()
 
 
 # ---------------------------------------------------------------------------
@@ -583,3 +489,21 @@ async def naukri_upload_photo(file_path: str) -> dict:
         )
     except asyncio.TimeoutError:
         return {"status": "error", "message": f"Photo upload timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
+
+
+@mcp.tool()
+async def naukri_delete_photo() -> dict:
+    """Delete the current profile photo from Naukri.
+
+    Uses browser automation to remove the photo via the profile page photo cropper.
+
+    Returns:
+        {status, message}
+    """
+    try:
+        return await asyncio.wait_for(
+            _photo_delete(),
+            timeout=BROWSER_OPERATION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Photo delete timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}

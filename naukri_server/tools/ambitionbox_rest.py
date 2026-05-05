@@ -15,6 +15,7 @@ Used by:
 """
 
 import asyncio
+from typing import Optional
 import logging
 import time
 
@@ -62,7 +63,7 @@ async def _get_ab_cookies() -> dict:
     return _ab_cookies
 
 
-async def _ab_rest_get(url: str, params: dict = None) -> dict:
+async def _ab_rest_get(url: str, params: Optional[dict] = None) -> dict:
     """GET request to an AmbitionBox REST endpoint using cached cookies.
 
     Retries once with fresh cookies on 401/403.
@@ -139,7 +140,7 @@ async def ab_get_work_culture(company_id: str) -> dict:
     }
 
 
-async def ab_get_interview_questions(company_id: str, designation_id: str = None, limit: int = 7) -> dict:
+async def ab_get_interview_questions(company_id: str, designation_id: Optional[str] = None, limit: int = 7) -> dict:
     """Fetch actual interview questions by company and role."""
     logger.info("AB REST: fetching interview questions for company %s", company_id)
     params = {"companyId": company_id, "limit": str(limit)}

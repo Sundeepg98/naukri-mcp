@@ -82,54 +82,49 @@ class TestValidateEnum:
 
 class TestEmptyResponses:
     @pytest.mark.asyncio
-    async def test_search_no_results_rest_fallback_to_browser_empty(self):
-        """When REST returns no jobDetails and browser also fails, error is returned."""
+    async def test_search_no_results_rest_returns_empty(self):
+        """When REST returns empty jobDetails [], return success with 0 jobs (no browser fallback)."""
         from naukri_server.tools.search import naukri_search_jobs
-        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api, \
-             patch("naukri_server.tools.search.browser") as mock_browser:
-            # REST returns empty (no jobDetails key triggers fallback)
+        with patch("naukri_server.tools.search.api_client.get", new_callable=AsyncMock) as mock_api:
+            # REST returns empty jobDetails — should be treated as valid (not falsy)
             mock_api.return_value = {"noOfJobs": 0, "jobDetails": []}
-            # Browser path - mock page_pool.acquire
-            mock_page = AsyncMock()
-            mock_browser.page_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_page)
-            mock_browser.page_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-            with patch("naukri_server.tools.search.page_intercept_json", new_callable=AsyncMock, return_value=None):
-                result = await naukri_search_jobs(keywords="nonexistent_xyz_12345")
-                assert result["status"] == "error"
-                assert result["error_code"] == "API_ERROR"
+            result = await naukri_search_jobs(keywords="nonexistent_xyz_12345")
+            assert result["status"] == "success"
+            assert result["total"] == 0
+            assert result["jobs"] == []
 
     @pytest.mark.asyncio
     async def test_applications_list_empty(self):
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_list_applications
         with patch("naukri_server.database.list_applications", new_callable=AsyncMock,
                     return_value=([], 0)), \
              patch("naukri_server.database.count_applications_by_status", new_callable=AsyncMock,
                     return_value={}):
-            result = await naukri_applications(action="list")
+            result = await naukri_list_applications()
             assert result["status"] == "success"
             assert result["total"] == 0
 
     @pytest.mark.asyncio
     async def test_saved_jobs_list_empty(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
+        from naukri_server.tools.saved_jobs import naukri_list_saved_jobs
         with patch("naukri_server.database.list_saved_jobs", new_callable=AsyncMock,
                     return_value=([], 0)):
-            result = await naukri_saved_jobs(action="list")
+            result = await naukri_list_saved_jobs()
             assert result["status"] == "success"
             assert result["total"] == 0
 
     @pytest.mark.asyncio
     async def test_insights_no_applications(self):
-        from naukri_server.tools.insights import naukri_insights
+        from naukri_server.tools.insights import naukri_application_insights
         with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
-            result = await naukri_insights(insight_type="applications")
+            result = await naukri_application_insights()
             assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_insights_salary_no_applications(self):
-        from naukri_server.tools.insights import naukri_insights
+        from naukri_server.tools.insights import naukri_salary_position
         with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=[]):
-            result = await naukri_insights(insight_type="salary")
+            result = await naukri_salary_position()
             assert result["status"] == "error"
 
 
@@ -191,80 +186,26 @@ class TestSalaryParsingEdge:
 
 class TestErrorCodePresence:
     @pytest.mark.asyncio
-    async def test_applications_unknown_action(self):
-        from naukri_server.tools.tracking import naukri_applications
-        result = await naukri_applications(action="invalid_xyz")
-        assert result["status"] == "error"
-        assert "error_code" in result
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_jobs_unknown_action(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="invalid_xyz")
-        assert result["status"] == "error"
-        assert "error_code" in result
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_insights_unknown_type(self):
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="invalid_xyz")
-        assert result["status"] == "error"
-        assert "error_code" in result
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_sync_unknown_entity(self):
-        from naukri_server.tools.sync import naukri_sync
-        result = await naukri_sync(entity="invalid_xyz")
-        assert result["status"] == "error"
-        assert "error_code" in result
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_saved_jobs_unknown_action(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="invalid_xyz")
-        assert result["status"] == "error"
-        assert "error_code" in result
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_performance_unknown_metric(self):
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="invalid_xyz")
+    async def test_get_job_missing_job_id(self):
+        from naukri_server.tools.jobs import _tool_get_job
+        result = await _tool_get_job(job_id="")
         assert result["status"] == "error"
         assert "error_code" in result
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_jobs_get_missing_job_id(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="get")
+        from naukri_server.tools.jobs import _tool_get_job
+        result = await _tool_get_job(job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_applications_detail_missing_id(self):
-        from naukri_server.tools.tracking import naukri_applications
-        result = await naukri_applications(action="detail")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
+        from naukri_server.tools.tracking import naukri_get_application
+        with pytest.raises(TypeError):
+            await naukri_get_application()
 
-    @pytest.mark.asyncio
-    async def test_saved_jobs_save_missing_id(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="save")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_saved_jobs_unsave_missing_id(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="unsave")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
 
 
 # ============================================================================
@@ -334,58 +275,55 @@ class TestJobParsingEdgeCases:
 class TestActionDispatchers:
     @pytest.mark.asyncio
     async def test_applications_apply_needs_job_id(self):
-        from naukri_server.tools.tracking import naukri_applications
-        result = await naukri_applications(action="apply")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
+        from naukri_server.tools.tracking import naukri_apply
+        with pytest.raises(TypeError):
+            await naukri_apply()
 
     @pytest.mark.asyncio
     async def test_applications_batch_apply_needs_keywords(self):
-        from naukri_server.tools.tracking import naukri_applications
-        result = await naukri_applications(action="batch_apply")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
+        from naukri_server.tools.tracking import naukri_batch_apply
+        with pytest.raises(TypeError):
+            await naukri_batch_apply()
 
     @pytest.mark.asyncio
     async def test_applications_purge_needs_before_date(self):
-        from naukri_server.tools.tracking import naukri_applications
-        result = await naukri_applications(action="purge")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
+        from naukri_server.tools.tracking import naukri_purge_applications
+        with pytest.raises(TypeError):
+            await naukri_purge_applications()
 
     @pytest.mark.asyncio
     async def test_jobs_report_fraud_needs_job_id(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="report_fraud")
+        from naukri_server.tools.jobs import _tool_report_fraud
+        result = await _tool_report_fraud(job_id="", reason="x")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_jobs_report_fraud_needs_reason(self):
-        from naukri_server.tools.jobs import naukri_jobs
-        result = await naukri_jobs(action="report_fraud", job_id="123456")
+        from naukri_server.tools.jobs import _tool_report_fraud
+        result = await _tool_report_fraud(job_id="123456", reason="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "reason" in result["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_performance_impressions_invalid_days(self):
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="impressions", days=5)
+    async def test_search_impressions_invalid_days(self):
+        from naukri_server.tools.performance import naukri_search_impressions
+        result = await naukri_search_impressions(days=5)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_insights_cached_answers_update_needs_key(self):
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="cached_answers", action="update")
+        from naukri_server.tools.insights import naukri_cached_answers
+        result = await naukri_cached_answers(action="update")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_insights_cached_answers_delete_needs_key(self):
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="cached_answers", action="delete")
+        from naukri_server.tools.insights import naukri_cached_answers
+        result = await naukri_cached_answers(action="delete")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 

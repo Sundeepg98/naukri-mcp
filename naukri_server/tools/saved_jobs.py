@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
     logger, SAVE_JOB_API, UNSAVE_JOB_API, SAVED_JOBS_API,
 )
-from naukri_server.models import validate_action_params
 from naukri_server.validation import validate_limit, validate_page
 
 
@@ -63,7 +63,7 @@ async def _list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     }
 
 
-async def _save_job(job_id: str, title: str = None, company: str = None,
+async def _save_job(job_id: str, title: Optional[str] = None, company: Optional[str] = None,
                     notes: Optional[str] = None,
                     sync_to_naukri: bool = False) -> dict:
     """Save/bookmark a job locally (and optionally on Naukri)."""
@@ -164,101 +164,7 @@ async def _unsave_job(job_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ISP param validation
-# ---------------------------------------------------------------------------
-
-_VALID_PARAMS_PER_ACTION = {
-    "list": {"limit", "page"},
-    "save": {"job_id", "title", "company", "notes", "sync_to_naukri"},
-    "unsave": {"job_id"},
-    "sync": set(),
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool for saved jobs
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_saved_jobs(
-    action: str = "list",
-    job_id: Optional[str] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-    notes: Optional[str] = None,
-    sync_to_naukri: bool = False,
-    limit: int = 50,
-    page: int = 1,
-) -> dict:
-    """[Deprecated — use naukri_list_saved_jobs, naukri_save_job, naukri_unsave_job, naukri_sync_saved_jobs instead]
-
-    Unified saved/bookmarked jobs management — list, save, unsave, and sync.
-
-    Actions:
-      - "list": Get saved/bookmarked jobs (use limit/page for pagination)
-      - "save": Save/bookmark a job for later (requires job_id)
-      - "unsave": Unsave/unbookmark a job (requires job_id)
-      - "sync": Pull saved jobs from Naukri server and merge with local tracking
-
-    Args:
-        action: "list" | "save" | "unsave" | "sync"
-        job_id: Required for save/unsave — the Naukri job ID
-        title: Job title for display (optional, save only)
-        company: Company name for display (optional, save only)
-        notes: Personal notes about this job (optional, save only)
-        sync_to_naukri: If True, also save the job on Naukri's backend (save only)
-        limit: Max results per page for list action (default 50)
-        page: Page number for list action (default 1)
-
-    Returns:
-        - list: {status, total, count, page, has_more, saved_jobs: [...]}
-        - save: {status: "saved", job_id, total_saved, synced_remote}
-                or {status: "already_saved", job_id}
-        - unsave: {status: "unsaved", job_id}
-                  or {status: "not_found", job_id}
-        - {status: "error", message} on failure
-    """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id, "title": title, "company": company, "notes": notes,
-        "sync_to_naukri": sync_to_naukri if sync_to_naukri else None,
-        "limit": limit if limit != 50 else None,
-        "page": page if page != 1 else None,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
-
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
-
-    # -- list ---------------------------------------------------------------
-    if action == "list":
-        return _attach_unused(await _list_saved_jobs(limit=limit, page=page))
-
-    # -- save ---------------------------------------------------------------
-    elif action == "save":
-        if not job_id:
-            return {"status": "error", "message": "save requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri))
-
-    # -- unsave -------------------------------------------------------------
-    elif action == "unsave":
-        if not job_id:
-            return {"status": "error", "message": "unsave requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await _unsave_job(job_id))
-
-    # -- sync ---------------------------------------------------------------
-    elif action == "sync":
-        return _attach_unused(await _sync_saved_jobs_from_naukri())
-
-    # -- unknown action -----------------------------------------------------
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, save, unsave, sync", "error_code": "VALIDATION_ERROR"}
-
-
-# ---------------------------------------------------------------------------
-# Single-purpose MCP tools (preferred over the unified naukri_saved_jobs)
+# Single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -272,7 +178,10 @@ async def naukri_list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
     Returns:
         {status, total, count, page, has_more, saved_jobs: [...]}
     """
-    return await _list_saved_jobs(limit=limit, page=page)
+    return await handle_tool_action(
+        lambda: _list_saved_jobs(limit=limit, page=page),
+        "saved_jobs.list",
+    )
 
 
 @mcp.tool()
@@ -296,7 +205,10 @@ async def naukri_save_job(
         {status: "success", action: "saved", job_id, total_saved, synced_remote, already_applied}
         or {status: "success", action: "already_saved", job_id}
     """
-    return await _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri)
+    return await handle_tool_action(
+        lambda: _save_job(job_id, title=title, company=company, notes=notes, sync_to_naukri=sync_to_naukri),
+        "saved_jobs.save",
+    )
 
 
 @mcp.tool()
@@ -310,7 +222,10 @@ async def naukri_unsave_job(job_id: str) -> dict:
         {status: "success", action: "unsaved", job_id}
         or {status: "error", message, error_code: "NOT_FOUND"}
     """
-    return await _unsave_job(job_id)
+    return await handle_tool_action(
+        lambda: _unsave_job(job_id),
+        "saved_jobs.unsave",
+    )
 
 
 @mcp.tool()
@@ -320,4 +235,7 @@ async def naukri_sync_saved_jobs() -> dict:
     Returns:
         {status, total_remote, new_added, already_local, total_local}
     """
-    return await _sync_saved_jobs_from_naukri()
+    return await handle_tool_action(
+        _sync_saved_jobs_from_naukri,
+        "saved_jobs.sync",
+    )

@@ -132,7 +132,7 @@ async def application_insights(days: int = 30) -> dict:
     apps = await list_all_applications()
 
     if not apps:
-        return {"status": "error", "message": "No applications tracked yet. Use naukri_apply or naukri_sync(entity=\"applications\") first.", "error_code": "NOT_FOUND"}
+        return {"status": "error", "message": "No applications tracked yet. Use naukri_apply or naukri_sync_applications() first.", "error_code": "NOT_FOUND"}
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     recent = [a for a in apps if (a.get("applied_at") or "") >= cutoff]

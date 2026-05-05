@@ -13,55 +13,37 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # =====================================================================
 
 class TestSmartApply:
-    """Tests for naukri_server.tools.smart_apply.naukri_smart_apply."""
+    """Tests for atomic smart-apply tools (naukri_assess_fit, naukri_score_saved_jobs, naukri_apply_top_fits)."""
 
     @pytest.mark.asyncio
-    async def test_smart_apply_requires_job_id(self):
-        """Calling without job_id and without action returns validation error."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply()
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_smart_apply_unknown_action(self):
-        """Unknown action returns validation error."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="invalid_action")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "invalid_action" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_smart_apply_min_fit_score_too_high(self):
+    async def test_assess_fit_min_fit_score_too_high(self):
         """min_fit_score > 100 returns validation error."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(job_id="12345", min_fit_score=101)
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        result = await naukri_assess_fit(job_id="12345", min_fit_score=101)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "min_fit_score" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_smart_apply_min_fit_score_negative(self):
+    async def test_assess_fit_min_fit_score_negative(self):
         """min_fit_score < 0 returns validation error."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(job_id="12345", min_fit_score=-1)
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        result = await naukri_assess_fit(job_id="12345", min_fit_score=-1)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "min_fit_score" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_smart_apply_min_fit_score_boundary_valid(self):
+    async def test_assess_fit_min_fit_score_boundary_valid(self):
         """min_fit_score at boundary (0) passes validation, proceeds to fetch."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_assess_fit
         # Patch at the source modules since smart_apply uses local imports
         with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_job, \
              patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
             mock_job.return_value = {"status": "error", "message": "not found"}
             mock_profile.return_value = {"status": "success", "key_skills": []}
             # Score 0 should pass validation, then fail on job fetch
-            result = await naukri_smart_apply(job_id="12345", min_fit_score=0)
+            result = await naukri_assess_fit(job_id="12345", min_fit_score=0)
             assert result["status"] == "error"
             assert result["error_code"] == "API_ERROR"
 
@@ -120,7 +102,7 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_returns_scored_jobs(self):
         """bulk_saved returns scored and ranked saved jobs."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         mock_get_job = AsyncMock(side_effect=self._mock_get_job)
 
@@ -130,7 +112,7 @@ class TestBulkSavedScoring:
             mock_saved.return_value = self._MOCK_SAVED_JOBS
             mock_profile.return_value = self._MOCK_PROFILE
 
-            result = await naukri_smart_apply(action="bulk_saved", min_fit_score=0)
+            result = await naukri_score_saved_jobs(min_fit_score=0)
 
         assert result["status"] == "success"
         assert result["total_saved"] == 3
@@ -151,14 +133,14 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_empty_saved_jobs(self):
         """bulk_saved returns empty when no saved jobs."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved, \
              patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
             mock_saved.return_value = {"status": "success", "total": 0, "saved_jobs": []}
             mock_profile.return_value = self._MOCK_PROFILE
 
-            result = await naukri_smart_apply(action="bulk_saved")
+            result = await naukri_score_saved_jobs()
 
         assert result["status"] == "success"
         assert result["total_saved"] == 0
@@ -169,7 +151,7 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_filters_by_min_score(self):
         """bulk_saved respects min_fit_score filter."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         mock_get_job = AsyncMock(side_effect=self._mock_get_job)
 
@@ -180,7 +162,7 @@ class TestBulkSavedScoring:
             mock_profile.return_value = self._MOCK_PROFILE
 
             # Use a high min_fit_score to filter out most jobs
-            result = await naukri_smart_apply(action="bulk_saved", min_fit_score=80)
+            result = await naukri_score_saved_jobs(min_fit_score=80)
 
         assert result["status"] == "success"
         assert result["total_saved"] == 3
@@ -194,14 +176,14 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_handles_saved_jobs_error(self):
         """bulk_saved returns error when saved jobs fetch fails."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved, \
              patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
             mock_saved.return_value = {"status": "error", "message": "auth expired"}
             mock_profile.return_value = self._MOCK_PROFILE
 
-            result = await naukri_smart_apply(action="bulk_saved")
+            result = await naukri_score_saved_jobs()
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -210,14 +192,14 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_handles_profile_error(self):
         """bulk_saved returns error when profile fetch fails."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         with patch("naukri_server.tools.tracking._list_saved_jobs", new_callable=AsyncMock) as mock_saved, \
              patch("naukri_server.tools.profile.get_cached_profile", new_callable=AsyncMock) as mock_profile:
             mock_saved.return_value = self._MOCK_SAVED_JOBS
             mock_profile.return_value = {"status": "error", "message": "token expired"}
 
-            result = await naukri_smart_apply(action="bulk_saved")
+            result = await naukri_score_saved_jobs()
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -226,7 +208,7 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_handles_partial_job_detail_failures(self):
         """bulk_saved still scores jobs that succeed even when some detail fetches fail."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         async def _partial_get_job(job_id_or_url):
             if job_id_or_url == "102":
@@ -240,7 +222,7 @@ class TestBulkSavedScoring:
             mock_profile.return_value = self._MOCK_PROFILE
             mock_job.side_effect = _partial_get_job
 
-            result = await naukri_smart_apply(action="bulk_saved", min_fit_score=0)
+            result = await naukri_score_saved_jobs(min_fit_score=0)
 
         assert result["status"] == "success"
         assert result["total_saved"] == 3
@@ -254,8 +236,8 @@ class TestBulkSavedScoring:
     @pytest.mark.asyncio
     async def test_bulk_saved_min_fit_score_validation(self):
         """bulk_saved still validates min_fit_score range."""
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        result = await naukri_smart_apply(action="bulk_saved", min_fit_score=101)
+        from naukri_server.tools.smart_apply import naukri_score_saved_jobs
+        result = await naukri_score_saved_jobs(min_fit_score=101)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "min_fit_score" in result["message"]
@@ -661,15 +643,15 @@ class TestInterviewPrep:
     @pytest.mark.asyncio
     async def test_prep_requires_job_id(self):
         """prep action requires job_id."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(action="prep")
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
+        result = await naukri_mock_interview_prep(job_id="")
         assert result["status"] == "error"
         assert "job_id" in result["message"].lower() or "prep requires" in result["message"].lower()
 
     @pytest.mark.asyncio
     async def test_prep_returns_job_summary(self):
         """prep returns job summary and preparation guide."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_job, \
              patch("naukri_server.tools.mock_interview._get_topics", new_callable=AsyncMock) as mock_topics:
             mock_job.return_value = {
@@ -692,7 +674,7 @@ class TestInterviewPrep:
                     "status": "success", "overall_rating": 4.2,
                     "category_ratings": {"Work-Life Balance": 3.8},
                 }
-                result = await naukri_mock_interview(action="prep", job_id="123")
+                result = await naukri_mock_interview_prep(job_id="123")
             assert result["status"] == "success"
             assert result["job_summary"]["title"] == "Python Dev"
             assert result["job_summary"]["company"] == "Acme Corp"
@@ -704,17 +686,17 @@ class TestInterviewPrep:
     @pytest.mark.asyncio
     async def test_prep_handles_job_fetch_failure(self):
         """prep returns error when job fetch fails."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_job:
             mock_job.return_value = {"status": "error", "message": "Job not found"}
-            result = await naukri_mock_interview(action="prep", job_id="999")
+            result = await naukri_mock_interview_prep(job_id="999")
             assert result["status"] == "error"
             assert "job not found" in result["message"].lower()
 
     @pytest.mark.asyncio
     async def test_prep_partial_success_when_ambitionbox_fails(self):
         """prep returns partial_success when AmbitionBox data is unavailable."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_job, \
              patch("naukri_server.tools.mock_interview._get_topics", new_callable=AsyncMock) as mock_topics, \
              patch("naukri_server.tools.ambitionbox._fetch_interviews", new_callable=AsyncMock) as mock_iv, \
@@ -727,7 +709,7 @@ class TestInterviewPrep:
             mock_topics.return_value = {"status": "success", "topics": []}
             mock_iv.return_value = {"status": "error", "message": "timeout"}
             mock_rev.return_value = {"status": "error", "message": "timeout"}
-            result = await naukri_mock_interview(action="prep", job_id="123")
+            result = await naukri_mock_interview_prep(job_id="123")
             assert result["status"] == "partial_success"
             assert "errors" in result
             assert result["company_interviews"] is None
@@ -736,7 +718,7 @@ class TestInterviewPrep:
     @pytest.mark.asyncio
     async def test_prep_no_company_name(self):
         """prep returns partial_success when job has no company name."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.jobs.naukri_get_job", new_callable=AsyncMock) as mock_job, \
              patch("naukri_server.tools.mock_interview._get_topics", new_callable=AsyncMock) as mock_topics:
             mock_job.return_value = {
@@ -745,7 +727,7 @@ class TestInterviewPrep:
                 "skills": ["Python"],
             }
             mock_topics.return_value = {"status": "success", "topics": []}
-            result = await naukri_mock_interview(action="prep", job_id="123")
+            result = await naukri_mock_interview_prep(job_id="123")
             assert result["status"] == "partial_success"
             assert any("company" in e.lower() for e in result["errors"])
 
@@ -760,7 +742,7 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_returns_action_items(self):
         """follow_up returns prioritized action items for stale applications."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -772,7 +754,7 @@ class TestApplicationFollowUp:
             }
             mock_inbox.return_value = {"status": "success", "messages": []}
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "success"
             assert result["summary"]["total_stale"] == 1
             assert len(result["action_items"]) == 1
@@ -782,21 +764,21 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_stale_failure(self):
         """follow_up returns error when stale detection fails."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {"status": "error", "message": "Failed"}
             mock_inbox.return_value = {"status": "success", "messages": []}
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "error"
             assert result["error_code"] == "API_ERROR"
 
     @pytest.mark.asyncio
     async def test_follow_up_recruiter_contact_high_priority(self):
         """follow_up marks apps with recruiter messages as high priority."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -818,7 +800,7 @@ class TestApplicationFollowUp:
                 ],
             }
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "success"
             assert result["summary"]["with_recruiter_contact"] == 1
             assert result["action_items"][0]["priority"] == "high"
@@ -827,7 +809,7 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_due_reminder_high_priority(self):
         """follow_up marks apps with due reminders as high priority."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -842,7 +824,7 @@ class TestApplicationFollowUp:
                 "status": "success", "total": 1, "due_count": 1,
                 "reminders": [{"job_id": "42", "is_due": True, "note": "Follow up"}],
             }
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "success"
             assert result["summary"]["with_pending_reminder"] == 1
             assert result["action_items"][0]["priority"] == "high"
@@ -851,7 +833,7 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_partial_success_inbox_failure(self):
         """follow_up returns partial_success when inbox fetch fails."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -863,7 +845,7 @@ class TestApplicationFollowUp:
             }
             mock_inbox.side_effect = RuntimeError("API timeout")
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "partial_success"
             assert "errors" in result
             assert any("Inbox" in e for e in result["errors"])
@@ -873,7 +855,7 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_low_priority_for_low_stale_score(self):
         """follow_up assigns low priority when stale_score < 70 and no inbox/reminder matches."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -885,7 +867,7 @@ class TestApplicationFollowUp:
             }
             mock_inbox.return_value = {"status": "success", "messages": []}
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "success"
             assert result["action_items"][0]["priority"] == "low"
             assert "monitor" in result["action_items"][0]["action"].lower()
@@ -893,7 +875,7 @@ class TestApplicationFollowUp:
     @pytest.mark.asyncio
     async def test_follow_up_priority_sorting(self):
         """follow_up sorts action items: high first, then medium, then low."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
@@ -912,21 +894,21 @@ class TestApplicationFollowUp:
                 ],
             }
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             priorities = [item["priority"] for item in result["action_items"]]
             assert priorities == ["high", "medium", "low"]
 
     @pytest.mark.asyncio
     async def test_follow_up_empty_stale_apps(self):
         """follow_up returns empty lists when no stale applications exist."""
-        from naukri_server.tools.tracking import naukri_applications
+        from naukri_server.tools.tracking import naukri_follow_up_priority
         with patch("naukri_server.services.application_service.get_stale_applications", new_callable=AsyncMock) as mock_stale, \
              patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_inbox, \
              patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_rem:
             mock_stale.return_value = {"status": "success", "stale_applications": []}
             mock_inbox.return_value = {"status": "success", "messages": []}
             mock_rem.return_value = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
-            result = await naukri_applications(action="follow_up")
+            result = await naukri_follow_up_priority()
             assert result["status"] == "success"
             assert result["summary"]["total_stale"] == 0
             assert result["stale_applications"] == []

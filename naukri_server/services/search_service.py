@@ -5,6 +5,7 @@ I/O-bound functions (API calls, browser automation) remain in the tool modules.
 """
 
 import re
+from typing import Optional
 
 from naukri_server.config import LAKHS_MULTIPLIER
 from naukri_server.domain import safe_get
@@ -165,7 +166,7 @@ def parse_match_score(score_data: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def parse_job_detail(details_data: dict, job_id: str, page_url: str,
-                     score_data: dict = None) -> dict:
+                     score_data: Optional[dict] = None) -> dict:
     """Parse job detail API response (v3 or v4 format) into a structured result dict."""
     from naukri_server.validation import validate_job_detail
 

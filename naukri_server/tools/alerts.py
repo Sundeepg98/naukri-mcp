@@ -13,7 +13,27 @@ from naukri_server.config import (
     BROWSER_PAGE_LOAD, BROWSER_OPERATION_TIMEOUT,
 )
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
+
+
+async def _resolve_alert_name(alert_id: str) -> Optional[str]:
+    """Look up alert name from the alerts list. Returns None if not found.
+
+    Both naukri_update_alert and naukri_delete_alert call this for logging /
+    validation. Failures are non-fatal (caller falls back to alert_id as name).
+    """
+    try:
+        alerts_result = await _get_alerts_list()
+    except Exception as e:
+        logger.debug("Failed to fetch alerts list for name lookup: %s", e)
+        return None
+
+    if alerts_result.get("status") != "success":
+        return None
+
+    for alert in alerts_result.get("alerts", []):
+        if str(alert.get("alert_id")) == str(alert_id) or str(alert.get("id")) == str(alert_id):
+            return alert.get("name") or str(alert_id)
+    return None
 
 
 async def _get_alerts_list() -> dict:
@@ -267,22 +287,72 @@ async def _delete_alert_browser(a_id: str, alert_name: str) -> dict:
             }
 
 
-_VALID_PARAMS_PER_ACTION = {
-    "list": set(),
-    "detail": {"alert_id"},
-    "create": {"name", "keywords", "location", "experience", "min_salary",
-               "max_salary", "function_area_id", "role_id", "industry_type_id"},
-    "update": {"alert_id", "keywords", "location", "experience", "min_salary", "new_name"},
-    "delete": {"alert_id"},
-}
+# ---------------------------------------------------------------------------
+# Atomic single-purpose MCP tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_list_alerts() -> dict:
+    """Get all your job alerts (saved searches that notify you of matching jobs).
+
+    Returns:
+        {status, count, alerts: [{alert_id, name, keywords, location, experience,
+         min_ctc, max_ctc, ctc_unit, alert_type, function_area_id, role_id,
+         industry_type_id}]}
+    """
+    return await handle_tool_action(_get_alerts_list, "alerts.list")
 
 
 @mcp.tool()
-async def naukri_job_alerts(
-    action: str = "list",
-    alert_id: Optional[str] = None,
-    name: Optional[str] = None,
-    keywords: Optional[str] = None,
+async def naukri_alert_detail(alert_id: str) -> dict:
+    """Get details for a specific job alert.
+
+    Args:
+        alert_id: The alert ID (from naukri_list_alerts results)
+
+    Returns:
+        {status, alert: {alert_id, name, keywords, location, experience,
+         min_ctc, max_ctc, ctc_unit, alert_type, function_area_id, role_id,
+         industry_type_id}}
+    """
+    if not alert_id:
+        return {"status": "error", "message": "alert_id is required.", "error_code": "VALIDATION_ERROR"}
+
+    async def _detail():
+        data = await api_client.get(f"{ALERT_DETAIL_API}/{alert_id}")
+        alerts = data.get("list", [data] if isinstance(data, dict) else data)
+        if not alerts:
+            return {"status": "error", "message": f"Alert {alert_id} not found", "error_code": "NOT_FOUND"}
+
+        a = alerts[0] if isinstance(alerts, list) else alerts
+        if not isinstance(a, dict):
+            return {"status": "error", "message": f"Unexpected response for alert {alert_id}", "error_code": "API_ERROR"}
+
+        return {
+            "status": "success",
+            "alert": {
+                "alert_id": a.get("alertId", alert_id),
+                "name": a.get("name", ""),
+                "keywords": a.get("keywords", ""),
+                "location": a.get("location", ""),
+                "experience": a.get("experience"),
+                "min_ctc": round(float(a.get("minCTC", 0)) / LAKHS_MULTIPLIER, 2) if a.get("minCTC") else None,
+                "max_ctc": round(float(a.get("maxCTC", 0)) / LAKHS_MULTIPLIER, 2) if a.get("maxCTC") else None,
+                "ctc_unit": "lakhs",
+                "alert_type": a.get("alertType", ""),
+                "function_area_id": a.get("functionAreaId"),
+                "role_id": a.get("roleId"),
+                "industry_type_id": a.get("industryTypeId"),
+            },
+        }
+
+    return await handle_tool_action(_detail, "alerts.detail")
+
+
+@mcp.tool()
+async def naukri_create_alert(
+    name: str,
+    keywords: str,
     location: Optional[str] = None,
     experience: Optional[int] = None,
     min_salary: Optional[int] = None,
@@ -290,196 +360,132 @@ async def naukri_job_alerts(
     function_area_id: Optional[str] = None,
     role_id: Optional[str] = None,
     industry_type_id: Optional[str] = None,
-    new_name: Optional[str] = None,
 ) -> dict:
-    """Unified job alert management -- list, create, detail, update, delete.
-
-    Actions:
-      - "list": Get all your job alerts
-      - "detail": Get details for a specific alert (requires alert_id)
-      - "create": Create a new alert (requires name, keywords; location/experience/min_salary optional)
-      - "update": Edit alert fields (requires alert_id; pass only fields to change)
-      - "delete": Delete an alert (requires alert_id)
+    """Create a new job alert (saved search that notifies you of matching jobs).
 
     Args:
-        action: "list" | "detail" | "create" | "update" | "delete"
-        alert_id: Required for detail/update/delete
-        name: Alert name for create (e.g., "Python Remote Jobs")
-        keywords: Search keywords for create/update (e.g., "python developer")
-        location: Location filter for create/update (e.g., "Bangalore", "Remote")
-        experience: Years of experience for create/update (0-30)
-        min_salary: Minimum CTC in lakhs per annum for create/update (e.g., 15 for 15 LPA)
-        max_salary: Maximum CTC in lakhs per annum for create (e.g., 30 for 30 LPA)
-        function_area_id: Functional area ID for create (from Naukri taxonomy)
-        role_id: Role ID for create (from Naukri taxonomy)
-        industry_type_id: Industry type ID for create (from Naukri taxonomy)
-        new_name: Rename alert (update only)
+        name: Alert name (e.g., "Python Remote Jobs")
+        keywords: Search keywords (e.g., "python developer")
+        location: Location filter (e.g., "Bangalore", "Remote")
+        experience: Years of experience (0-30)
+        min_salary: Minimum CTC in lakhs per annum (e.g., 15 for 15 LPA)
+        max_salary: Maximum CTC in lakhs per annum (e.g., 30 for 30 LPA)
+        function_area_id: Functional area ID (from Naukri taxonomy)
+        role_id: Role ID (from Naukri taxonomy)
+        industry_type_id: Industry type ID (from Naukri taxonomy)
 
     Returns:
-        - list: {status, count, alerts: [...]}
-        - detail: {status, alert: {alert_id, name, keywords, ...}}
-        - create: {status, alert_name, message}
-        - update: {status, alert_name, updated_fields, message}
-        - delete: {status, alert_id, alert_name, message}
+        {status, alert_name, message, total_matched?, matched_jobs?: [...]}
     """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "alert_id": alert_id, "name": name, "keywords": keywords,
-        "location": location, "experience": experience,
-        "min_salary": min_salary, "max_salary": max_salary,
-        "function_area_id": function_area_id, "role_id": role_id,
-        "industry_type_id": industry_type_id, "new_name": new_name,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+    if not name or not keywords:
+        return {"status": "error", "message": "name and keywords are required.", "error_code": "VALIDATION_ERROR"}
 
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
+    async def _create():
+        body = {"name": name, "keyword": keywords}
+        if location is not None:
+            body["location"] = location
+        if experience is not None:
+            body["experience"] = str(experience)
+        if min_salary is not None:
+            body["minCTC"] = str(min_salary * LAKHS_MULTIPLIER)
+        if max_salary is not None:
+            body["maxCTC"] = str(max_salary * LAKHS_MULTIPLIER)
+        if function_area_id is not None:
+            body["functionAreaId"] = function_area_id
+        if role_id is not None:
+            body["roleId"] = role_id
+        if industry_type_id is not None:
+            body["industryTypeId"] = industry_type_id
+
+        response = await api_client.post(JOB_ALERT_API, body)
+
+        try:
+            from naukri_server.events import event_bus, AlertCreated
+            await event_bus.emit(AlertCreated(alert_name=name, keywords=keywords))
+        except Exception:
+            pass
+
+        result = {
+            "status": "success",
+            "alert_name": name,
+            "message": f"Job alert '{name}' created for '{keywords}'.",
+        }
+        # v1 API returns matched jobs inline — expose them
+        total_matched = response.get("totalRes") if isinstance(response, dict) else None
+        matched_jobs = response.get("list", []) if isinstance(response, dict) else []
+        if total_matched is not None:
+            result["total_matched"] = total_matched
+        if matched_jobs:
+            result["matched_jobs"] = matched_jobs[:5]
         return result
 
-    if action == "list":
-        return _attach_unused(await handle_tool_action(_get_alerts_list, "alerts.list"))
+    return await handle_tool_action(_create, "alerts.create")
 
-    elif action == "detail":
-        if not alert_id:
-            return {"status": "error", "message": "detail requires alert_id.", "error_code": "VALIDATION_ERROR"}
 
-        async def _detail():
-            data = await api_client.get(f"{ALERT_DETAIL_API}/{alert_id}")
-            alerts = data.get("list", [data] if isinstance(data, dict) else data)
-            if not alerts:
-                return {"status": "error", "message": f"Alert {alert_id} not found", "error_code": "NOT_FOUND"}
+@mcp.tool()
+async def naukri_update_alert(
+    alert_id: str,
+    keywords: Optional[str] = None,
+    location: Optional[str] = None,
+    experience: Optional[int] = None,
+    min_salary: Optional[int] = None,
+    new_name: Optional[str] = None,
+) -> dict:
+    """Edit fields of an existing job alert. Pass only the fields you want to change.
 
-            a = alerts[0] if isinstance(alerts, list) else alerts
-            if not isinstance(a, dict):
-                return {"status": "error", "message": f"Unexpected response for alert {alert_id}", "error_code": "API_ERROR"}
+    Args:
+        alert_id: The alert ID to update (from naukri_list_alerts)
+        keywords: New search keywords
+        location: New location filter
+        experience: New experience years filter
+        min_salary: New minimum CTC in lakhs
+        new_name: Rename the alert
 
-            return {
-                "status": "success",
-                "alert": {
-                    "alert_id": a.get("alertId", alert_id),
-                    "name": a.get("name", ""),
-                    "keywords": a.get("keywords", ""),
-                    "location": a.get("location", ""),
-                    "experience": a.get("experience"),
-                    "min_ctc": round(float(a.get("minCTC", 0)) / LAKHS_MULTIPLIER, 2) if a.get("minCTC") else None,
-                    "max_ctc": round(float(a.get("maxCTC", 0)) / LAKHS_MULTIPLIER, 2) if a.get("maxCTC") else None,
-                    "ctc_unit": "lakhs",
-                    "alert_type": a.get("alertType", ""),
-                    "function_area_id": a.get("functionAreaId"),
-                    "role_id": a.get("roleId"),
-                    "industry_type_id": a.get("industryTypeId"),
-                },
-            }
-        return _attach_unused(await handle_tool_action(_detail, "alerts.detail"))
+    Returns:
+        {status, alert_name, updated_fields, message}
+    """
+    if not alert_id:
+        return {"status": "error", "message": "alert_id is required.", "error_code": "VALIDATION_ERROR"}
+    if all(v is None for v in (keywords, location, experience, min_salary, new_name)):
+        return {"status": "error", "message": "No fields to update. Pass at least one parameter.", "error_code": "VALIDATION_ERROR"}
 
-    elif action == "create":
-        if not name or not keywords:
-            return {"status": "error", "message": "create requires name and keywords.", "error_code": "VALIDATION_ERROR"}
+    # Look up alert name for logging (falls back to alert_id if not found)
+    alert_name = await _resolve_alert_name(alert_id) or str(alert_id)
+    a_id = str(alert_id)
 
-        async def _create():
-            body = {"name": name, "keyword": keywords}
-            if location is not None:
-                body["location"] = location
-            if experience is not None:
-                body["experience"] = str(experience)
-            if min_salary is not None:
-                body["minCTC"] = str(min_salary * LAKHS_MULTIPLIER)
-            if max_salary is not None:
-                body["maxCTC"] = str(max_salary * LAKHS_MULTIPLIER)
-            if function_area_id is not None:
-                body["functionAreaId"] = function_area_id
-            if role_id is not None:
-                body["roleId"] = role_id
-            if industry_type_id is not None:
-                body["industryTypeId"] = industry_type_id
+    try:
+        return await asyncio.wait_for(
+            _update_alert_browser(a_id, alert_name, keywords, location, experience, min_salary, new_name),
+            timeout=BROWSER_OPERATION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Alert update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
 
-            response = await api_client.post(JOB_ALERT_API, body)
 
-            try:
-                from naukri_server.events import event_bus, AlertCreated
-                await event_bus.emit(AlertCreated(alert_name=name, keywords=keywords))
-            except Exception:
-                pass
+@mcp.tool()
+async def naukri_delete_alert(alert_id: str) -> dict:
+    """Delete a job alert.
 
-            result = {
-                "status": "success",
-                "alert_name": name,
-                "message": f"Job alert '{name}' created for '{keywords}'.",
-            }
-            # v1 API returns matched jobs inline — expose them
-            total_matched = response.get("totalRes") if isinstance(response, dict) else None
-            matched_jobs = response.get("list", []) if isinstance(response, dict) else []
-            if total_matched is not None:
-                result["total_matched"] = total_matched
-            if matched_jobs:
-                result["matched_jobs"] = matched_jobs[:5]
-            return result
-        return _attach_unused(await handle_tool_action(_create, "alerts.create"))
+    Args:
+        alert_id: The alert ID to delete (from naukri_list_alerts)
 
-    elif action == "update":
-        if not alert_id:
-            return {"status": "error", "message": "update requires alert_id.", "error_code": "VALIDATION_ERROR"}
-        if all(v is None for v in (keywords, location, experience, min_salary, new_name)):
-            return {"status": "error", "message": "No fields to update. Pass at least one parameter.", "error_code": "VALIDATION_ERROR"}
+    Returns:
+        {status, alert_id, alert_name, message}
+    """
+    if not alert_id:
+        return {"status": "error", "message": "alert_id is required.", "error_code": "VALIDATION_ERROR"}
 
-        # Look up alert name for logging
-        try:
-            alerts_result = await _get_alerts_list()
-        except Exception as e:
-            logger.debug("Failed to fetch alerts list for update lookup: %s", e)
-            alerts_result = {"status": "error", "message": "Failed to fetch alerts list", "error_code": "API_ERROR"}
+    # Resolve alert name; if not found, the alert doesn't exist
+    alert_name = await _resolve_alert_name(alert_id)
+    if alert_name is None:
+        return {"status": "error", "message": f"Alert ID '{alert_id}' not found.", "error_code": "NOT_FOUND"}
 
-        alert_name = str(alert_id)  # fallback
-        if alerts_result.get("status") == "success":
-            for alert in alerts_result.get("alerts", []):
-                if str(alert.get("alert_id")) == str(alert_id):
-                    alert_name = alert.get("name", str(alert_id))
-                    break
+    a_id = str(alert_id)
 
-        a_id = str(alert_id)
-
-        try:
-            return _attach_unused(await asyncio.wait_for(
-                _update_alert_browser(a_id, alert_name, keywords, location, experience, min_salary, new_name),
-                timeout=BROWSER_OPERATION_TIMEOUT,
-            ))
-        except asyncio.TimeoutError:
-            return {"status": "error", "message": f"Alert update timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-
-    elif action == "delete":
-        if not alert_id:
-            return {"status": "error", "message": "delete requires alert_id.", "error_code": "VALIDATION_ERROR"}
-
-        # Get all alerts to find the target
-        try:
-            alerts_result = await _get_alerts_list()
-        except Exception as e:
-            logger.debug("Failed to fetch alerts list for delete lookup: %s", e)
-            alerts_result = {"status": "error", "error_code": "API_ERROR"}
-
-        if alerts_result.get("status") != "success":
-            return {"status": "error", "message": "Failed to fetch alerts.", "error_code": "API_ERROR"}
-
-        target = None
-        for alert in alerts_result.get("alerts", []):
-            if str(alert.get("alert_id")) == str(alert_id) or str(alert.get("id")) == str(alert_id):
-                target = alert
-                break
-
-        if not target:
-            return {"status": "error", "message": f"Alert ID '{alert_id}' not found.", "error_code": "NOT_FOUND"}
-
-        a_id = str(target["alert_id"])
-        alert_name = target.get("name", a_id)
-
-        try:
-            return _attach_unused(await asyncio.wait_for(
-                _delete_alert_browser(a_id, alert_name),
-                timeout=BROWSER_OPERATION_TIMEOUT,
-            ))
-        except asyncio.TimeoutError:
-            return {"status": "error", "message": f"Alert delete timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}
-
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, detail, create, update, delete", "error_code": "VALIDATION_ERROR"}
+    try:
+        return await asyncio.wait_for(
+            _delete_alert_browser(a_id, alert_name),
+            timeout=BROWSER_OPERATION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "error", "message": f"Alert delete timed out after {BROWSER_OPERATION_TIMEOUT}s", "error_code": "TIMEOUT"}

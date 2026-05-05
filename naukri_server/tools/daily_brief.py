@@ -151,7 +151,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "high",
             "action": f"Respond to {inbox['count']} unread recruiter message(s)",
-            "tool": "naukri_inbox(action='list', unread_only=True)",
+            "tool": "naukri_list_inbox(unread_only=True)",
         })
 
     # High priority: due reminders
@@ -161,7 +161,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "high",
             "action": f"Follow up on {due_count} due reminder(s)",
-            "tool": "naukri_reminders(action='list')",
+            "tool": "naukri_list_reminders()",
         })
 
     # Medium priority: stale applications
@@ -171,7 +171,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "medium",
             "action": f"Review {stale_count} stale application(s)",
-            "tool": "naukri_applications(action='follow_up')",
+            "tool": "naukri_follow_up_priority()",
         })
 
     # High priority: stale applications with high follow-up priority
@@ -182,7 +182,7 @@ def _build_recommended_actions(brief: dict) -> list:
             actions.append({
                 "priority": "high",
                 "action": f"Follow up on {len(high_priority)} high-priority stale application(s) — recruiter showed interest",
-                "tool": "naukri_applications(action='draft_follow_up', job_id='...')",
+                "tool": "naukri_draft_follow_up(job_id='...')",
             })
 
     # Medium priority: conversion funnel dead zones
@@ -193,7 +193,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "medium",
             "action": f"Dead zones detected: {companies} — consider stopping applications there",
-            "tool": "naukri_insights(insight_type='conversion_funnel')",
+            "tool": "naukri_conversion_funnel()",
         })
 
     # High priority: recruiter search activity (from notification_summary)
@@ -203,7 +203,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "high",
             "action": f"Recruiters searched for you {recruiter_search['count']} times — keep profile updated",
-            "tool": "naukri_performance(metric='impressions')",
+            "tool": "naukri_search_impressions()",
         })
 
     # Medium priority: new early access roles
@@ -223,7 +223,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "medium",
             "action": f"Complete {pending} pending assessment(s)",
-            "tool": "naukri_profile(action='get') — check assessments section",
+            "tool": "naukri_get_profile() — check assessments section",
         })
 
     # Low priority: profile completeness
@@ -233,7 +233,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "low",
             "action": f"Improve profile completeness ({completeness}%)",
-            "tool": "naukri_profile(action='audit')",
+            "tool": "naukri_audit_profile()",
         })
 
     # Medium priority: high average competition across recent applications
@@ -253,7 +253,7 @@ def _build_recommended_actions(brief: dict) -> list:
         actions.append({
             "priority": "low",
             "action": "Apply to some jobs today — no applications yet",
-            "tool": "naukri_smart_apply(action='apply_top_fits')",
+            "tool": "naukri_apply_top_fits()",
         })
 
     # Sort by priority

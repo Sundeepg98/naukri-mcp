@@ -157,83 +157,8 @@ async def _get_activity_level() -> dict:
 # Unified MCP tool
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def naukri_performance(
-    metric: str,
-    days: int = 7,
-    page: int = 1,
-    limit: int = 20,
-    filter_by: Optional[str] = None,
-) -> dict:
-    """[Deprecated — use naukri_search_impressions, naukri_recruiter_activity, or naukri_activity_level instead]
-
-    Note: Uses 'metric' instead of 'action' because each value selects a performance
-    metric to retrieve (impressions, recruiter_activity, activity_level), not an operation
-    to perform. All dispatches are read-only data fetches with no side effects.
-
-    Metrics:
-      - "impressions": Search appearance stats — how many times recruiters found you,
-        which keywords they searched, and day-by-day timeline. Uses days param.
-        Uses widget headers (appid:109) — required to avoid 401.
-      - "recruiter_activity": Who viewed, downloaded, contacted you, or added you to
-        their folder. Supports pagination (page/size) and filtering (filter_by).
-        Default size=100 returns all activities in a single call (probing-confirmed).
-      - "activity_level": Current profile activity level (HIGH/MEDIUM/LOW).
-        Uses widget headers (appid:109) — required to avoid 401.
-        No extra params needed.
-
-    Args:
-        metric: "impressions" | "recruiter_activity" | "activity_level"
-        days: Time period — must be 7, 30, or 90 (default 7). Used by impressions.
-        page: Page number for recruiter_activity (default 1).
-        limit: Items per page for recruiter_activity (default 100). Size=100 returns
-               all activities. Use smaller values only if you want a subset.
-        filter_by: Filter recruiter_activity by type. One of:
-                   "VIEWED" | "MOBILE_VIEWED" | "DOWNLOADED" | "CONTACTED" | "ADD_TO_FOLDER"
-                   None = all actions (default).
-
-    Returns:
-        - impressions: {status, days, total_appearances, recruiter_actions, daily_average, percentage_change, timeline, top_keywords}
-        - recruiter_activity: {status, page, size, filter_by, total_actions, percentage_change, buckets, activities, has_more}
-        - activity_level: {status, level, logged_in, resume_updated, profile_updated}
-        - {status: "error", message} on failure
-    """
-    # ── impressions ───────────────────────────────────────────────────
-    if metric == "impressions":
-        if days not in VALID_DAYS:
-            return {"status": "error", "message": f"Invalid days={days}. Must be one of: {', '.join(str(d) for d in sorted(VALID_DAYS))}", "error_code": "VALIDATION_ERROR"}
-        try:
-            return await _get_search_impressions(days=days)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get search impressions failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── recruiter_activity ────────────────────────────────────────────
-    elif metric == "recruiter_activity":
-        try:
-            return await _get_recruiter_activity(page=page, size=limit, filter_by=filter_by)
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get recruiter activity failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── activity_level ────────────────────────────────────────────────
-    elif metric == "activity_level":
-        try:
-            return await _get_activity_level()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Get activity level failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── unknown metric ────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown metric '{metric}'. Use: impressions, recruiter_activity, activity_level", "error_code": "VALIDATION_ERROR"}
-
-
 # ---------------------------------------------------------------------------
-# Single-purpose MCP tools (preferred over the deprecated unified tool above)
+# Single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()

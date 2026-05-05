@@ -99,41 +99,33 @@ class TestFetchInbox:
 # =====================================================================
 
 class TestNaukriInbox:
-    """Tests for naukri_server.tools.inbox.naukri_inbox routing."""
+    """Tests for naukri_server.tools.inbox atomic tools."""
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.inbox.api_client.post", new_callable=AsyncMock)
     async def test_inbox_mark_interested(self, mock_post):
-        """mark_interested with valid params should route to _mark_interested."""
+        """naukri_mark_interested with valid params should route to _mark_interested."""
         mock_post.return_value = {}
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="mark_interested", mail_id="123", conversation_id="c1")
+        from naukri_server.tools.inbox import naukri_mark_interested
+        result = await naukri_mark_interested(mail_id="123", conversation_id="c1")
         assert result["status"] == "success"
         assert result["interested"] is True
 
     @pytest.mark.asyncio
     async def test_inbox_mark_interested_missing_params(self):
-        """mark_interested without mail_id/conversation_id should fail validation."""
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="mark_interested")
+        """naukri_mark_interested without conversation_id should fail validation."""
+        from naukri_server.tools.inbox import naukri_mark_interested
+        result = await naukri_mark_interested(mail_id="123", conversation_id=None)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_inbox_accept_nvite_missing_job_id(self):
-        """accept_nvite without nvite_job_id should fail validation."""
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="accept_nvite")
+        """naukri_accept_nvite with empty nvite_job_id should fail validation."""
+        from naukri_server.tools.inbox import naukri_accept_nvite
+        result = await naukri_accept_nvite(nvite_job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_inbox_unknown_action(self):
-        """Unknown action should return error with descriptive message."""
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="invalid")
-        assert result["status"] == "error"
-        assert "Unknown action" in result["message"]
 
 
 # =====================================================================
@@ -202,67 +194,51 @@ class TestPerformance:
         assert result["level"] == "HIGH"
         assert result["logged_in"] is True
 
-    @pytest.mark.asyncio
-    async def test_performance_invalid_metric(self):
-        """Unknown metric should return error with descriptive message."""
-        from naukri_server.tools.performance import naukri_performance
-        result = await naukri_performance(metric="invalid")
-        assert result["status"] == "error"
-        assert "Unknown metric" in result["message"]
-
 
 # =====================================================================
-# From test_consolidation.py — inbox action routing & validation
+# Inbox atomic tools — validation
 # =====================================================================
 
-class TestInboxConsolidation:
-    """Tests for naukri_server.tools.inbox.naukri_inbox."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+class TestInboxAtomic:
+    """Tests for naukri_server.tools.inbox atomic tools."""
 
     @pytest.mark.asyncio
     async def test_read_requires_all_ids(self):
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="read", message_id="m1")
+        from naukri_server.tools.inbox import naukri_read_message
+        result = await naukri_read_message(message_id="m1")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "vcard_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_read_missing_message_id(self):
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="read", vcard_id="v1", unique_id="u1")
+        from naukri_server.tools.inbox import naukri_read_message
+        result = await naukri_read_message(vcard_id="v1", unique_id="u1")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_mark_interested_requires_ids(self):
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="mark_interested")
+        from naukri_server.tools.inbox import naukri_mark_interested
+        result = await naukri_mark_interested(mail_id="m1", conversation_id=None)
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "mail_id" in result["message"]
+        assert "conversation_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_accept_nvite_requires_job_id(self):
-        from naukri_server.tools.inbox import naukri_inbox
-        result = await naukri_inbox(action="accept_nvite")
+        from naukri_server.tools.inbox import naukri_accept_nvite
+        result = await naukri_accept_nvite(nvite_job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "nvite_job_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_list_routes_to_helper(self):
-        from naukri_server.tools.inbox import naukri_inbox
+        from naukri_server.tools.inbox import naukri_list_inbox
         with patch("naukri_server.tools.inbox._fetch_inbox", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "messages": []}
-            result = await naukri_inbox(action="list", limit=10, page=2)
+            result = await naukri_list_inbox(limit=10, page=2)
             mock_helper.assert_awaited_once_with(limit=10, unread_only=False, mail_type="", page=2)
             assert result["status"] == "success"
 

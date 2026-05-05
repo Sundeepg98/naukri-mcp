@@ -36,8 +36,8 @@ __all__ = [
 # Core CRUD
 # ---------------------------------------------------------------------------
 
-async def record_application(job_id: str, title: str = None, company: str = None,
-                              status: str = "applied", extra: dict = None):
+async def record_application(job_id: str, title: Optional[str] = None, company: Optional[str] = None,
+                              status: str = "applied", extra: Optional[dict] = None):
     """Record or update a job application in SQLite."""
     from naukri_server.database import get_application, upsert_application
 
@@ -210,8 +210,8 @@ async def _safe_fetch_mock_topics():
 
 async def _safe_fetch_fit_score(job_id):
     try:
-        from naukri_server.tools.smart_apply import naukri_smart_apply
-        return await naukri_smart_apply(job_id=job_id)
+        from naukri_server.tools.smart_apply import naukri_assess_fit
+        return await naukri_assess_fit(job_id=job_id)
     except Exception:
         return None
 
@@ -566,7 +566,7 @@ async def add_interview_round(job_id: str, round_type: str, date: str = "",
     }
 
 
-async def list_interview_rounds(job_id: str = None) -> dict:
+async def list_interview_rounds(job_id: Optional[str] = None) -> dict:
     """List interview rounds, optionally filtered by job_id."""
     from naukri_server.database import list_interview_rounds as db_list_rounds
     rounds = await db_list_rounds(job_id)

@@ -10,57 +10,48 @@ from contextlib import asynccontextmanager
 
 
 # =====================================================================
-# 1. naukri_auth — action routing and parameter validation
+# 1. Auth atomic tools — parameter validation and routing
 # =====================================================================
 
 class TestAuth:
-    """Tests for naukri_server.tools.auth.naukri_auth."""
+    """Tests for naukri_server.tools.auth atomic tools (naukri_login, naukri_verify_otp, naukri_auth_status)."""
 
     @pytest.mark.asyncio
-    async def test_auth_invalid_action(self):
-        """Unknown action should return VALIDATION_ERROR."""
-        from naukri_server.tools.auth import naukri_auth
-        result = await naukri_auth(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_auth_login_requires_method(self):
-        """Login without method should return VALIDATION_ERROR."""
-        from naukri_server.tools.auth import naukri_auth
-        result = await naukri_auth(action="login")
+    async def test_login_empty_method_returns_validation_error(self):
+        """naukri_login with empty method should return VALIDATION_ERROR."""
+        from naukri_server.tools.auth import naukri_login
+        result = await naukri_login(method="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "method" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_auth_verify_otp_requires_otp(self):
-        """verify_otp without otp should return VALIDATION_ERROR."""
-        from naukri_server.tools.auth import naukri_auth
-        result = await naukri_auth(action="verify_otp")
+    async def test_verify_otp_requires_otp(self):
+        """naukri_verify_otp with empty otp should return VALIDATION_ERROR."""
+        from naukri_server.tools.auth import naukri_verify_otp
+        result = await naukri_verify_otp(otp="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "otp" in result["message"]
 
     @pytest.mark.asyncio
     async def test_auth_status_routes_to_helper(self):
-        """action='status' should delegate to _get_login_status."""
-        from naukri_server.tools.auth import naukri_auth
+        """naukri_auth_status should delegate to _get_login_status."""
+        from naukri_server.tools.auth import naukri_auth_status
         with patch(
             "naukri_server.tools.auth._get_login_status",
             new_callable=AsyncMock,
         ) as mock_helper:
             mock_helper.return_value = {"status": "success", "logged_in": True}
-            result = await naukri_auth(action="status")
+            result = await naukri_auth_status()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
             assert result["logged_in"] is True
 
     @pytest.mark.asyncio
-    async def test_auth_login_routes_to_helper(self):
-        """action='login' with valid method should delegate to _login via page pool."""
-        from naukri_server.tools.auth import naukri_auth
+    async def test_login_routes_to_helper(self):
+        """naukri_login with valid method should delegate to _login via page pool."""
+        from naukri_server.tools.auth import naukri_login
 
         mock_page = MagicMock()
 
@@ -72,15 +63,15 @@ class TestAuth:
              patch("naukri_server.tools.auth.browser") as mock_browser:
             mock_browser.page_pool.acquire = fake_acquire
             mock_login.return_value = {"status": "logged_in", "method": "google", "profile_name": "Test", "has_token": True}
-            result = await naukri_auth(action="login", method="google")
+            result = await naukri_login(method="google")
             mock_login.assert_awaited_once_with(mock_page, method="google", email=None, password=None)
             assert result["status"] == "logged_in"
             assert result["method"] == "google"
 
     @pytest.mark.asyncio
-    async def test_auth_verify_otp_routes_to_helper(self):
-        """action='verify_otp' with valid otp should delegate to _verify_otp via page pool."""
-        from naukri_server.tools.auth import naukri_auth
+    async def test_verify_otp_routes_to_helper(self):
+        """naukri_verify_otp with valid otp should delegate to _verify_otp via page pool."""
+        from naukri_server.tools.auth import naukri_verify_otp
 
         mock_page = MagicMock()
 
@@ -92,21 +83,21 @@ class TestAuth:
              patch("naukri_server.tools.auth.browser") as mock_browser:
             mock_browser.page_pool.acquire = fake_acquire
             mock_verify.return_value = {"status": "logged_in", "profile_name": "Test", "has_token": True}
-            result = await naukri_auth(action="verify_otp", otp="123456")
+            result = await naukri_verify_otp(otp="123456")
             mock_verify.assert_awaited_once_with(mock_page, otp="123456")
             assert result["status"] == "logged_in"
 
     @pytest.mark.asyncio
     async def test_auth_status_api_error(self):
-        """action='status' should catch NaukriAPIError and return error dict."""
-        from naukri_server.tools.auth import naukri_auth
+        """naukri_auth_status should catch NaukriAPIError and return error dict."""
+        from naukri_server.tools.auth import naukri_auth_status
         from naukri_server.api import NaukriAPIError
         with patch(
             "naukri_server.tools.auth._get_login_status",
             new_callable=AsyncMock,
         ) as mock_helper:
             mock_helper.side_effect = NaukriAPIError(401, "Session expired")
-            result = await naukri_auth(action="status")
+            result = await naukri_auth_status()
             assert result["status"] == "error"
             assert result["error_code"] == "API_ERROR"
             assert result["http_status"] == 401

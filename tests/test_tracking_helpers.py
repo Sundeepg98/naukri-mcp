@@ -573,35 +573,3 @@ class TestInterviewPrep:
         assert result["mock_topics"] == ["React", "CSS", "JavaScript"]
         assert result["matched_skills"] == ["React", "TypeScript"]
         assert result["missing_skills"] == ["Vue"]
-
-
-# =====================================================================
-# From test_consolidation.py — saved jobs action routing & validation
-# =====================================================================
-
-class TestSavedJobsConsolidation:
-    """Tests for naukri_server.tools.tracking.naukri_saved_jobs."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_save_requires_job_id(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="save")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_unsave_requires_job_id(self):
-        from naukri_server.tools.tracking import naukri_saved_jobs
-        result = await naukri_saved_jobs(action="unsave")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]

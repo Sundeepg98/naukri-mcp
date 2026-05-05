@@ -6,6 +6,8 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from mcp.server.fastmcp import Context
+
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client
@@ -93,26 +95,35 @@ def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
         if rid in local_by_id:
             existing = local_by_id[rid]
             changed = False
-            for field in ("title", "company", "status", "recruiter_active", "apply_type",
+            for field in ("title", "company", "recruiter_active", "apply_type",
               "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
                 if rj.get(field) is not None and rj[field] != existing.get(field):
                     existing[field] = rj[field]
                     changed = True
+            # Status: update from remote but log conflicts
+            new_status = rj.get("status")
+            if new_status and new_status != existing.get("status"):
+                logger.info("Sync: status conflict for %s — local=%s, remote=%s (using remote)",
+                            rid, existing.get("status"), new_status)
+                existing["status"] = new_status
+                changed = True
             for field in ("applied_date", "salary", "location", "url"):
                 if rj.get(field) is not None and field not in existing:
                     existing[field] = rj[field]
+            # PRESERVE existing applied_at — never overwrite with now
             if changed:
                 existing["last_synced"] = now
                 updated += 1
             else:
                 unchanged += 1
         else:
+            # NEW entry: use remote applied_date if available, else now
             entry = {
                 "job_id": rid,
                 "title": rj.get("title"),
                 "company": rj.get("company"),
                 "status": rj.get("status", "applied"),
-                "applied_at": rj.get("applied_date") or now,
+                "applied_at": rj.get("applied_date") or rj.get("appliedDate") or now,
                 "source": "naukri_sync",
                 "last_synced": now,
             }
@@ -290,7 +301,7 @@ _SCRAPE_APPLIED_JOBS_JS = """() => {
 # Fetch helpers (REST, browser intercept, HTML scrape)
 # ---------------------------------------------------------------------------
 
-async def _fetch_via_rest(api_path: Optional[str], params: dict = None) -> Optional[dict]:
+async def _fetch_via_rest(api_path: Optional[str], params: Optional[dict] = None) -> Optional[dict]:
     """Try fetching data via direct REST API call.
     Returns None if endpoint is not configured or returns an error."""
     if not api_path:
@@ -446,7 +457,11 @@ async def _fetch_via_html_scrape(page_url: str, max_pages: int = 10) -> Optional
 # Internal helpers (not MCP tools — used by the unified tool)
 # ---------------------------------------------------------------------------
 
-async def _sync_applications(force_browser: bool = False, days_back: int = 365) -> dict:
+async def _sync_applications(
+    force_browser: bool = False,
+    days_back: int = 365,
+    ctx: Context | None = None,
+) -> dict:
     """Sync applied jobs from Naukri.com into local tracking.
 
     Pulls application history from Naukri's backend and merges
@@ -459,6 +474,11 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
 
     # Strategy 1: Paginated REST API (fetches all pages, returns raw entries)
     if not force_browser:
+        if ctx:
+            try:
+                await ctx.info("Trying REST API for applied jobs...")
+            except Exception:
+                pass
         rest_entries = await _fetch_applied_jobs_rest(days_back=days_back)
         if rest_entries is not None:
             remote_data = {"applyDetails": rest_entries}
@@ -466,6 +486,11 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
 
     # Strategy 2: Browser JSON intercept (only if URL pattern known)
     if remote_data is None and _APPLIED_JOBS_URL_PATTERN:
+        if ctx:
+            try:
+                await ctx.info("REST failed, trying browser intercept...")
+            except Exception:
+                pass
         remote_data = await _fetch_via_browser(
             APPLIED_JOBS_PAGE,
             url_pattern=_APPLIED_JOBS_URL_PATTERN,
@@ -475,6 +500,11 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
 
     # Strategy 3: HTML scraping (server-rendered page)
     if remote_data is None and remote_jobs is None:
+        if ctx:
+            try:
+                await ctx.info("Browser intercept failed, trying HTML scrape...")
+            except Exception:
+                pass
         scraped = await _fetch_via_html_scrape(APPLIED_JOBS_PAGE)
         if scraped is not None:
             remote_jobs = scraped  # already normalized, skip _parse_applied_jobs
@@ -599,6 +629,17 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
         status_changes_count=len(status_changes),
     ))
 
+    new_count = stats.get("new_added", 0)
+    updated_count = stats.get("updated", 0)
+    if ctx:
+        try:
+            await ctx.info(
+                f"Sync complete: {new_count} new, {updated_count} updated "
+                f"(method={method})"
+            )
+        except Exception:
+            pass
+
     result = {
         "status": "success",
         "method": method,
@@ -616,7 +657,10 @@ async def _sync_applications(force_browser: bool = False, days_back: int = 365) 
     return result
 
 
-async def _sync_saved_jobs(force_browser: bool = False) -> dict:
+async def _sync_saved_jobs(
+    force_browser: bool = False,
+    ctx: Context | None = None,
+) -> dict:
     """Sync saved/bookmarked jobs from Naukri.com into local tracking.
 
     Pulls saved jobs from Naukri and merges with local saved_jobs.json.
@@ -625,11 +669,21 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
     method = "unknown"
 
     if not force_browser:
+        if ctx:
+            try:
+                await ctx.info("Trying REST API for saved jobs...")
+            except Exception:
+                pass
         remote_data = await _fetch_via_rest(SAVED_JOBS_API)
         if remote_data is not None:
             method = "rest_api"
 
     if remote_data is None:
+        if ctx:
+            try:
+                await ctx.info("REST failed, trying browser intercept...")
+            except Exception:
+                pass
         remote_data = await _fetch_via_browser(
             SAVED_JOBS_PAGE,
             url_pattern=_SAVED_JOBS_URL_PATTERN,
@@ -699,6 +753,15 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
         state["last_saved_jobs_count"] = len(remote_jobs)
         await _save_sync_state_async(state)
 
+    new_count = stats.get("new_added", 0)
+    if ctx:
+        try:
+            await ctx.info(
+                f"Saved jobs sync complete: {new_count} new (method={method})"
+            )
+        except Exception:
+            pass
+
     return {
         "status": "success",
         "method": method,
@@ -712,91 +775,7 @@ async def _sync_saved_jobs(force_browser: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_sync(
-    entity: str = "applications",
-    force_browser: bool = False,
-    days_back: int = 365,
-    # Export params (used when entity="export")
-    data_type: Optional[str] = None,
-    export_format: Optional[str] = None,
-    keywords: Optional[str] = None,
-    output_path: Optional[str] = None,
-) -> dict:
-    """Unified sync & export — pull data from Naukri.com or export local data to files.
-
-    DEPRECATED: Use individual tools instead — naukri_sync_applications(),
-    naukri_sync_saved(), naukri_export_data().
-
-    Note: Uses 'entity' instead of 'action' because the dispatch selects a data source
-    to synchronize (applications, saved_jobs) or an export target, not an operation to
-    perform on a single resource. Each entity triggers a full sync pipeline.
-
-    Note: Uses 3-tier fallback (REST → browser → HTML scrape) for sync entities.
-
-    Entities:
-      - "applications": Sync applied jobs (3-tier fallback: REST API → browser intercept → HTML scrape).
-                        Merges with local applications.json, preserves local-only fields.
-                        For just viewing local applications, use naukri_applications(action="list") instead.
-      - "saved_jobs": Sync saved/bookmarked jobs (REST API → browser intercept).
-                     Merges with local saved_jobs.json.
-                     For just viewing local saved jobs, use naukri_saved_jobs(action="list") instead.
-      - "export": Export applications, saved jobs, or search results to JSON/CSV file.
-                 Requires data_type param. Use export_format for output format.
-
-    Args:
-        entity: "applications" | "saved_jobs" | "export"
-        force_browser: If True, skip REST API and use browser strategies.
-        days_back: (applications only) Fetch from last N days (default 365).
-                  Use smaller values (e.g., 7 or 30) for faster incremental syncs.
-        data_type: (export only) What to export — "applications", "saved_jobs", or "search_results".
-        export_format: (export only) Output format — "json" or "csv" (default "json").
-        keywords: (export only) Required when data_type is "search_results" — search query.
-        output_path: (export only) Custom file path (default: exports/<type>_<date>.<ext>).
-
-    Returns:
-        - applications: {status, method, total_remote, new_added, updated, unchanged, local_only, days_back, last_sync, applications: [...first 20...]}
-        - saved_jobs: {status, method, total_remote, new_added, already_local, local_only, last_sync, saved_jobs: [...first 20...]}
-        - export: {status, file_path, record_count, data_type, format}
-        - {status: "error", message} on failure
-    """
-    # ── applications ──────────────────────────────────────────────────
-    if entity == "applications":
-        try:
-            return await _sync_applications(force_browser=force_browser, days_back=days_back)
-        except Exception as e:
-            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
-
-    # ── saved_jobs ────────────────────────────────────────────────────
-    elif entity == "saved_jobs":
-        try:
-            return await _sync_saved_jobs(force_browser=force_browser)
-        except Exception as e:
-            return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
-
-    # ── export ────────────────────────────────────────────────────────
-    elif entity == "export":
-        from naukri_server.tools.export import _export_data
-        try:
-            return await _export_data(
-                data_type=data_type or "applications",
-                format=export_format or "json",
-                keywords=keywords,
-                output_path=output_path,
-            )
-        except Exception as e:
-            return {"status": "error", "message": f"Export failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── unknown entity ────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown entity '{entity}'. Use: applications, saved_jobs, export", "error_code": "VALIDATION_ERROR"}
-
-
-# ---------------------------------------------------------------------------
-# Individual tools (preferred over naukri_sync)
+# Individual tools
 # ---------------------------------------------------------------------------
 
 
@@ -804,6 +783,7 @@ async def naukri_sync(
 async def naukri_sync_applications(
     force_browser: bool = False,
     days_back: Optional[int] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Sync applied jobs from Naukri.com into local tracking.
 
@@ -819,17 +799,28 @@ async def naukri_sync_applications(
         {status, method, total_remote, new_added, updated, unchanged, local_only,
          days_back, last_sync, applications: [...first 20...]}
     """
+    # Bypasses handle_tool_action by design: sync classifies ALL transient errors
+    # (timeouts, connection resets, browser crashes) as API_ERROR rather than
+    # INTERNAL_ERROR, since they reflect upstream service state, not local bugs.
+    # handle_tool_action would tag generic Exceptions as INTERNAL_ERROR, which is
+    # misleading for sync — callers should retry rather than file a bug.
     try:
-        return await _sync_applications(
-            force_browser=force_browser,
-            days_back=days_back if days_back is not None else 365,
-        )
+        kwargs = {
+            "force_browser": force_browser,
+            "days_back": days_back if days_back is not None else 365,
+        }
+        if ctx is not None:
+            kwargs["ctx"] = ctx
+        return await _sync_applications(**kwargs)
     except Exception as e:
         return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 
 
 @mcp.tool()
-async def naukri_sync_saved(force_browser: bool = False) -> dict:
+async def naukri_sync_saved(
+    force_browser: bool = False,
+    ctx: Context | None = None,
+) -> dict:
     """Sync saved/bookmarked jobs from Naukri.com into local tracking.
 
     Uses 2-tier fallback: REST API -> browser intercept.
@@ -842,8 +833,13 @@ async def naukri_sync_saved(force_browser: bool = False) -> dict:
         {status, method, total_remote, new_added, already_local, local_only,
          last_sync, saved_jobs: [...first 20...]}
     """
+    # Bypasses handle_tool_action by design — see naukri_sync_applications for rationale
+    # (transient sync errors are classified as API_ERROR, not INTERNAL_ERROR).
     try:
-        return await _sync_saved_jobs(force_browser=force_browser)
+        kwargs = {"force_browser": force_browser}
+        if ctx is not None:
+            kwargs["ctx"] = ctx
+        return await _sync_saved_jobs(**kwargs)
     except Exception as e:
         return {"status": "error", "message": f"Sync failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 

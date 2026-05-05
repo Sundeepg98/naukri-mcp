@@ -26,16 +26,16 @@ def _iso(offset_days: float = 0) -> str:
 
 
 # =====================================================================
-# 1. Action routing — naukri_reminders (unified MCP tool)
+# 1. Atomic tool routing — naukri_list_reminders / naukri_set_reminder
 # =====================================================================
 
-class TestActionRouting:
-    """Tests for the top-level naukri_reminders tool action dispatch."""
+class TestAtomicRouting:
+    """Tests for the atomic naukri_list_reminders / naukri_set_reminder tools."""
 
     @pytest.mark.asyncio
-    async def test_list_action_calls_list_reminders(self):
-        """action='list' should delegate to _list_reminders with correct kwargs."""
-        from naukri_server.tools.reminders import naukri_reminders
+    async def test_list_calls_list_reminders(self):
+        """naukri_list_reminders should delegate to _list_reminders with correct kwargs."""
+        from naukri_server.tools.reminders import naukri_list_reminders
 
         list_result = {"status": "success", "total": 0, "due_count": 0, "reminders": []}
 
@@ -44,15 +44,15 @@ class TestActionRouting:
             new_callable=AsyncMock,
             return_value=list_result,
         ) as mock_list:
-            result = await naukri_reminders(action="list", include_past=False, include_app_status=False)
+            result = await naukri_list_reminders(include_past=False, include_app_status=False)
 
         mock_list.assert_awaited_once_with(include_past=False, include_app_status=False)
         assert result["status"] == "success"
 
     @pytest.mark.asyncio
-    async def test_set_action_calls_set_reminder(self):
-        """action='set' with a valid job_id should delegate to _set_reminder."""
-        from naukri_server.tools.reminders import naukri_reminders
+    async def test_set_calls_set_reminder(self):
+        """naukri_set_reminder with a valid job_id should delegate to _set_reminder."""
+        from naukri_server.tools.reminders import naukri_set_reminder
 
         set_result = {
             "status": "success",
@@ -67,8 +67,7 @@ class TestActionRouting:
             new_callable=AsyncMock,
             return_value=set_result,
         ) as mock_set:
-            result = await naukri_reminders(
-                action="set",
+            result = await naukri_set_reminder(
                 job_id="J001",
                 days=7,
                 note="Call recruiter",
@@ -82,40 +81,13 @@ class TestActionRouting:
         assert result["status"] == "success"
         assert result["job_id"] == "J001"
 
-    @pytest.mark.asyncio
-    async def test_unknown_action_returns_validation_error(self):
-        """An unrecognised action string should return VALIDATION_ERROR immediately."""
-        from naukri_server.tools.reminders import naukri_reminders
-
-        result = await naukri_reminders(action="delete")
-
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "delete" in result["message"]
-
 
 # =====================================================================
-# 2. Validation — set action
+# 2. Validation — _set_reminder days range
 # =====================================================================
 
 class TestSetValidation:
-    """Validation tests for action='set' in naukri_reminders."""
-
-    @pytest.mark.asyncio
-    async def test_set_missing_job_id_returns_error(self):
-        """action='set' without job_id must return VALIDATION_ERROR before calling helper."""
-        from naukri_server.tools.reminders import naukri_reminders
-
-        with patch(
-            "naukri_server.tools.reminders._set_reminder",
-            new_callable=AsyncMock,
-        ) as mock_set:
-            result = await naukri_reminders(action="set", job_id=None, days=7)
-
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]
-        mock_set.assert_not_awaited()
+    """Validation tests for _set_reminder days range."""
 
     @pytest.mark.asyncio
     async def test_days_less_than_1_returns_validation_error(self):
@@ -491,12 +463,12 @@ class TestListRemindersAppStatus:
 # =====================================================================
 
 class TestErrorPaths:
-    """Tests for exception handling in the naukri_reminders MCP tool."""
+    """Tests for exception handling in the atomic reminder tools."""
 
     @pytest.mark.asyncio
     async def test_list_error_returns_api_error(self):
-        """If _list_reminders raises NaukriAPIError, naukri_reminders returns API_ERROR."""
-        from naukri_server.tools.reminders import naukri_reminders
+        """If _list_reminders raises NaukriAPIError, naukri_list_reminders returns API_ERROR."""
+        from naukri_server.tools.reminders import naukri_list_reminders
         from naukri_server.api import NaukriAPIError
 
         with patch(
@@ -504,7 +476,7 @@ class TestErrorPaths:
             new_callable=AsyncMock,
             side_effect=NaukriAPIError(500, "Internal Server Error"),
         ):
-            result = await naukri_reminders(action="list")
+            result = await naukri_list_reminders()
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -512,8 +484,8 @@ class TestErrorPaths:
 
     @pytest.mark.asyncio
     async def test_set_error_returns_api_error(self):
-        """If _set_reminder raises NaukriAPIError, naukri_reminders returns API_ERROR."""
-        from naukri_server.tools.reminders import naukri_reminders
+        """If _set_reminder raises NaukriAPIError, naukri_set_reminder returns API_ERROR."""
+        from naukri_server.tools.reminders import naukri_set_reminder
         from naukri_server.api import NaukriAPIError
 
         with patch(
@@ -521,7 +493,7 @@ class TestErrorPaths:
             new_callable=AsyncMock,
             side_effect=NaukriAPIError(503, "Service Unavailable"),
         ):
-            result = await naukri_reminders(action="set", job_id="J999", days=7)
+            result = await naukri_set_reminder(job_id="J999", days=7)
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -530,14 +502,14 @@ class TestErrorPaths:
     @pytest.mark.asyncio
     async def test_list_generic_exception_caught(self):
         """A plain RuntimeError from _list_reminders is caught as INTERNAL_ERROR."""
-        from naukri_server.tools.reminders import naukri_reminders
+        from naukri_server.tools.reminders import naukri_list_reminders
 
         with patch(
             "naukri_server.tools.reminders._list_reminders",
             new_callable=AsyncMock,
             side_effect=RuntimeError("Disk full"),
         ):
-            result = await naukri_reminders(action="list")
+            result = await naukri_list_reminders()
 
         assert result["status"] == "error"
         assert result["error_code"] == "INTERNAL_ERROR"
@@ -545,43 +517,27 @@ class TestErrorPaths:
 
 
 # =====================================================================
-# From test_consolidation.py — reminders action routing & validation
+# Atomic tools — additional routing variants
 # =====================================================================
 
-class TestRemindersConsolidation:
-    """Tests for naukri_server.tools.reminders.naukri_reminders."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.reminders import naukri_reminders
-        result = await naukri_reminders(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_set_requires_job_id(self):
-        from naukri_server.tools.reminders import naukri_reminders
-        result = await naukri_reminders(action="set")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "job_id" in result["message"]
+class TestRemindersAtomicExtras:
+    """Additional routing tests for atomic reminder tools."""
 
     @pytest.mark.asyncio
     async def test_list_routes_to_helper(self):
-        from naukri_server.tools.reminders import naukri_reminders
+        from naukri_server.tools.reminders import naukri_list_reminders
         with patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "total": 0, "reminders": []}
-            result = await naukri_reminders(action="list")
+            result = await naukri_list_reminders()
             mock_helper.assert_awaited_once_with(include_past=True, include_app_status=True)
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_list_passes_include_app_status_false(self):
-        from naukri_server.tools.reminders import naukri_reminders
+        from naukri_server.tools.reminders import naukri_list_reminders
         with patch("naukri_server.tools.reminders._list_reminders", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "total": 0, "reminders": []}
-            result = await naukri_reminders(action="list", include_app_status=False)
+            result = await naukri_list_reminders(include_app_status=False)
             mock_helper.assert_awaited_once_with(include_past=True, include_app_status=False)
             assert result["status"] == "success"
 

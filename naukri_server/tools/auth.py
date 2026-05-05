@@ -6,6 +6,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
+from naukri_server.error_handler import handle_tool_action
 from naukri_server.interfaces import api_client
 from naukri_server.browser import browser, page_goto, page_text, page_safe_fill
 from naukri_server.config import (
@@ -131,76 +132,7 @@ async def _get_login_status() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_auth(
-    action: str = "status",
-    method: Optional[str] = None,
-    email: Optional[str] = None,
-    password: Optional[str] = None,
-    otp: Optional[str] = None,
-) -> dict:
-    """[Deprecated — use naukri_login, naukri_verify_otp, naukri_auth_status instead]
-
-    Unified authentication — login, OTP verification, and session status.
-
-    Actions:
-      - "login": Login via Google SSO or email/password (use method, email, password).
-                 Google login requires manual browser interaction.
-      - "verify_otp": Submit OTP after login returns needs_otp (use otp)
-      - "status": Quick check if your Naukri session is still active
-
-    Args:
-        action: "login" | "verify_otp" | "status"
-        method: For login — "google" (recommended) or "email"
-        email: For login with method="email" — Naukri email
-        password: For login with method="email" — Naukri password
-        otp: For verify_otp — 4-6 digit OTP from SMS/email
-
-    Returns:
-        - login: {status: "logged_in"|"already_logged_in"|"waiting_for_user"|"otp_required"|"error", ...}
-        - verify_otp: {status: "logged_in"|"error", ...}
-        - status: {status: "success", logged_in: true/false}
-        - {status: "error", message} on failure
-    """
-    # ── login ──────────────────────────────────────────────────────────
-    if action == "login":
-        if not method:
-            return {"status": "error", "message": "login action requires 'method' param ('google' or 'email').", "error_code": "VALIDATION_ERROR"}
-        try:
-            async with browser.page_pool.acquire() as page:
-                return await _login(page, method=method, email=email, password=password)
-        except Exception as e:
-            return {"status": "error", "message": f"Login failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── verify_otp ─────────────────────────────────────────────────────
-    elif action == "verify_otp":
-        if not otp:
-            return {"status": "error", "message": "verify_otp action requires 'otp' param.", "error_code": "VALIDATION_ERROR"}
-        try:
-            async with browser.page_pool.acquire() as page:
-                return await _verify_otp(page, otp=otp)
-        except Exception as e:
-            return {"status": "error", "message": f"OTP verification failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── status ─────────────────────────────────────────────────────────
-    elif action == "status":
-        try:
-            return await _get_login_status()
-        except NaukriAPIError as e:
-            return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
-
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: login, verify_otp, status", "error_code": "VALIDATION_ERROR"}
-
-
-# ---------------------------------------------------------------------------
-# Single-purpose MCP tools (preferred over the unified naukri_auth)
+# Single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -221,11 +153,12 @@ async def naukri_login(
     """
     if not method:
         return {"status": "error", "message": "login requires 'method' param ('google' or 'email').", "error_code": "VALIDATION_ERROR"}
-    try:
+
+    async def _impl():
         async with browser.page_pool.acquire() as page:
             return await _login(page, method=method, email=email, password=password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    return await handle_tool_action(_impl, "auth.login")
 
 
 @mcp.tool()
@@ -240,11 +173,12 @@ async def naukri_verify_otp(otp: str) -> dict:
     """
     if not otp:
         return {"status": "error", "message": "otp is required.", "error_code": "VALIDATION_ERROR"}
-    try:
+
+    async def _impl():
         async with browser.page_pool.acquire() as page:
             return await _verify_otp(page, otp=otp)
-    except Exception as e:
-        return {"status": "error", "message": f"OTP verification failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+    return await handle_tool_action(_impl, "auth.verify_otp")
 
 
 @mcp.tool()
@@ -254,9 +188,4 @@ async def naukri_auth_status() -> dict:
     Returns:
         {status: "success", logged_in: true/false}
     """
-    try:
-        return await _get_login_status()
-    except NaukriAPIError as e:
-        return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to check login status: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+    return await handle_tool_action(_get_login_status, "auth.status")

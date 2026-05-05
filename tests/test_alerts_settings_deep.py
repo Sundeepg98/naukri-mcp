@@ -177,20 +177,12 @@ class TestAlertListParsing:
 # =====================================================================
 
 class TestSettingsRouting:
-    """Test naukri_settings dispatches to the correct handler per action."""
-
-    @pytest.mark.asyncio
-    async def test_settings_invalid_action_returns_error(self):
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="nonexistent")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "nonexistent" in result["message"]
+    """Test atomic settings tools route to the correct private helpers."""
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
-    async def test_settings_visibility_routes_to_profile_api(self, mock_get):
-        """visibility action fetches PROFILE_API with expand_level=4."""
+    async def test_visibility_routes_to_profile_api(self, mock_get):
+        """naukri_visibility fetches PROFILE_API with expand_level=4."""
         mock_get.return_value = {
             "resdexVisibility": {
                 "showProfile": True,
@@ -198,8 +190,8 @@ class TestSettingsRouting:
                 "searchVisible": True,
             }
         }
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="visibility")
+        from naukri_server.tools.settings import naukri_visibility
+        result = await naukri_visibility()
         assert result["status"] == "success"
         assert "visibility" in result
         assert result["visibility"]["show_profile"] is True
@@ -212,8 +204,8 @@ class TestSettingsRouting:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.settings.api_client.get", new_callable=AsyncMock)
-    async def test_settings_notification_prefs_routes(self, mock_get):
-        """notification_prefs action fetches PROFILE_API and extracts communicationSettings."""
+    async def test_notification_prefs_routes(self, mock_get):
+        """naukri_notification_prefs fetches PROFILE_API and extracts communicationSettings."""
         mock_get.return_value = {
             "communicationSettings": {
                 "emailNotifications": True,
@@ -222,8 +214,8 @@ class TestSettingsRouting:
                 "whatsappNotifications": True,
             }
         }
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="notification_prefs")
+        from naukri_server.tools.settings import naukri_notification_prefs
+        result = await naukri_notification_prefs()
         assert result["status"] == "success"
         prefs = result["notification_prefs"]
         assert prefs["email_notifications"] is True
@@ -232,31 +224,16 @@ class TestSettingsRouting:
         assert prefs["whatsapp_notifications"] is True
 
     @pytest.mark.asyncio
-    async def test_settings_subscription_delegates(self):
-        """subscription action delegates to _get_subscription_status from subscription module."""
+    async def test_subscription_delegates(self):
+        """naukri_subscription_status delegates to _get_subscription_status from subscription module."""
         mock_sub = AsyncMock(return_value={"status": "success", "is_paid": False})
         # The function does a lazy import: from naukri_server.tools.subscription import _get_subscription_status
         # Patch at the source module where it's defined.
         with patch("naukri_server.tools.subscription._get_subscription_status", mock_sub):
-            from naukri_server.tools.settings import naukri_settings
-            result = await naukri_settings(action="subscription")
+            from naukri_server.tools.settings import naukri_subscription_status
+            result = await naukri_subscription_status()
         assert result["status"] == "success"
         mock_sub.assert_awaited_once()
-
-
-# =====================================================================
-# 5. Job alerts invalid action
-# =====================================================================
-
-class TestJobAlertsInvalidAction:
-
-    @pytest.mark.asyncio
-    async def test_job_alerts_unknown_action(self):
-        from naukri_server.tools.alerts import naukri_job_alerts
-        result = await naukri_job_alerts(action="nonexistent")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "nonexistent" in result["message"]
 
 
 # =====================================================================
@@ -284,8 +261,8 @@ class TestSettingsConsentFields:
                 }
 
         mock_get.side_effect = side_effect
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="get")
+        from naukri_server.tools.settings import naukri_get_settings
+        result = await naukri_get_settings()
         assert result["status"] == "success"
         assert result["naukri_auto_apply_consent"] is True
         assert result["linkedin_auto_apply_consent"] is False
@@ -308,8 +285,8 @@ class TestSettingsConsentFields:
                 }
 
         mock_get.side_effect = side_effect
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="get")
+        from naukri_server.tools.settings import naukri_get_settings
+        result = await naukri_get_settings()
         assert isinstance(result["naukri_auto_apply_consent"], bool)
         assert isinstance(result["linkedin_auto_apply_consent"], bool)
         assert isinstance(result["whatsapp_apply_notification"], bool)
@@ -346,8 +323,8 @@ class TestSettingsConsentFields:
                 raise Exception("Network error")
 
         mock_get.side_effect = side_effect
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="get")
+        from naukri_server.tools.settings import naukri_get_settings
+        result = await naukri_get_settings()
         assert result["status"] == "success"
         assert result["count"] == 1
         assert len(result["settings"]) == 1
@@ -383,8 +360,8 @@ class TestSettingsConsentFields:
                 return {}
 
         mock_get.side_effect = side_effect
-        from naukri_server.tools.settings import naukri_settings
-        result = await naukri_settings(action="get")
+        from naukri_server.tools.settings import naukri_get_settings
+        result = await naukri_get_settings()
         s = result["settings"][0]
         assert s["section"] == "Notifications"
         assert s["id"] == "rec_notif"

@@ -10,7 +10,6 @@ from naukri_server.config import (
     MOCK_INTERVIEW_OTHER_TOPICS_API, MOCK_INTERVIEW_QUESTION_API,
 )
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 
 _POLL_DELAY = 3            # Seconds between polling attempts
 _MAX_POLL_ATTEMPTS = 5     # Max polling iterations
@@ -298,94 +297,82 @@ async def _answer_question(test_id: str, topic_id: str, question_id: str, answer
 
 
 # ---------------------------------------------------------------------------
-# ISP param validation
-# ---------------------------------------------------------------------------
-
-_VALID_PARAMS_PER_ACTION = {
-    "topics": set(),
-    "history": set(),
-    "start": {"job_id"},
-    "answer": {"test_id", "topic_id", "question_id", "answer"},
-    "prep": {"job_id"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool
+# Atomic single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def naukri_mock_interview(
-    action: str = "topics",
-    job_id: Optional[str] = None,
-    test_id: Optional[str] = None,
-    topic_id: Optional[str] = None,
-    question_id: Optional[str] = None,
-    answer: Optional[str] = None,
-) -> dict:
-    """Unified AI mock interview — topics, history, start session, answer questions, interview prep.
-
-    Actions:
-      - "topics": Get available mock interview topics and completion status
-      - "history": Get previous mock interview history, scores, and feedback
-      - "start": Start a JD-based mock interview (requires job_id)
-      - "answer": Submit an answer to a mock interview question (requires test_id, topic_id, question_id, answer)
-      - "prep": Prepare for an interview — job details, company interviews/reviews, mock topics (requires job_id)
-
-    Args:
-        action: "topics" | "history" | "start" | "answer" | "prep"
-        job_id: Required for start/prep — Naukri job ID to base the interview on
-        test_id: Required for answer — test session ID from start
-        topic_id: Required for answer — topic ID from start
-        question_id: Required for answer — question ID from the current question
-        answer: Required for answer — your answer text
+async def naukri_mock_interview_topics() -> dict:
+    """Get available mock interview topics and completion status.
 
     Returns:
-        - topics: {status, total, count, page, has_more, topics: [{name, status, id, tests_done, free}], roles: [{...}]}
-        - history: {status, total, count, page, has_more, interview_count, interviews: [{...}]}
-        - start: {status, test_id, topic_id, topic_name, question, company_details}
-        - answer: {status: "next_question"|"complete"|"generating", ...}
-        - prep: {status, job_id, job_summary, company_interviews, company_reviews, mock_interview_topics, preparation_guide}
-        - {status: "error", message} on failure
+        {status, total, count, page, has_more,
+         topics: [{name, status, id, tests_done, free}], roles: [{...}]}
     """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id, "test_id": test_id, "topic_id": topic_id,
-        "question_id": question_id, "answer": answer,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
+    return await handle_tool_action(_get_topics, "mock_interview.topics")
 
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
 
-    # -- topics --------------------------------------------------------------
-    if action == "topics":
-        return _attach_unused(await handle_tool_action(_get_topics, "mock_interview.topics"))
+@mcp.tool()
+async def naukri_mock_interview_history() -> dict:
+    """Get previous mock interview history, scores, and feedback.
 
-    # -- history -------------------------------------------------------------
-    elif action == "history":
-        return _attach_unused(await handle_tool_action(_get_history, "mock_interview.history"))
+    Returns:
+        {status, total, count, page, has_more, interview_count, interviews: [{...}]}
+    """
+    return await handle_tool_action(_get_history, "mock_interview.history")
 
-    # -- start ---------------------------------------------------------------
-    elif action == "start":
-        if not job_id:
-            return {"status": "error", "message": "start requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _start_interview(job_id), "mock_interview.start"))
 
-    # -- prep ----------------------------------------------------------------
-    elif action == "prep":
-        if not job_id:
-            return {"status": "error", "message": "prep requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _interview_prep(job_id), "mock_interview.prep"))
+@mcp.tool()
+async def naukri_start_mock_interview(job_id: str) -> dict:
+    """Start a JD-based mock interview session.
 
-    # -- answer --------------------------------------------------------------
-    elif action == "answer":
-        if not test_id or not topic_id or not question_id or not answer:
-            return {"status": "error", "message": "answer requires test_id, topic_id, question_id, and answer.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(lambda: _answer_question(test_id, topic_id, question_id, answer), "mock_interview.answer"))
+    Args:
+        job_id: Naukri job ID to base the interview on
 
-    # -- unknown action ------------------------------------------------------
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: topics, history, start, answer, prep", "error_code": "VALIDATION_ERROR"}
+    Returns:
+        {status, test_id, topic_id, topic_name, question, company_details}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _start_interview(job_id), "mock_interview.start")
+
+
+@mcp.tool()
+async def naukri_mock_interview_prep(job_id: str) -> dict:
+    """Prepare for an interview — fetches job details, company interviews/reviews, mock topics.
+
+    Args:
+        job_id: Naukri job ID
+
+    Returns:
+        {status, job_id, job_summary, company_interviews, company_reviews,
+         mock_interview_topics, preparation_guide}
+    """
+    if not job_id:
+        return {"status": "error", "message": "job_id is required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(lambda: _interview_prep(job_id), "mock_interview.prep")
+
+
+@mcp.tool()
+async def naukri_answer_mock_interview(
+    test_id: str,
+    topic_id: str,
+    question_id: str,
+    answer: str,
+) -> dict:
+    """Submit an answer to a mock interview question.
+
+    Args:
+        test_id: Test session ID from naukri_start_mock_interview
+        topic_id: Topic ID from start
+        question_id: Question ID from the current question
+        answer: Your answer text
+
+    Returns:
+        {status: "next_question"|"complete"|"generating", ...}
+    """
+    if not test_id or not topic_id or not question_id or not answer:
+        return {"status": "error", "message": "test_id, topic_id, question_id, and answer are all required.", "error_code": "VALIDATION_ERROR"}
+    return await handle_tool_action(
+        lambda: _answer_question(test_id, topic_id, question_id, answer),
+        "mock_interview.answer",
+    )

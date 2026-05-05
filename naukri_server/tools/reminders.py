@@ -7,7 +7,6 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.config import logger
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.models import validate_action_params
 
 
 # ---------------------------------------------------------------------------
@@ -171,91 +170,7 @@ async def _list_reminders(include_past: bool = True, include_app_status: bool = 
 
 
 # ---------------------------------------------------------------------------
-# ISP param validation
-# ---------------------------------------------------------------------------
-
-_VALID_PARAMS_PER_ACTION = {
-    "list": {"include_past", "include_app_status"},
-    "set": {"job_id", "days", "note", "title", "company"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Unified MCP tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def naukri_reminders(
-    action: str = "list",
-    job_id: Optional[str] = None,
-    days: int = 7,
-    note: Optional[str] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-    include_past: bool = True,
-    include_app_status: bool = True,
-) -> dict:
-    """[Deprecated — use naukri_list_reminders or naukri_set_reminder instead] Unified reminder management.
-
-    Actions:
-      - "list": Get all reminders with is_due flag (use include_past to filter)
-      - "set": Create/update a follow-up reminder (requires job_id)
-
-    Args:
-        action: "list" | "set"
-        job_id: Required for set — the job ID to set reminder for
-        days: For set — remind after N days from now (default 7, range 1-365)
-        note: For set — optional note (e.g., "Follow up with recruiter")
-        title: For set — job title (for display)
-        company: For set — company name (for display)
-        include_past: For list — include already-due reminders (default True)
-        include_app_status: For list — enrich each reminder with live application
-            status (current_status, view_count, ars_score). Default True.
-
-    Returns:
-        - list: {status, total, due_count, reminders: [{job_id, title, company,
-          remind_at, note, is_due, days_until_due, created_at,
-          application_status?: {current_status, view_count, ars_score}}]}
-        - set: {status, job_id, remind_at, note, message}
-        - {status: "error", message} on failure
-    """
-    # ── ISP: warn about params irrelevant to chosen action ─────────────
-    _provided = {
-        "job_id": job_id, "days": days if days != 7 else None,
-        "note": note, "title": title, "company": company,
-        "include_past": include_past if not include_past else None,
-        "include_app_status": include_app_status if not include_app_status else None,
-    }
-    _unused = validate_action_params(action, _provided, _VALID_PARAMS_PER_ACTION)
-
-    def _attach_unused(result: dict) -> dict:
-        if _unused and isinstance(result, dict):
-            result["unused_params"] = _unused
-        return result
-
-    # -- list ---------------------------------------------------------------
-    if action == "list":
-        return _attach_unused(await handle_tool_action(
-            lambda: _list_reminders(include_past=include_past, include_app_status=include_app_status),
-            "reminders.list",
-        ))
-
-    # -- set ----------------------------------------------------------------
-    elif action == "set":
-        if not job_id:
-            return {"status": "error", "message": "set requires job_id.", "error_code": "VALIDATION_ERROR"}
-        return _attach_unused(await handle_tool_action(
-            lambda: _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company),
-            "reminders.set",
-        ))
-
-    # -- unknown action -----------------------------------------------------
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, set", "error_code": "VALIDATION_ERROR"}
-
-
-# ---------------------------------------------------------------------------
-# Single-purpose MCP tools (preferred over the unified tool above)
+# Single-purpose MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()

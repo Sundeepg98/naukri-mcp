@@ -121,136 +121,71 @@ async def _get_unified_notify() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Unified MCP tool
+# Action handlers (registered with the unified registry framework)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def naukri_notifications(
-    action: str = "list",
-    notification_id: Optional[str] = None,
-    date: Optional[str] = None,
-    limit: int = 20,
-    page: int = 1,
-    notif_type: Optional[str] = None,
-) -> dict:
-    """DEPRECATED — use individual tools: naukri_list_notifications, naukri_notification_count,
-    naukri_mark_notification_read, naukri_mark_all_notifications_read, naukri_notification_summary.
+async def _get_notification_count() -> dict:
+    """Fetch unread notification count from API."""
+    data = await api_client.get(NOTIFICATION_COUNT_API)
+    return {"status": "success", "count": data.get("count", 0)}
 
-    Unified notification management — list, count, and mark read.
 
-    Actions:
-      - "list": Fetch notifications (use limit/page for pagination, notif_type to filter)
-      - "count": Get unread notification count
-      - "mark_read": Mark a single notification as read (requires notification_id, date)
-      - "mark_all_read": Mark ALL unread notifications as read
-      - "summary": Get unified notification dashboard — all categories in one call (recoJobs, appStatus, criticalActions, rmj, recruiterSearch, etc.)
+async def _mark_all_notifications_read_impl() -> dict:
+    """Iterate through unread notifications and mark all read in parallel batches."""
+    total_marked = 0
+    total_read = 0
+    total_processed = 0
+    all_errors: list[str] = []
 
-    Args:
-        action: "list" | "count" | "mark_read" | "mark_all_read" | "summary"
-        notification_id: Required for mark_read — the notification ID
-        date: Required for mark_read — the notification date string
-        limit: Max notifications for list action (default 20)
-        page: Page number for list action (default 1)
-        notif_type: For list — filter by notification type (case-insensitive substring).
-                    Common types: "JA" (job alerts), "RA" (recruiter activity),
-                    "SYSTEM", "APPLICATION_UPDATE".  Omit for all types.
+    iteration = 0
+    while iteration < MAX_MARK_ALL_ITERATIONS:
+        iteration += 1
+        result = await _fetch_notifications(limit=50)
+        if result.get("status") != "success":
+            if total_processed == 0:
+                return result
+            break
 
-    Returns:
-        - list: {status, count, notifications: [...], filtered_by?}
-        - count: {status, count}
-        - mark_read: {status, notification_id}
-        - mark_all_read: {status, marked_count, already_read, total_processed}
-        - summary: {status, source, categories, total_types}
-        - {status: "error", message} on failure
-    """
-    # ── list ───────────────────────────────────────────────────────────
-    if action == "list":
-        return await handle_tool_action(lambda: _fetch_notifications(limit=limit, page=page, notif_type=notif_type), "notifications.list")
+        notifications = result.get("notifications", [])
+        if not notifications:
+            break
 
-    # ── count ──────────────────────────────────────────────────────────
-    elif action == "count":
-        async def _count():
-            data = await api_client.get(NOTIFICATION_COUNT_API)
-            return {
-                "status": "success",
-                "count": data.get("count", 0),
-            }
-        return await handle_tool_action(_count, "notifications.count")
+        total_processed += len(notifications)
+        unread = [n for n in notifications if not n.get("is_read")]
+        total_read += len(notifications) - len(unread)
 
-    # ── mark_read ──────────────────────────────────────────────────────
-    elif action == "mark_read":
-        if not notification_id or not date:
-            return {"status": "error", "message": "mark_read requires notification_id and date.", "error_code": "VALIDATION_ERROR"}
-        return await handle_tool_action(lambda: _mark_single_read(notification_id, date), "notifications.mark_read")
+        if not unread:
+            break
 
-    # ── mark_all_read ──────────────────────────────────────────────────
-    elif action == "mark_all_read":
-        async def _mark_all():
-            total_marked = 0
-            total_read = 0
-            total_processed = 0
-            all_errors = []
+        mark_tasks = [
+            _mark_single_read(notification_id=n["id"], date=n["date"])
+            for n in unread
+        ]
+        mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
+        for mr in mark_results:
+            if isinstance(mr, Exception):
+                all_errors.append(str(mr))
+            elif isinstance(mr, dict) and mr.get("status") == "success":
+                total_marked += 1
+            else:
+                all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
 
-            iteration = 0
-            while iteration < MAX_MARK_ALL_ITERATIONS:
-                iteration += 1
-                result = await _fetch_notifications(limit=50)
-                if result.get("status") != "success":
-                    if total_processed == 0:
-                        return result
-                    break
+        await asyncio.sleep(BROWSER_DOM_SETTLE)
 
-                notifications = result.get("notifications", [])
-                if not notifications:
-                    break
+        if len(notifications) < 50:
+            break
 
-                total_processed += len(notifications)
-                unread = [n for n in notifications if not n.get("is_read")]
-                total_read += len(notifications) - len(unread)
-
-                if not unread:
-                    break
-
-                # Parallel mark-read
-                mark_tasks = [
-                    _mark_single_read(notification_id=n["id"], date=n["date"])
-                    for n in unread
-                ]
-                mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
-                for mr in mark_results:
-                    if isinstance(mr, Exception):
-                        all_errors.append(str(mr))
-                    elif isinstance(mr, dict) and mr.get("status") == "success":
-                        total_marked += 1
-                    else:
-                        all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
-
-                await asyncio.sleep(BROWSER_DOM_SETTLE)
-
-                # If we got fewer than 50, we've reached the end
-                if len(notifications) < 50:
-                    break
-
-            return {
-                "status": "success",
-                "marked_count": total_marked,
-                "already_read": total_read,
-                "total_processed": total_processed,
-                "errors": all_errors if all_errors else None,
-            }
-        return await handle_tool_action(_mark_all, "notifications.mark_all_read")
-
-    # ── summary ────────────────────────────────────────────────────────
-    elif action == "summary":
-        return await handle_tool_action(_get_unified_notify, "notifications.summary")
-
-    # ── unknown action ─────────────────────────────────────────────────
-    else:
-        return {"status": "error", "message": f"Unknown action '{action}'. Use: list, count, mark_read, mark_all_read, summary", "error_code": "VALIDATION_ERROR"}
+    return {
+        "status": "success",
+        "marked_count": total_marked,
+        "already_read": total_read,
+        "total_processed": total_processed,
+        "errors": all_errors if all_errors else None,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Individual MCP tools (preferred over the consolidated tool above)
+# Individual MCP tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -282,11 +217,7 @@ async def naukri_notification_count() -> dict:
     Returns:
         {status, count}
     """
-    async def _count():
-        data = await api_client.get(NOTIFICATION_COUNT_API)
-        return {"status": "success", "count": data.get("count", 0)}
-
-    return await handle_tool_action(_count, "notifications.count")
+    return await handle_tool_action(_get_notification_count, "notifications.count")
 
 
 @mcp.tool()
@@ -318,59 +249,7 @@ async def naukri_mark_all_notifications_read() -> dict:
     Returns:
         {status, marked_count, already_read, total_processed, errors?}
     """
-    async def _mark_all():
-        total_marked = 0
-        total_read = 0
-        total_processed = 0
-        all_errors = []
-
-        iteration = 0
-        while iteration < MAX_MARK_ALL_ITERATIONS:
-            iteration += 1
-            result = await _fetch_notifications(limit=50)
-            if result.get("status") != "success":
-                if total_processed == 0:
-                    return result
-                break
-
-            notifications = result.get("notifications", [])
-            if not notifications:
-                break
-
-            total_processed += len(notifications)
-            unread = [n for n in notifications if not n.get("is_read")]
-            total_read += len(notifications) - len(unread)
-
-            if not unread:
-                break
-
-            mark_tasks = [
-                _mark_single_read(notification_id=n["id"], date=n["date"])
-                for n in unread
-            ]
-            mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
-            for mr in mark_results:
-                if isinstance(mr, Exception):
-                    all_errors.append(str(mr))
-                elif isinstance(mr, dict) and mr.get("status") == "success":
-                    total_marked += 1
-                else:
-                    all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
-
-            await asyncio.sleep(BROWSER_DOM_SETTLE)
-
-            if len(notifications) < 50:
-                break
-
-        return {
-            "status": "success",
-            "marked_count": total_marked,
-            "already_read": total_read,
-            "total_processed": total_processed,
-            "errors": all_errors if all_errors else None,
-        }
-
-    return await handle_tool_action(_mark_all, "notifications.mark_all_read")
+    return await handle_tool_action(_mark_all_notifications_read_impl, "notifications.mark_all_read")
 
 
 @mcp.tool()

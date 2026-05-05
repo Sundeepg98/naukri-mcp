@@ -146,21 +146,13 @@ async def test_cached_answers_delete_missing_key():
 
 
 # ===========================================================================
-# 5. naukri_insights unified router
+# 5. Insights atomic tools — validation
 # ===========================================================================
 
 @pytest.mark.asyncio
-async def test_insights_invalid_type():
-    from naukri_server.tools.insights import naukri_insights
-    result = await naukri_insights(insight_type="nonexistent")
-    assert result["status"] == "error"
-    assert "Unknown insight_type" in result["message"]
-
-
-@pytest.mark.asyncio
 async def test_insights_salary_benchmark_requires_keywords():
-    from naukri_server.tools.insights import naukri_insights
-    result = await naukri_insights(insight_type="salary_benchmark")
+    from naukri_server.tools.insights import naukri_salary_benchmark
+    result = await naukri_salary_benchmark(keywords="")
     assert result["status"] == "error"
     assert "requires keywords" in result["message"]
 
@@ -310,15 +302,8 @@ async def test_detect_status_changes_no_changes(mock_sync):
 # From test_consolidation.py — insights action routing & validation
 # =====================================================================
 
-class TestInsightsConsolidation:
-    """Tests for naukri_server.tools.insights.naukri_insights."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_insight_type(self):
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="invalid")
-        assert result["status"] == "error"
-        assert "Unknown insight_type" in result["message"]
+class TestInsightsAtomic:
+    """Tests for atomic insight tools."""
 
     @pytest.mark.asyncio
     async def test_cached_answers_update_requires_key(self):
@@ -347,10 +332,10 @@ class TestInsightsConsolidation:
 
     @pytest.mark.asyncio
     async def test_applications_routes_to_helper(self):
-        from naukri_server.tools.insights import naukri_insights
+        from naukri_server.tools.insights import naukri_application_insights
         with patch("naukri_server.tools.insights._application_insights", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "total_applications": 10}
-            result = await naukri_insights(insight_type="applications", days=7)
+            result = await naukri_application_insights(days=7)
             mock_helper.assert_awaited_once_with(days=7)
             assert result["status"] == "success"
 
@@ -467,8 +452,8 @@ class TestProfilePrompts:
     @patch("naukri_server.tools.insights._get_profile_prompts", new_callable=AsyncMock)
     async def test_profile_prompts_dispatches(self, mock_prompts):
         mock_prompts.return_value = {"status": "success", "pending_count": 2}
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="profile_prompts")
+        from naukri_server.tools.insights import naukri_profile_prompts
+        result = await naukri_profile_prompts()
         assert result["pending_count"] == 2
         mock_prompts.assert_called_once()
 
@@ -484,8 +469,8 @@ class TestProfilePrompts:
             "completed_prompts": [{"field": "profile_data", "status": "done"}],
             "all_state_keys": {}, "cache_ttl_seconds": 27429, "widget_sections_count": 3,
         }
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="profile_prompts")
+        from naukri_server.tools.insights import naukri_profile_prompts
+        result = await naukri_profile_prompts()
         assert result["pending_count"] == 4
         assert result["completed_count"] == 1
         assert result["cache_ttl_seconds"] == 27429
@@ -498,8 +483,8 @@ class TestProfilePrompts:
             "pending_prompts": [], "completed_prompts": [{"field": "f", "status": "done"}] * 5,
             "all_state_keys": {}, "cache_ttl_seconds": 10000, "widget_sections_count": 0,
         }
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="profile_prompts")
+        from naukri_server.tools.insights import naukri_profile_prompts
+        result = await naukri_profile_prompts()
         assert result["pending_count"] == 0
         assert result["completed_count"] == 5
 
@@ -510,7 +495,7 @@ class TestProfilePrompts:
             "status": "error", "message": "CCS fetch failed: empty response",
             "error_code": "BROWSER_ERROR",
         }
-        from naukri_server.tools.insights import naukri_insights
-        result = await naukri_insights(insight_type="profile_prompts")
+        from naukri_server.tools.insights import naukri_profile_prompts
+        result = await naukri_profile_prompts()
         assert result["status"] == "error"
         assert result["error_code"] == "BROWSER_ERROR"

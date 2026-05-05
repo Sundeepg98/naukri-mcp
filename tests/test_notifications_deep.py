@@ -291,58 +291,50 @@ class TestUnifiedNotifyEnrichment:
 # 7. naukri_notifications action routing
 # ---------------------------------------------------------------------------
 
-class TestNaukriNotificationsRouting:
+class TestNaukriNotificationsAtomic:
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications._fetch_notifications", new_callable=AsyncMock)
-    async def test_list_action(self, mock_fetch):
+    async def test_list_atomic(self, mock_fetch):
         mock_fetch.return_value = {"status": "success", "count": 0, "notifications": []}
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="list")
+        from naukri_server.tools.notifications import naukri_list_notifications
+        result = await naukri_list_notifications()
         assert result["status"] == "success"
         mock_fetch.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
-    async def test_count_action(self, mock_get):
+    async def test_count_atomic(self, mock_get):
         mock_get.return_value = {"count": 12}
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="count")
+        from naukri_server.tools.notifications import naukri_notification_count
+        result = await naukri_notification_count()
         assert result["status"] == "success"
         assert result["count"] == 12
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications._mark_single_read", new_callable=AsyncMock)
-    async def test_mark_read_action(self, mock_mark):
+    async def test_mark_read_atomic(self, mock_mark):
         mock_mark.return_value = {"status": "success", "notification_id": "N1"}
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_read", notification_id="N1", date="2026-01-01")
+        from naukri_server.tools.notifications import naukri_mark_notification_read
+        result = await naukri_mark_notification_read(notification_id="N1", date="2026-01-01")
         assert result["status"] == "success"
         mock_mark.assert_awaited_once_with("N1", "2026-01-01")
 
     @pytest.mark.asyncio
     async def test_mark_read_without_id_validation_error(self):
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_read")
+        from naukri_server.tools.notifications import naukri_mark_notification_read
+        result = await naukri_mark_notification_read()
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "notification_id" in result["message"]
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.notifications._get_unified_notify", new_callable=AsyncMock)
-    async def test_summary_action(self, mock_unified):
+    async def test_summary_atomic(self, mock_unified):
         mock_unified.return_value = {"status": "success", "source": "unified_notify", "categories": {}, "total_types": 0}
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="summary")
+        from naukri_server.tools.notifications import naukri_notification_summary
+        result = await naukri_notification_summary()
         assert result["status"] == "success"
         assert result["source"] == "unified_notify"
-
-    @pytest.mark.asyncio
-    async def test_unknown_action_returns_validation_error(self):
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="delete_all")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +351,8 @@ class TestMarkAllRead:
         page_notifs = [{"id": f"N{i}", "is_read": False, "date": "2026-01-01"} for i in range(50)]
         mock_fetch.return_value = {"status": "success", "notifications": page_notifs}
         mock_mark.return_value = {"status": "success", "notification_id": "Nx"}
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_all_read")
+        from naukri_server.tools.notifications import naukri_mark_all_notifications_read
+        result = await naukri_mark_all_notifications_read()
         assert result["status"] == "success"
         assert mock_fetch.call_count == MAX_MARK_ALL_ITERATIONS
 
@@ -373,8 +365,8 @@ class TestMarkAllRead:
             "status": "success",
             "notifications": [{"id": "N1", "is_read": True, "date": "2026-01-01"}],
         }
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="mark_all_read")
+        from naukri_server.tools.notifications import naukri_mark_all_notifications_read
+        result = await naukri_mark_all_notifications_read()
         assert result["status"] == "success"
         assert result["marked_count"] == 0
         assert result["already_read"] == 1
@@ -390,8 +382,8 @@ class TestNaukriAPIErrorHandling:
     @patch("naukri_server.tools.notifications.api_client.get", new_callable=AsyncMock)
     async def test_count_api_error(self, mock_get):
         mock_get.side_effect = NaukriAPIError(401, "Unauthorized")
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="count")
+        from naukri_server.tools.notifications import naukri_notification_count
+        result = await naukri_notification_count()
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
         assert result["http_status"] == 401
@@ -400,7 +392,7 @@ class TestNaukriAPIErrorHandling:
     @patch("naukri_server.tools.notifications._fetch_notifications", new_callable=AsyncMock)
     async def test_list_api_error(self, mock_fetch):
         mock_fetch.side_effect = NaukriAPIError(503, "Service Unavailable")
-        from naukri_server.tools.notifications import naukri_notifications
-        result = await naukri_notifications(action="list")
+        from naukri_server.tools.notifications import naukri_list_notifications
+        result = await naukri_list_notifications()
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"

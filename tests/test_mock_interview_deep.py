@@ -109,9 +109,9 @@ class TestActionTopics:
         resp = _topics_api_response()
         mock_api_get.return_value = resp
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="topics")
+        result = await naukri_mock_interview_topics()
 
         assert result["status"] == "success"
         assert result["total"] == 2
@@ -140,9 +140,9 @@ class TestActionTopics:
             {"statusCode": "0", "data": {"roleInfo": []}},
         ]
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="topics")
+        result = await naukri_mock_interview_topics()
 
         assert result["status"] == "success"
         assert result["total"] == 1
@@ -156,9 +156,9 @@ class TestActionTopics:
         from naukri_server.api import NaukriAPIError
         mock_api_get.side_effect = NaukriAPIError(401, "Unauthorized")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="topics")
+        result = await naukri_mock_interview_topics()
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -170,9 +170,9 @@ class TestActionTopics:
         """Generic exception from api_get is caught and returned as status=error."""
         mock_api_get.side_effect = RuntimeError("connection refused")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="topics")
+        result = await naukri_mock_interview_topics()
 
         assert result["status"] == "error"
         assert result["error_code"] == "INTERNAL_ERROR"
@@ -187,9 +187,9 @@ class TestActionTopics:
             {"statusCode": "0", "data": {"roleInfo": []}},
         ]
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="topics")
+        result = await naukri_mock_interview_topics()
 
         assert result["status"] == "success"
         assert result["total"] == 2
@@ -211,9 +211,9 @@ class TestActionHistory:
         """History fetch returns status=success with interview list."""
         mock_api_post.return_value = _history_api_response()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="history")
+        result = await naukri_mock_interview_history()
 
         assert result["status"] == "success"
         assert result["count"] == 2
@@ -229,9 +229,9 @@ class TestActionHistory:
         """History POST is sent with page=1 and pageSize=50 in the body."""
         mock_api_post.return_value = _history_api_response()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        await naukri_mock_interview(action="history")
+        await naukri_mock_interview_history()
 
         mock_api_post.assert_awaited_once()
         call_args = mock_api_post.call_args
@@ -247,9 +247,9 @@ class TestActionHistory:
         from naukri_server.api import NaukriAPIError
         mock_api_post.side_effect = NaukriAPIError(500, "Server Error")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="history")
+        result = await naukri_mock_interview_history()
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -267,9 +267,9 @@ class TestActionHistory:
             },
         }
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="history")
+        result = await naukri_mock_interview_history()
 
         assert result["status"] == "success"
         assert result["count"] == 1
@@ -287,9 +287,9 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_start_requires_job_id(self):
         """action='start' without job_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start")
+        result = await naukri_start_mock_interview(job_id="")
 
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
@@ -298,9 +298,9 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_prep_requires_job_id(self):
         """action='prep' without job_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="prep")
+        result = await naukri_mock_interview_prep(job_id="")
 
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
@@ -308,62 +308,48 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_answer_requires_all_four_params(self):
-        """action='answer' missing any of the four params returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        """naukri_answer_mock_interview missing any of the four params returns VALIDATION_ERROR."""
+        from naukri_server.tools.mock_interview import naukri_answer_mock_interview
 
         # Missing answer
-        result = await naukri_mock_interview(
-            action="answer", test_id="t1", topic_id="tp1", question_id="q1"
+        result = await naukri_answer_mock_interview(
+            test_id="t1", topic_id="tp1", question_id="q1", answer=""
         )
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_answer_missing_test_id(self):
-        """action='answer' missing test_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        """naukri_answer_mock_interview missing test_id returns VALIDATION_ERROR."""
+        from naukri_server.tools.mock_interview import naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer", topic_id="tp1", question_id="q1", answer="My answer"
+        result = await naukri_answer_mock_interview(
+            test_id="", topic_id="tp1", question_id="q1", answer="My answer"
         )
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-        assert "answer requires" in result["message"]
 
     @pytest.mark.asyncio
     async def test_answer_missing_topic_id(self):
-        """action='answer' missing topic_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        """naukri_answer_mock_interview missing topic_id returns VALIDATION_ERROR."""
+        from naukri_server.tools.mock_interview import naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer", test_id="t1", question_id="q1", answer="My answer"
+        result = await naukri_answer_mock_interview(
+            test_id="t1", topic_id="", question_id="q1", answer="My answer"
         )
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_answer_missing_question_id(self):
-        """action='answer' missing question_id returns VALIDATION_ERROR."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        """naukri_answer_mock_interview missing question_id returns VALIDATION_ERROR."""
+        from naukri_server.tools.mock_interview import naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer", test_id="t1", topic_id="tp1", answer="My answer"
+        result = await naukri_answer_mock_interview(
+            test_id="t1", topic_id="tp1", question_id="", answer="My answer"
         )
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
-
-    @pytest.mark.asyncio
-    async def test_unknown_action(self):
-        """Unknown action string returns VALIDATION_ERROR with action name in message."""
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-
-        result = await naukri_mock_interview(action="fly")
-
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "fly" in result["message"]
-        # Hint message should mention valid actions
-        assert "topics" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +368,9 @@ class TestActionStart:
         question_resp = _question_done_response()
         mock_api_post.side_effect = [session_resp, question_resp]
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "success"
         assert result["test_id"] == "test1"
@@ -406,9 +392,9 @@ class TestActionStart:
         done = _question_done_response(q_id="q99", q_text="What is a decorator?", order=2)
         mock_api_post.side_effect = [session_resp, gen1, gen2, done]
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "success"
         assert result["question"]["id"] == "q99"
@@ -425,9 +411,9 @@ class TestActionStart:
         # Session call + 5 generating poll calls
         mock_api_post.side_effect = [session_resp] + [gen] * 5
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "generating"
         assert result["test_id"] == "test1"
@@ -446,9 +432,9 @@ class TestActionStart:
             "data": {},
         }
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="99999")
+        result = await naukri_start_mock_interview(job_id="99999")
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -463,9 +449,9 @@ class TestActionStart:
             "data": {"topics": [], "companyDetails": []},
         }
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -485,9 +471,9 @@ class TestActionStart:
             },
         }
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -500,9 +486,9 @@ class TestActionStart:
         from naukri_server.api import NaukriAPIError
         mock_api_post.side_effect = NaukriAPIError(403, "Forbidden")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="start", job_id="12345")
+        result = await naukri_start_mock_interview(job_id="12345")
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -523,14 +509,9 @@ class TestActionAnswer:
         """Submitting an answer returns the next question when status=DONE and question.id present."""
         mock_api_post.return_value = _question_done_response(q_id="q2", q_text="Explain decorators.")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q1",
-            answer="GIL prevents threads.",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q1", answer="GIL prevents threads.",
         )
 
         assert result["status"] == "next_question"
@@ -543,14 +524,9 @@ class TestActionAnswer:
         """testStatus=COMPLETE terminates the session with status=complete."""
         mock_api_post.return_value = _question_complete_response()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q5",
-            answer="Final answer.",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q5", answer="Final answer.",
         )
 
         assert result["status"] == "complete"
@@ -567,14 +543,9 @@ class TestActionAnswer:
             }
         }
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q5",
-            answer="Final answer.",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q5", answer="Final answer.",
         )
 
         assert result["status"] == "complete"
@@ -588,14 +559,9 @@ class TestActionAnswer:
         done = _question_done_response(q_id="q3", q_text="What is async/await?")
         mock_api_post.side_effect = [gen, done]
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q2",
-            answer="Some answer.",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q2", answer="Some answer.",
         )
 
         assert result["status"] == "next_question"
@@ -610,14 +576,9 @@ class TestActionAnswer:
         gen = _question_generating_response()
         mock_api_post.side_effect = [gen] * 5
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q2",
-            answer="Some answer.",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q2", answer="Some answer.",
         )
 
         assert result["status"] == "generating"
@@ -631,14 +592,9 @@ class TestActionAnswer:
         from naukri_server.api import NaukriAPIError
         mock_api_post.side_effect = NaukriAPIError(500, "Internal error")
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(
-            action="answer",
-            test_id="t1",
-            topic_id="tp1",
-            question_id="q1",
-            answer="test",
+        result = await naukri_answer_mock_interview(test_id="t1", topic_id="tp1", question_id="q1", answer="test",
         )
 
         assert result["status"] == "error"
@@ -720,9 +676,9 @@ class TestActionPrep:
         mock_reviews.return_value = self._mock_reviews_result()
         mock_topics.return_value = self._mock_topics_result()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="prep", job_id="12345")
+        result = await naukri_mock_interview_prep(job_id="12345")
 
         assert result["status"] == "success"
         assert result["job_id"] == "12345"
@@ -764,9 +720,9 @@ class TestActionPrep:
         """If naukri_get_job fails, prep returns error immediately."""
         mock_get_job.return_value = {"status": "error", "message": "Job not found"}
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="prep", job_id="99999")
+        result = await naukri_mock_interview_prep(job_id="99999")
 
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
@@ -796,9 +752,9 @@ class TestActionPrep:
         }
         mock_topics.return_value = self._mock_topics_result()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="prep", job_id="12345")
+        result = await naukri_mock_interview_prep(job_id="12345")
 
         assert result["status"] == "partial_success"
         assert "errors" in result
@@ -824,9 +780,9 @@ class TestActionPrep:
         mock_reviews.side_effect = RuntimeError("timeout")
         mock_topics.return_value = self._mock_topics_result()
 
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
 
-        result = await naukri_mock_interview(action="prep", job_id="12345")
+        result = await naukri_mock_interview_prep(job_id="12345")
 
         # Should not crash; errors are accumulated
         assert result["status"] in ("success", "partial_success")
@@ -853,68 +809,60 @@ class TestMockInterviewConsolidation:
     """Tests for naukri_server.tools.mock_interview.naukri_mock_interview."""
 
     @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
-
-    @pytest.mark.asyncio
     async def test_start_requires_job_id(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(action="start")
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
+        result = await naukri_start_mock_interview(job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "job_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_start_with_empty_job_id(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(action="start", job_id="")
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
+        result = await naukri_start_mock_interview(job_id="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_answer_requires_all_params(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(action="answer")
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
+        result = await naukri_answer_mock_interview(test_id="", topic_id="", question_id="", answer="")
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
         assert "test_id" in result["message"]
 
     @pytest.mark.asyncio
     async def test_answer_partial_params(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        result = await naukri_mock_interview(
-            action="answer", test_id="t1", topic_id="tp1",
+        from naukri_server.tools.mock_interview import naukri_answer_mock_interview
+        result = await naukri_answer_mock_interview(
+            test_id="t1", topic_id="tp1", question_id="", answer="",
         )
         assert result["status"] == "error"
         assert result["error_code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_topics_routes_to_helper(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.mock_interview._get_topics", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "topics": []}
-            result = await naukri_mock_interview(action="topics")
+            result = await naukri_mock_interview_topics()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_history_routes_to_helper(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.mock_interview._get_history", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "interviews": []}
-            result = await naukri_mock_interview(action="history")
+            result = await naukri_mock_interview_history()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_start_routes_to_helper(self):
-        from naukri_server.tools.mock_interview import naukri_mock_interview
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics, naukri_mock_interview_history, naukri_start_mock_interview, naukri_mock_interview_prep, naukri_answer_mock_interview
         with patch("naukri_server.tools.mock_interview._start_interview", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "test_id": "123"}
-            result = await naukri_mock_interview(action="start", job_id="999")
+            result = await naukri_start_mock_interview(job_id="999")
             mock_helper.assert_awaited_once_with("999")
             assert result["status"] == "success"

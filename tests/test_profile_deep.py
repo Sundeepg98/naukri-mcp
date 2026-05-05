@@ -171,27 +171,27 @@ class TestProfileRouting:
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile._get_dashboard", new_callable=AsyncMock)
-    async def test_profile_action_dashboard_routing(self, mock_dashboard):
+    async def test_profile_dashboard_routing(self, mock_dashboard):
         mock_dashboard.return_value = {"status": "success", "profile_views": 42}
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="dashboard")
+        from naukri_server.tools.profile import naukri_dashboard
+        result = await naukri_dashboard()
         assert result["status"] == "success"
         assert result["profile_views"] == 42
         mock_dashboard.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile._get_profile", new_callable=AsyncMock)
-    async def test_profile_action_get_routing(self, mock_get):
+    async def test_profile_get_routing(self, mock_get):
         mock_get.return_value = {"status": "success", "name": "Test"}
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="get")
+        from naukri_server.tools.profile import naukri_get_profile
+        result = await naukri_get_profile()
         assert result["status"] == "success"
         assert result["name"] == "Test"
         mock_get.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile._audit_profile", new_callable=AsyncMock)
-    async def test_profile_action_audit_routing(self, mock_audit):
+    async def test_profile_audit_routing(self, mock_audit):
         mock_audit.return_value = {
             "status": "success",
             "completeness_pct": 85,
@@ -200,20 +200,11 @@ class TestProfileRouting:
             "gaps": [],
             "tips": ["Keep it up"],
         }
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="audit")
+        from naukri_server.tools.profile import naukri_audit_profile
+        result = await naukri_audit_profile()
         assert result["status"] == "success"
         assert result["grade"] == "A"
         mock_audit.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_profile_action_invalid(self):
-        """Unknown action returns VALIDATION_ERROR."""
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="nonexistent")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "nonexistent" in result["message"]
 
 
 # =====================================================================
@@ -229,8 +220,8 @@ class TestProfileErrors:
         """api_get raising NaukriAPIError is caught and returned as error dict."""
         from naukri_server.api import NaukriAPIError
         mock_api_get.side_effect = NaukriAPIError(500, "Internal error")
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="get")
+        from naukri_server.tools.profile import naukri_get_profile
+        result = await naukri_get_profile()
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
 
@@ -239,8 +230,8 @@ class TestProfileErrors:
     async def test_dashboard_empty_response(self, mock_api_get):
         """api_get returns {} for dashboard — should return success with minimal data."""
         mock_api_get.return_value = {}
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="dashboard")
+        from naukri_server.tools.profile import naukri_dashboard
+        result = await naukri_dashboard()
         # Even with empty response, _get_dashboard wraps in success
         assert result["status"] == "success"
 
@@ -250,24 +241,18 @@ class TestProfileErrors:
 # =====================================================================
 
 class TestProfileInvalidationOnUpdate:
-    """After naukri_profile(action='update'), the profile TTL cache is invalidated."""
+    """After naukri_boost_profile(), the profile TTL cache is invalidated."""
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
     async def test_profile_invalidation_on_update(self, mock_api_get):
-        """Update path (via browser) invalidates _profile_ttl_cache.
-
-        We can't easily run the full browser path, so we verify that
-        _update_profile is called with the correct args. Instead we test
-        the simpler case: calling with no fields returns VALIDATION_ERROR
-        (this path doesn't reach the browser but proves routing works).
-        For the cache-invalidation proof, we check boost's REST path.
+        """Boost via REST should invalidate the profile TTL cache.
 
         Note: profile.api_client and profile_update.api_client are the
         same singleton object, so a single patch covers both modules.
         """
         from naukri_server.tools.profile import (
-            _profile_ttl_cache, get_cached_profile, naukri_profile,
+            _profile_ttl_cache, get_cached_profile, naukri_boost_profile,
         )
         # Prime the cache
         mock_api_get.return_value = {
@@ -289,7 +274,7 @@ class TestProfileInvalidationOnUpdate:
         }
         with patch("naukri_server.tools.profile.api_client.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
-            result = await naukri_profile(action="boost")
+            result = await naukri_boost_profile()
             assert result["status"] == "success"
             assert result["action"] == "refreshed"
         # Cache should be invalidated after boost
@@ -358,7 +343,7 @@ class TestProfileUpdateInvalidatesCaches:
     @pytest.mark.asyncio
     async def test_update_invalidates_both_caches(self):
         from naukri_server.tools.profile import (
-            _profile_ttl_cache, _dashboard_ttl_cache, naukri_profile,
+            _profile_ttl_cache, _dashboard_ttl_cache, naukri_update_profile,
         )
         # Pre-fill both caches
         _profile_ttl_cache._data = {"old": "profile"}
@@ -375,7 +360,7 @@ class TestProfileUpdateInvalidatesCaches:
                 return {"status": "updated", "updated_fields": ["resumeHeadline"]}
 
             mock_update.side_effect = update_side_effect
-            result = await naukri_profile(action="update", fields={"resumeHeadline": "New headline"})
+            result = await naukri_update_profile(fields={"resumeHeadline": "New headline"})
             assert result["status"] == "updated"
             assert _profile_ttl_cache._data is None
             assert _dashboard_ttl_cache._data is None
@@ -431,54 +416,46 @@ class TestResumeUploadInvalidatesCaches:
 # From test_consolidation.py — profile action routing & validation
 # =====================================================================
 
-class TestProfileConsolidation:
-    """Tests for naukri_server.tools.profile.naukri_profile."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_action(self):
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="invalid")
-        assert result["status"] == "error"
-        assert result["error_code"] == "VALIDATION_ERROR"
-        assert "Unknown action" in result["message"]
+class TestProfileAtomic:
+    """Tests for atomic profile tools."""
 
     @pytest.mark.asyncio
     async def test_update_no_fields(self):
         """Update with no fields should fail validation inside _update_profile."""
-        from naukri_server.tools.profile import naukri_profile
+        from naukri_server.tools.profile import naukri_update_profile
         with patch("naukri_server.tools.profile._update_profile", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {
                 "status": "error",
                 "message": "No fields provided. Pass at least one field to update.",
                 "error_code": "VALIDATION_ERROR",
             }
-            result = await naukri_profile(action="update")
+            result = await naukri_update_profile()
             assert result["status"] == "error"
             assert "No fields" in result["message"]
 
     @pytest.mark.asyncio
     async def test_get_routes_to_helper(self):
-        from naukri_server.tools.profile import naukri_profile
+        from naukri_server.tools.profile import naukri_get_profile
         with patch("naukri_server.tools.profile._get_profile", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "name": "Test"}
-            result = await naukri_profile(action="get")
+            result = await naukri_get_profile()
             mock_helper.assert_awaited_once()
             assert result["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_audit_routes_to_helper(self):
-        from naukri_server.tools.profile import naukri_profile
+        from naukri_server.tools.profile import naukri_audit_profile
         with patch("naukri_server.tools.profile._audit_profile", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "success", "grade": "A"}
-            result = await naukri_profile(action="audit")
+            result = await naukri_audit_profile()
             mock_helper.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_boost_routes_to_helper(self):
-        from naukri_server.tools.profile import naukri_profile
+        from naukri_server.tools.profile import naukri_boost_profile
         with patch("naukri_server.tools.profile._boost_visibility", new_callable=AsyncMock) as mock_helper:
             mock_helper.return_value = {"status": "refreshed"}
-            result = await naukri_profile(action="boost")
+            result = await naukri_boost_profile()
             mock_helper.assert_awaited_once_with(randomize=False)
 
 
@@ -998,8 +975,8 @@ class TestDFPTargeting:
             },
             "slots": [{"adUnitPath": "/test"}],
         }
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="targeting")
+        from naukri_server.tools.profile import naukri_profile_targeting
+        result = await naukri_profile_targeting()
         assert result["status"] == "success"
         assert result["profile"]["ctc_lpa"] == 17.0
         assert result["profile"]["location"] == "Bengaluru"
@@ -1012,8 +989,8 @@ class TestDFPTargeting:
             "params": {"Profile-CTC": 17.0, "Profile-Pref-Loc": "", "Profile-PG-Course": "", "Profile-PG-Spl": ""},
             "slots": [],
         }
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="targeting")
+        from naukri_server.tools.profile import naukri_profile_targeting
+        result = await naukri_profile_targeting()
         assert result["gap_count"] == 3
         assert "pref loc" in result["completeness_gaps"]
 
@@ -1021,8 +998,8 @@ class TestDFPTargeting:
     @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_empty_response(self, mock_get):
         mock_get.return_value = {}
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="targeting")
+        from naukri_server.tools.profile import naukri_profile_targeting
+        result = await naukri_profile_targeting()
         assert result["targeting_fields"] == 0
         assert result["gap_count"] == 0
 
@@ -1031,8 +1008,8 @@ class TestDFPTargeting:
     async def test_targeting_api_error(self, mock_get):
         from naukri_server.api import NaukriAPIError
         mock_get.side_effect = NaukriAPIError(401, "Unauthorized")
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="targeting")
+        from naukri_server.tools.profile import naukri_profile_targeting
+        result = await naukri_profile_targeting()
         assert result["status"] == "error"
         assert result["error_code"] == "API_ERROR"
 
@@ -1044,8 +1021,8 @@ class TestDFPTargeting:
             "params": {"Profile-Activeness": 0, "Profile-CTC": 0, "Profile-Pref-Loc": ""},
             "slots": [],
         }
-        from naukri_server.tools.profile import naukri_profile
-        result = await naukri_profile(action="targeting")
+        from naukri_server.tools.profile import naukri_profile_targeting
+        result = await naukri_profile_targeting()
         assert result["gap_count"] == 1
         assert "pref loc" in result["completeness_gaps"]
 
