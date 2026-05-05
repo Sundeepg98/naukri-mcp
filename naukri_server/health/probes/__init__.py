@@ -14,6 +14,9 @@ _probe_modules = [
     "naukri_server.health.probes.scraping",
     "naukri_server.health.probes.system",
     "naukri_server.health.probes.discovery",
+    "naukri_server.health.probes.scheduler_probe",
+    "naukri_server.health.probes.agent_probe",
+    "naukri_server.health.probes.agent_step_probe",
 ]
 
 for mod in _probe_modules:
