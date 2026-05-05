@@ -1,4 +1,9 @@
-"""Smart apply — job fit assessment before applying."""
+"""Smart apply — job fit assessment before applying.
+
+DDD: external job/profile API reads in _score_job route through safe_get.
+Internal scored-result aggregation reads (e.g. fit_details from this same
+module) stay on plain .get() — those are our owned shape.
+"""
 
 import asyncio
 from typing import Optional
@@ -7,6 +12,7 @@ from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
 from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
+from naukri_server.domain import safe_get
 from naukri_server.domain.fit_score import FitScore
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import Job
@@ -15,18 +21,28 @@ from naukri_server.scoring import parse_skills, _score_location, _score_work_mod
 
 
 def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool = False) -> dict:
-    """Score a single job against a profile. Returns the fit assessment dict."""
-    job_skills = parse_skills(job_result.get("tags") or job_result.get("skills") or [])
-    profile_skills = parse_skills(profile_result.get("key_skills", []))
+    """Score a single job against a profile. Returns the fit assessment dict.
+
+    job_result and profile_result come from naukri_get_job / get_cached_profile —
+    external API responses, so all reads route through safe_get. The 'tags' and
+    'skills' fall-through uses safe_get's multi-key form to capture both v3
+    (skills) and v4 (tags) shapes.
+    """
+    job_skills_raw = safe_get(
+        job_result, "tags", "skills",
+        field_name="job.tags_or_skills", warn=False, default=[],
+    )
+    job_skills = parse_skills(job_skills_raw)
+    profile_skills = parse_skills(safe_get(profile_result, "key_skills", field_name="key_skills", warn=False, default=[]))
     fit = FitScore.compute(
         job_skills, profile_skills,
-        job_result.get("experience", ""),
-        profile_result.get("total_experience"),
-        job_location=job_result.get("location"),
-        profile_location=profile_result.get("current_location"),
-        job_work_mode=job_result.get("work_mode"),
-        job_salary=job_result.get("salary"),
-        profile_expected_ctc=profile_result.get("expected_ctc"),
+        safe_get(job_result, "experience", field_name="job.experience", warn=False, default=""),
+        safe_get(profile_result, "total_experience", field_name="profile.total_experience", warn=False),
+        job_location=safe_get(job_result, "location", field_name="job.location", warn=False),
+        profile_location=safe_get(profile_result, "current_location", field_name="profile.current_location", warn=False),
+        job_work_mode=safe_get(job_result, "work_mode", field_name="job.work_mode", warn=False),
+        job_salary=safe_get(job_result, "salary", field_name="job.salary", warn=False),
+        profile_expected_ctc=safe_get(profile_result, "expected_ctc", field_name="profile.expected_ctc", warn=False),
         is_agent_eligible=is_agent_eligible,
         score_location_fn=_score_location,
         score_work_mode_fn=_score_work_mode,
