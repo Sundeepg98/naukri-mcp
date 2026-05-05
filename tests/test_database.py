@@ -34,7 +34,11 @@ async def _open_db(db_path: Path) -> aiosqlite.Connection:
 
 
 async def test_init_db_creates_tables(tmp_path):
-    """init_db should create all 8 tables and 8 indexes."""
+    """init_db should create all production tables and indexes.
+
+    auto_fix_pending was added by the Pragmatic Auto-Fix healing system —
+    bumps table count from 11 to 12 and adds 2 indexes.
+    """
     db_path = await _init_db_in(tmp_path)
 
     db = await _open_db(db_path)
@@ -56,6 +60,7 @@ async def test_init_db_creates_tables(tmp_path):
         "agent_decisions",
         "agent_runs",
         "applications",
+        "auto_fix_pending",
         "endpoint_audit",
         "event_log",
         "interview_rounds",
@@ -72,6 +77,8 @@ async def test_init_db_creates_tables(tmp_path):
         "idx_agent_runs_started",
         "idx_apps_applied_at",
         "idx_apps_status",
+        "idx_auto_fix_pending_status",
+        "idx_auto_fix_pending_verify",
         "idx_decisions_cycle",
         "idx_decisions_job",
         "idx_endpoint_url",

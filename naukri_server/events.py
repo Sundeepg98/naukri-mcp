@@ -254,6 +254,46 @@ class NewEndpointDiscovered(DomainEvent):
 
 
 @dataclass
+class EndpointDriftDetected(DomainEvent):
+    """Emitted when api_validator detects schema drift on an endpoint.
+
+    The healing router subscribes to this event and dispatches by tier:
+      - T1 endpoints get auto-fixed in the parser/config file
+      - T2 endpoints get auto-fixed but marked pending until snapshot+revert verifies
+      - T3 endpoints get a HealingProposal notification (never auto-applied)
+    """
+    constant_name: str = ""        # e.g. "SEARCH_API" — matches naukri_server.config attribute
+    url: str = ""                  # e.g. "/jobapi/v3/search"
+    severity: str = "added"        # "added" | "type_change" | "removed"
+    drift_type: str = "field"      # "field" (alias drift) | "url" (path change)
+    changed_fields: dict = field(default_factory=dict)  # {dotted_path: change_desc}
+    snapshot_age_days: float = 0.0
+
+
+@dataclass
+class AutoFixApplied(DomainEvent):
+    """Emitted when the healer commits an auto-fix to disk + git.
+
+    For T2 fixes the commit is provisional — see AutoFixReverted for the
+    snapshot+revert outcome.
+    """
+    commit_sha: str = ""
+    constant_name: str = ""
+    tier: str = ""                 # "T1" | "T2"
+    drift_type: str = "field"
+    file_path: str = ""            # repo-relative path that was modified
+
+
+@dataclass
+class AutoFixReverted(DomainEvent):
+    """Emitted when a T2 auto-fix is reverted because post-apply validation failed."""
+    original_commit_sha: str = ""  # the auto-fix commit that got reverted
+    revert_commit_sha: str = ""    # the `git revert` commit
+    constant_name: str = ""
+    reason: str = ""               # validator failure description
+
+
+@dataclass
 class ScheduledTaskCompleted(DomainEvent):
     """Emitted when a scheduled task finishes (success or failure)."""
     task_name: str = ""

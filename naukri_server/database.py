@@ -156,6 +156,23 @@ CREATE TABLE IF NOT EXISTS agent_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_cycle ON agent_decisions(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_job ON agent_decisions(job_id);
+
+-- T2 healing: every auto-fix on a snapshot+revert-protected endpoint inserts
+-- a row here. The t2_verify_pending scheduler task re-validates the endpoint
+-- after `verify_at` and either confirms (status="confirmed") or reverts the
+-- commit (status="reverted") and rolls the row's status forward.
+CREATE TABLE IF NOT EXISTS auto_fix_pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commit_sha TEXT NOT NULL,
+    pre_fix_sha TEXT NOT NULL,
+    constant_name TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    verify_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|confirmed|reverted|revert_failed
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_auto_fix_pending_status ON auto_fix_pending(status);
+CREATE INDEX IF NOT EXISTS idx_auto_fix_pending_verify ON auto_fix_pending(verify_at);
 """
 
 
@@ -1187,5 +1204,88 @@ async def list_scheduled_runs(task_name: Optional[str] = None, limit: int = 20) 
                 (limit,),
             )
         return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Auto-fix pending CRUD (T2 healing snapshot+revert protection)
+# ---------------------------------------------------------------------------
+
+async def insert_auto_fix_pending(
+    commit_sha: str,
+    pre_fix_sha: str,
+    constant_name: str,
+    applied_at: str,
+    verify_at: str,
+) -> int:
+    """Record a T2 auto-fix awaiting verification. Returns the new row id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            INSERT INTO auto_fix_pending
+              (commit_sha, pre_fix_sha, constant_name, applied_at, verify_at, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+            """,
+            (commit_sha, pre_fix_sha, constant_name, applied_at, verify_at),
+        )
+        await db.commit()
+        return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def list_auto_fix_pending(status: Optional[str] = None,
+                                  due_before: Optional[str] = None,
+                                  limit: int = 100) -> list[dict]:
+    """List auto-fix rows, optionally filtered by status and/or verify_at cutoff."""
+    db = await get_db()
+    try:
+        clauses = []
+        params: list = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if due_before is not None:
+            clauses.append("verify_at <= ?")
+            params.append(due_before)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"SELECT * FROM auto_fix_pending {where} ORDER BY applied_at ASC LIMIT ?",
+            tuple(params),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def update_auto_fix_status(
+    row_id: int,
+    status: str,
+    error: Optional[str] = None,
+) -> None:
+    """Update an auto-fix row's status (and optional error message)."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE auto_fix_pending SET status = ?, error = ? WHERE id = ?",
+            (status, error, row_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_auto_fix_pending(row_id: int) -> Optional[dict]:
+    """Fetch a single auto-fix row by id."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM auto_fix_pending WHERE id = ?", (row_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
     finally:
         await db.close()
