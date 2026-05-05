@@ -1,5 +1,7 @@
 """Profile service — business logic for profile fetch, caching, dashboard, and audit."""
 
+from typing import Optional
+
 from naukri_server.api import NaukriAPIError
 from naukri_server.domain import safe_get
 from naukri_server.domain.profile import ProfileParser
@@ -23,6 +25,8 @@ __all__ = [
     "_profile_ttl_cache",
     "_dashboard_ttl_cache",
     "_TtlCache",
+    "do_update",
+    "do_boost",
 ]
 
 # Backward-compat alias — tests import _TtlCache from profile.py (re-exported there)
@@ -394,3 +398,58 @@ async def _get_dashboard() -> dict:
         return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
     except Exception as e:
         return {"status": "error", "message": f"Failed to get dashboard: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+
+
+# ---------------------------------------------------------------------------
+# Browser-orchestration helpers (delegate to profile_update.py via lazy
+# imports so this service module keeps a clean import graph).
+# ---------------------------------------------------------------------------
+
+async def do_update(
+    fields: Optional[dict] = None,
+    notice_period: Optional[str] = None,
+    expected_ctc: Optional[float] = None,
+    current_ctc: Optional[float] = None,
+) -> dict:
+    """Orchestrate browser-based profile update with retry + timeout.
+
+    The ``_update_profile`` helper is looked up via the ``tools.profile``
+    module so test patches at that path are honored.
+    """
+    import asyncio
+    from naukri_server.browser import browser_retry
+    from naukri_server.config import BROWSER_OPERATION_TIMEOUT
+    from naukri_server.tools import profile as _profile_tool
+
+    return await asyncio.wait_for(
+        browser_retry(
+            lambda: _profile_tool._update_profile(
+                fields=fields or {},
+                notice_period=notice_period,
+                expected_ctc=expected_ctc,
+                current_ctc=current_ctc,
+            ),
+            description="profile update",
+        ),
+        timeout=BROWSER_OPERATION_TIMEOUT,
+    )
+
+
+async def do_boost(randomize: bool = False) -> dict:
+    """Orchestrate browser-based profile-boost (re-save headline) with retry + timeout.
+
+    The ``_boost_visibility`` helper is looked up via the ``tools.profile``
+    module so test patches at that path are honored.
+    """
+    import asyncio
+    from naukri_server.browser import browser_retry
+    from naukri_server.config import BROWSER_OPERATION_TIMEOUT
+    from naukri_server.tools import profile as _profile_tool
+
+    return await asyncio.wait_for(
+        browser_retry(
+            lambda: _profile_tool._boost_visibility(randomize=randomize),
+            description="profile boost",
+        ),
+        timeout=BROWSER_OPERATION_TIMEOUT,
+    )

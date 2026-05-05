@@ -1,21 +1,22 @@
 """Profile tools — get, update, audit, boost, dashboard, and targeting.
 
-Browser mutations live in profile_update.py; DFP targeting in profile_targeting.py.
-This module owns the MCP dispatcher, ISP validation, and re-exports from profile_service.
+Tool layer — business logic + browser orchestration live in
+``services/profile_service.py`` (and ``profile_update.py`` for browser-
+specific DOM helpers). Direct ``browser`` imports were removed in the
+Wave 2B hexagonal-completion pass; tools now drive the browser only via
+the service layer's ``do_update`` / ``do_boost`` helpers.
 """
 
-import asyncio
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.browser import browser_retry
 from naukri_server.interfaces import api_client  # noqa: F401 — tests patch this path
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.config import BROWSER_OPERATION_TIMEOUT
 from naukri_server.utils import TtlCache
 
 # ---------------------------------------------------------------------------
-# Re-export business logic from profile_service (backward compat)
+# Re-export business logic from profile_service (backward compat for tests
+# that patch via the tools.profile path)
 # ---------------------------------------------------------------------------
 from naukri_server.services.profile_service import (  # noqa: F401
     _get_profile,
@@ -27,6 +28,8 @@ from naukri_server.services.profile_service import (  # noqa: F401
     _audit_profile,
     _profile_ttl_cache,
     _dashboard_ttl_cache,
+    do_update as _do_update_service,
+    do_boost as _do_boost_service,
 )
 
 # Backward-compat alias — tests import _TtlCache from here
@@ -34,34 +37,25 @@ _TtlCache = TtlCache
 
 
 # ---------------------------------------------------------------------------
-# Browser-wrapped helpers used by the atomic update/boost tools below
+# Thin tool-layer adapters that delegate to the service-layer browser
+# orchestration. Kept under their original ``_do_*`` names so daily_brief,
+# auto_hunt, and tests that patch ``naukri_server.tools.profile._do_*``
+# continue to work.
 # ---------------------------------------------------------------------------
 
 async def _do_update(**kw) -> dict:
-    """Wrap browser_retry + wait_for for profile update."""
-    return await asyncio.wait_for(
-        browser_retry(
-            lambda: _update_profile(
-                fields=kw.get("fields") or {},
-                notice_period=kw.get("notice_period"),
-                expected_ctc=kw.get("expected_ctc"),
-                current_ctc=kw.get("current_ctc"),
-            ),
-            description="profile update",
-        ),
-        timeout=BROWSER_OPERATION_TIMEOUT,
+    """Adapter to ``profile_service.do_update`` — preserves call site."""
+    return await _do_update_service(
+        fields=kw.get("fields"),
+        notice_period=kw.get("notice_period"),
+        expected_ctc=kw.get("expected_ctc"),
+        current_ctc=kw.get("current_ctc"),
     )
 
 
 async def _do_boost(**kw) -> dict:
-    """Wrap browser_retry + wait_for for profile boost."""
-    return await asyncio.wait_for(
-        browser_retry(
-            lambda: _boost_visibility(randomize=kw.get("randomize", False)),
-            description="profile boost",
-        ),
-        timeout=BROWSER_OPERATION_TIMEOUT,
-    )
+    """Adapter to ``profile_service.do_boost`` — preserves call site."""
+    return await _do_boost_service(randomize=kw.get("randomize", False))
 
 
 # ---------------------------------------------------------------------------
