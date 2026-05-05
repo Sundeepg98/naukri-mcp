@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 from typing import Optional
 
 from mcp.server.fastmcp import Context
@@ -13,6 +12,13 @@ from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
 from naukri_server.tools.tracking import record_application
 from naukri_server.validation import validate_limit
+# Pure answer-handling helpers live in services.apply_service — re-exported
+# under legacy underscored names so existing imports (tests, _cache_answers)
+# keep working without touching every callsite.
+from naukri_server.services.apply_service import (
+    find_user_answer as _find_user_answer,
+    format_answer as _format_answer,
+)
 
 
 # ============================================================================
@@ -461,56 +467,6 @@ async def naukri_batch_apply(
 
 
 _batch_apply = naukri_batch_apply
-
-
-def _find_user_answer(qid: str, q_name: str, answers: dict) -> Optional[str]:
-    """Find a user-provided answer by question ID or fuzzy text match."""
-    def _to_str(val):
-        """Unwrap single-element lists, stringify scalars."""
-        if isinstance(val, list):
-            return str(val[0]) if val else ""
-        return str(val)
-
-    if qid in answers:
-        return _to_str(answers[qid])
-    q_lower = q_name.lower()
-    for key, value in answers.items():
-        k = key.lower().replace("_", " ")
-        if k in q_lower or q_lower in k:
-            return _to_str(value)
-        if all(w in q_lower for w in k.split()):
-            return _to_str(value)
-    return None
-
-
-def _format_answer(answer: str, q_type: str, options: dict) -> str | list[str]:
-    """Format answer for the Naukri API based on question type."""
-    if q_type == "Text Box":
-        return answer
-
-    if not options:
-        if q_type and q_type != "Text Box":
-            logger.debug("Question type '%s' has no options, treating as text", q_type)
-        return answer
-
-    option_values = list(options.values())
-
-    # Priority 1: Exact case-insensitive match
-    for opt in option_values:
-        if answer.lower() == opt.lower():
-            return [opt]
-
-    # Priority 2: Key-based match (answer is option dict key)
-    if answer in options:
-        return [options[answer]]
-
-    # Priority 3: Word-boundary regex match (prevents "java" matching "javascript")
-    for opt in option_values:
-        if re.search(r'\b' + re.escape(answer.lower()) + r'\b', opt.lower()):
-            return [opt]
-
-    # Fallback: wrap in list as-is
-    return [answer]
 
 
 def _build_apply_answers(job_id: str, answers: dict, cache: dict) -> dict:
