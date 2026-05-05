@@ -60,8 +60,8 @@ class TestAuth:
             yield mock_page
 
         with patch("naukri_server.tools.auth._login", new_callable=AsyncMock) as mock_login, \
-             patch("naukri_server.tools.auth.browser") as mock_browser:
-            mock_browser.page_pool.acquire = fake_acquire
+             patch("naukri_server.tools.auth.browser_provider") as mock_provider:
+            mock_provider.acquire_page = fake_acquire
             mock_login.return_value = {"status": "logged_in", "method": "google", "profile_name": "Test", "has_token": True}
             result = await naukri_login(method="google")
             mock_login.assert_awaited_once_with(mock_page, method="google", email=None, password=None)
@@ -80,8 +80,8 @@ class TestAuth:
             yield mock_page
 
         with patch("naukri_server.tools.auth._verify_otp", new_callable=AsyncMock) as mock_verify, \
-             patch("naukri_server.tools.auth.browser") as mock_browser:
-            mock_browser.page_pool.acquire = fake_acquire
+             patch("naukri_server.tools.auth.browser_provider") as mock_provider:
+            mock_provider.acquire_page = fake_acquire
             mock_verify.return_value = {"status": "logged_in", "profile_name": "Test", "has_token": True}
             result = await naukri_verify_otp(otp="123456")
             mock_verify.assert_awaited_once_with(mock_page, otp="123456")
