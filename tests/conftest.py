@@ -1,7 +1,45 @@
 """Shared test fixtures for Naukri MCP tests."""
 
+import asyncio
 import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+
+# ---------------------------------------------------------------------------
+# DB isolation — point DB_PATH at a session-tmp file and create tables once.
+# Without this, any test that calls a database helper without patching it
+# (e.g. tests/test_workflows_integration.py::test_prep_step_fails_gracefully
+# which exercises the real follow_up_reminder saga step) hits the real
+# project-root naukri.db, which may be missing or have a stale schema.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_test_db(tmp_path_factory):
+    """Redirect naukri_server.database.DB_PATH to a session-scoped tmp file.
+
+    Creates fresh tables via init_db(). Every test that touches the DB without
+    patching now sees an isolated, fully-migrated schema. Runs exactly once.
+
+    The patch is held for the full session via patcher.start()/stop() — using
+    a `with patch` block would revert the redirect as soon as the fixture
+    yielded, leaving subsequent tests pointing at the real project DB again.
+    """
+    tmp_db = tmp_path_factory.mktemp("naukri-test-db") / "naukri.db"
+    patcher = patch("naukri_server.database.DB_PATH", tmp_db)
+    patcher.start()
+    try:
+        from naukri_server.database import init_db
+        # init_db is async — run it on a fresh loop because session fixtures
+        # execute outside any pytest-asyncio test loop.
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(init_db())
+        finally:
+            loop.close()
+        yield tmp_db
+    finally:
+        patcher.stop()
 
 
 @pytest.fixture

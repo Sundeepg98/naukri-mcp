@@ -15,7 +15,8 @@ All tools use these interfaces — no tool imports api_get/api_post directly.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -47,15 +48,76 @@ class ApiClient(ABC):
 
 
 class BrowserProvider(ABC):
-    """Interface for browser automation. Tools depend on this, not browser.py directly."""
+    """Interface for browser automation. Tools depend on this, not browser.py directly.
+
+    Methods follow a layered design:
+
+    * ``acquire_page()`` is the **primary** entry point — yields a Page from the
+      pooled browser context. Use this in an ``async with`` block; the Page is
+      automatically returned to the pool on exit. The Page object itself is
+      treated as opaque (Playwright-typed) so advanced patterns like
+      ``page.on("response", ...)`` event listeners remain available without
+      bloating the interface.
+
+    * ``navigate(url)`` is a **convenience** that combines acquire + goto for
+      callers that only need a one-shot navigation.
+
+    * ``safe_goto / safe_text / safe_fill / evaluate_js / intercept_json``
+      are page-level helpers that wrap the corresponding ``browser.py``
+      functions with timeout + retry semantics already baked in.
+
+    * ``extract_token()`` exposes the cached JWT token from the
+      ``TokenManager`` singleton — the single browser-derived piece of
+      auth state most non-browser tools actually need.
+    """
 
     @abstractmethod
     async def navigate(self, url: str) -> Any:
         """Navigate to a URL and return the page object."""
 
     @abstractmethod
+    def acquire_page(self) -> Any:
+        """Async context manager that yields a Page from the pool.
+
+        Usage:
+            async with browser_provider.acquire_page() as page:
+                await browser_provider.safe_goto(page, url)
+                ...
+        """
+
+    @abstractmethod
     async def evaluate_js(self, page: Any, js: str, arg: Any = None, timeout: int = 15) -> Any:
         """Execute JavaScript on a page with timeout."""
+
+    @abstractmethod
+    async def safe_goto(self, page: Any, url: str, wait_until: str = "domcontentloaded") -> bool:
+        """Navigate ``page`` to ``url`` with fallback wait strategy.
+
+        Returns ``True`` on success, ``False`` if navigation raised.
+        """
+
+    @abstractmethod
+    async def safe_text(self, page: Any, selector: str) -> Optional[str]:
+        """Get text content of an element on the page (None if not present)."""
+
+    @abstractmethod
+    async def safe_fill(self, page: Any, selector: str, value: str, delay: int = 30) -> bool:
+        """Wait for selector, click, clear, and type ``value`` (returns success)."""
+
+    @abstractmethod
+    async def intercept_json(
+        self,
+        page: Any,
+        url: str,
+        url_pattern: Optional[str] = None,
+        timeout: float = 10,
+        wait: str = "domcontentloaded",
+    ) -> Optional[dict]:
+        """Navigate to ``url`` and capture the first matching JSON XHR response."""
+
+    @abstractmethod
+    async def extract_token(self) -> Optional[str]:
+        """Return the current cached auth token (None if unavailable)."""
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +154,8 @@ class NaukriApiClient(ApiClient):
 class PlaywrightBrowserProvider(BrowserProvider):
     """Concrete browser provider wrapping browser.py.
 
-    Acquires a tab from the PagePool, navigates, and returns the page.
-    Caller is responsible for releasing the tab (use page_pool.acquire() context
-    manager for automatic release in production code).
+    All methods are thin wrappers that lazy-import from ``naukri_server.browser``
+    to avoid circular import issues at module load time.
     """
 
     async def navigate(self, url: str) -> Any:
@@ -104,9 +165,53 @@ class PlaywrightBrowserProvider(BrowserProvider):
         await page_goto(page, url)
         return page
 
+    def acquire_page(self):
+        """Return the PagePool's async context manager directly."""
+        from naukri_server.browser import browser
+        return browser.page_pool.acquire()
+
     async def evaluate_js(self, page: Any, js: str, arg: Any = None, timeout: int = 15) -> Any:
         from naukri_server.browser import page_evaluate_safe
         return await page_evaluate_safe(page, js, arg=arg, timeout=timeout)
+
+    async def safe_goto(self, page: Any, url: str, wait_until: str = "domcontentloaded") -> bool:
+        from naukri_server.browser import page_goto
+        try:
+            await page_goto(page, url, wait=wait_until)
+            return True
+        except Exception:
+            return False
+
+    async def safe_text(self, page: Any, selector: str) -> Optional[str]:
+        from naukri_server.browser import page_text
+        return await page_text(page, selector)
+
+    async def safe_fill(self, page: Any, selector: str, value: str, delay: int = 30) -> bool:
+        from naukri_server.browser import page_safe_fill
+        try:
+            await page_safe_fill(page, selector, value, delay=delay)
+            return True
+        except Exception:
+            return False
+
+    async def intercept_json(
+        self,
+        page: Any,
+        url: str,
+        url_pattern: Optional[str] = None,
+        timeout: float = 10,
+        wait: str = "domcontentloaded",
+    ) -> Optional[dict]:
+        from naukri_server.browser import page_intercept_json
+        return await page_intercept_json(page, url, url_pattern=url_pattern, timeout=timeout, wait=wait)
+
+    async def extract_token(self) -> Optional[str]:
+        from naukri_server.browser import browser
+        token_mgr = getattr(browser, "token_manager", None)
+        if token_mgr is None:
+            return None
+        await token_mgr.extract()
+        return getattr(token_mgr, "_token", None)
 
 
 # ---------------------------------------------------------------------------
