@@ -2,8 +2,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.error_handler import api_tool, handle_tool_action
-from naukri_server.interfaces import api_client
-from naukri_server.browser import browser, page_intercept_json
+from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
 from naukri_server.tools.job_parsing import _parse_job_list  # noqa: F401
 from naukri_server.validation import validate_job_list, validate_limit, validate_page  # noqa: F401
@@ -94,7 +93,7 @@ async def naukri_search_jobs(
         logger.info("REST search failed (%s), falling back to browser", e)
 
     async def _browser_search():
-        async with browser.page_pool.acquire() as page:
+        async with browser_provider.acquire_page() as page:
             page_url = build_search_url(
                 NAUKRI_BASE, keywords, location, page_no,
                 experience=experience, salary_min=salary_min, salary_max=salary_max,
@@ -102,7 +101,7 @@ async def naukri_search_jobs(
                 job_type=job_type, company_type=company_type, industry=industry,
                 education=education, role_category=role_category, posted_within=posted_within,
             )
-            data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
+            data = await browser_provider.intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
                 return {"status": "error", "message": "Search API response not captured. Try again.", "error_code": "API_ERROR"}
             return build_search_result(data, keywords, location, page_no, limit, filters, "browser")

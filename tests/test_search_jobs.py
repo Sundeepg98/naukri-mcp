@@ -46,14 +46,11 @@ class TestSearchJobs:
         """limit > 50 is clamped to 50 before being used."""
         from naukri_server.tools.search import naukri_search_jobs
 
-        # Mock the browser page pool and page_intercept_json to avoid real calls
+        # Mock the browser_provider to avoid real Playwright calls
         mock_page = AsyncMock()
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=mock_page)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-
-        mock_pool = MagicMock()
-        mock_pool.acquire.return_value = mock_cm
 
         fake_data = {
             "jobDetails": [
@@ -64,10 +61,9 @@ class TestSearchJobs:
             "clusters": {},
         }
 
-        with patch("naukri_server.tools.search.browser") as mock_browser, \
-             patch("naukri_server.tools.search.page_intercept_json", new_callable=AsyncMock) as mock_intercept:
-            mock_browser.page_pool = mock_pool
-            mock_intercept.return_value = fake_data
+        with patch("naukri_server.tools.search.browser_provider") as mock_provider:
+            mock_provider.acquire_page = MagicMock(return_value=mock_cm)
+            mock_provider.intercept_json = AsyncMock(return_value=fake_data)
 
             result = await naukri_search_jobs(keywords="python", limit=100, page=1)
 

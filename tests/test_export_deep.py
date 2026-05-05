@@ -468,9 +468,11 @@ class TestOutputPath:
         exports_resolved = str(export_mod._EXPORTS_DIR.resolve())
         custom_path = os.path.join(exports_resolved, "my_custom_export.json")
 
+        # Path resolution moved to services.export_service.resolve_export_path —
+        # patch Path there to intercept the constructor call.
         with patch("naukri_server.database.list_all_applications", new_callable=AsyncMock, return_value=records), \
              patch("naukri_server.tools.export._EXPORTS_DIR") as mock_dir, \
-             patch("naukri_server.tools.export.Path") as mock_path_cls:
+             patch("naukri_server.services.export_service.Path") as mock_path_cls:
             mock_dir.mkdir = MagicMock()
             mock_dir.resolve.return_value = Path(exports_resolved)
             fake_file = MagicMock()

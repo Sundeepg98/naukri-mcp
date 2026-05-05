@@ -1,9 +1,12 @@
-"""Export data — dump applications, saved jobs, or search results to JSON/CSV."""
+"""Export data — dump applications, saved jobs, or search results to JSON/CSV.
 
-import csv
-import io
+Tool layer is now a thin orchestrator: data loading + file writing live here
+(file I/O can't move because tests patch tools.export._EXPORTS_DIR / Path).
+Pure helpers for arg validation, path resolution, and CSV serialisation live
+in services/export_service.py.
+"""
+
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +14,12 @@ from naukri_server.config import logger, EXPORTS_DIR
 
 # Re-export from service layer for backward compatibility
 from naukri_server.services.sync_service import _flatten_for_csv  # noqa: F401
+from naukri_server.services.export_service import (
+    validate_export_args,
+    resolve_export_path,
+    collect_csv_headers,
+    render_csv,
+)
 
 _EXPORTS_DIR = EXPORTS_DIR
 
@@ -36,17 +45,14 @@ async def _export_data(
         - {status: "error", message}
     """
     logger.info("Exporting %s as %s", data_type, format)
+    err = validate_export_args(data_type, format)
+    if err:
+        return err
     format = format.lower()
-    if format not in ("json", "csv"):
-        return {"status": "error", "message": f"Unsupported format '{format}'. Use 'json' or 'csv'.", "error_code": "VALIDATION_ERROR"}
-
     data_type = data_type.lower()
-    valid_types = ("applications", "saved_jobs", "search_results")
-    if data_type not in valid_types:
-        return {"status": "error", "message": f"Invalid data_type '{data_type}'. Use one of: {', '.join(valid_types)}", "error_code": "VALIDATION_ERROR"}
 
     # Load data
-    records = []
+    records: list = []
     if data_type == "applications":
         from naukri_server.database import list_all_applications
         records = await list_all_applications()
@@ -73,15 +79,11 @@ async def _export_data(
 
     # Determine output path
     _EXPORTS_DIR.mkdir(exist_ok=True)
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    ext = format
-    if output_path:
-        file_path = Path(output_path).resolve()
-        exports_dir = _EXPORTS_DIR.resolve()
-        if not str(file_path).startswith(str(exports_dir)):
-            return {"status": "error", "message": "output_path must be within the exports/ directory", "error_code": "VALIDATION_ERROR"}
-    else:
-        file_path = _EXPORTS_DIR / f"{data_type}_{date_str}.{ext}"
+    file_path, path_err = resolve_export_path(_EXPORTS_DIR, data_type, format, output_path)
+    if path_err:
+        return path_err
+    # Type narrow for mypy/pyright (file_path is non-None when path_err is None)
+    assert file_path is not None
 
     # Write file
     try:
@@ -94,19 +96,8 @@ async def _export_data(
             flat = _flatten_for_csv(records)
             if not flat:
                 return {"status": "error", "message": "No data to write after flattening.", "error_code": "NOT_FOUND"}
-            # Collect all keys across all rows for header
-            all_keys = []
-            seen = set()
-            for row in flat:
-                for k in row:
-                    if k not in seen:
-                        all_keys.append(k)
-                        seen.add(k)
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=all_keys, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(flat)
-            file_path.write_text(output.getvalue(), encoding="utf-8")
+            headers = collect_csv_headers(flat)
+            file_path.write_text(render_csv(flat, headers), encoding="utf-8")
 
     except Exception as e:
         logger.error("Failed to write %s export file: %s", format, e)
