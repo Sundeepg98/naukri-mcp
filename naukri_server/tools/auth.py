@@ -13,6 +13,11 @@ from naukri_server.config import (
     logger, ACTIVITY_LEVEL_API, NAUKRI_BASE,
     BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD, BROWSER_PAGE_SETTLE,
 )
+from naukri_server.services.auth_service import (
+    get_login_status as _service_get_login_status,
+    harvest_post_login_state,
+    build_login_success_result,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -20,18 +25,18 @@ from naukri_server.config import (
 # ---------------------------------------------------------------------------
 
 async def _login(page, method: str, email: Optional[str], password: Optional[str]) -> dict:
-    """Handle login flow via Google SSO or email/password."""
+    """Handle login flow via Google SSO or email/password.
+
+    Browser state machine stays here (Playwright-tied); token harvesting and
+    success-result construction delegate to ``services.auth_service``.
+    """
     await page_goto(page, f"{NAUKRI_BASE}/nlogin/login")
     await asyncio.sleep(BROWSER_PAGE_LOAD)
 
     if "/nlogin" not in page.url:
-        # Already logged in
-        await browser.token_manager.extract()
-        browser.token = browser.token_manager._token
-        if not browser.token:
-            return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
-        name = await browser.get_profile_name()
-        return {"status": "already_logged_in", "profile_name": name, "has_token": True}
+        # Already logged in — short-circuit via service helpers
+        token, name = await harvest_post_login_state(browser)
+        return build_login_success_result(token=token, profile_name=name, already_logged_in=True)
 
     if method == "google":
         google_clicked = False
@@ -58,11 +63,10 @@ async def _login(page, method: str, email: Optional[str], password: Optional[str
             await asyncio.sleep(BROWSER_PAGE_SETTLE)
             current_url = page.url
             if "/nlogin" not in current_url and "accounts.google" not in current_url:
-                await browser.token_manager.extract()
-                if not browser.token_manager._token:
+                token, name = await harvest_post_login_state(browser)
+                if not token:
                     return {"status": "error", "message": "Login redirect completed but token not found. Try again.", "error_code": "AUTH_ERROR"}
-                name = await browser.get_profile_name()
-                return {"status": "logged_in", "method": "google", "profile_name": name, "has_token": True}
+                return build_login_success_result(token=token, profile_name=name, method="google")
 
         current_url = page.url
         if "accounts.google" in current_url:
@@ -86,12 +90,8 @@ async def _login(page, method: str, email: Optional[str], password: Optional[str
             return {"status": "otp_required", "needs_otp": True, "message": "Enter OTP sent to your phone"}
 
         if "/nlogin" not in page.url:
-            await browser.token_manager.extract()
-            browser.token = browser.token_manager._token
-            if not browser.token:
-                return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
-            name = await browser.get_profile_name()
-            return {"status": "logged_in", "method": "email", "profile_name": name, "has_token": True}
+            token, name = await harvest_post_login_state(browser)
+            return build_login_success_result(token=token, profile_name=name, method="email")
 
         error = await page_text(page, ".err-message, .error-msg, [class*='error']")
         return {"status": "error", "message": error or "Login failed — check credentials", "error_code": "AUTH_ERROR"}
@@ -109,12 +109,8 @@ async def _verify_otp(page, otp: str) -> dict:
         await asyncio.sleep(BROWSER_FORM_SAVE)
 
         if "/nlogin" not in page.url:
-            await browser.token_manager.extract()
-            browser.token = browser.token_manager._token
-            if not browser.token:
-                return {"status": "error", "message": "Login redirect completed but auth token not found. Try again.", "error_code": "AUTH_ERROR"}
-            name = await browser.get_profile_name()
-            return {"status": "logged_in", "profile_name": name, "has_token": True}
+            token, name = await harvest_post_login_state(browser)
+            return build_login_success_result(token=token, profile_name=name)
 
         error = await page_text(page, ".err-message, .error-msg")
         return {"status": "error", "message": error or "OTP verification failed", "error_code": "AUTH_ERROR"}
@@ -123,12 +119,12 @@ async def _verify_otp(page, otp: str) -> dict:
 
 
 async def _get_login_status() -> dict:
-    """Check if the Naukri session is still active."""
-    data = await api_client.get(ACTIVITY_LEVEL_API)
-    return {
-        "status": "success",
-        "logged_in": data.get("loggedInStatus", False),
-    }
+    """Check if the Naukri session is still active.
+
+    Thin wrapper around ``services.auth_service.get_login_status`` — kept at
+    this path because tests patch ``naukri_server.tools.auth._get_login_status``.
+    """
+    return await _service_get_login_status()
 
 
 # ---------------------------------------------------------------------------
