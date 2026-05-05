@@ -40,6 +40,9 @@ exports/
 # Tracking backups
 *.backup
 
+# Healer circuit-breaker state (per-machine; should not be committed)
+healing_state.json
+
 # Serena
 .serena/
 
