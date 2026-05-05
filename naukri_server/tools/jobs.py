@@ -4,8 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
-from naukri_server.interfaces import api_client
-from naukri_server.browser import browser, page_goto
+from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.tools.job_parsing import _parse_job_list
@@ -84,8 +83,12 @@ async def _get_job(job_id_or_url: str) -> dict:
     except Exception as e:
         logger.info("REST v3 error for job %s: %s — falling back to browser", job_id, e)
 
-    # Strategy 2: Browser interception (existing fallback)
-    async with browser.page_pool.acquire() as page:
+    # Strategy 2: Browser interception (existing fallback).
+    # Page object is opaque to BrowserProvider; we use Playwright's native
+    # event API (page.on / page.remove_listener) directly because we need
+    # to capture two separate XHR responses (details + match score) which
+    # the simpler intercept_json() helper can't model.
+    async with browser_provider.acquire_page() as page:
         try:
             # Intercept job details + match score API responses
             captured = {}
@@ -104,7 +107,7 @@ async def _get_job(job_id_or_url: str) -> dict:
 
             page.on("response", on_response_with_event)
             try:
-                await page_goto(page, page_url)
+                await browser_provider.safe_goto(page, page_url)
                 try:
                     await asyncio.wait_for(response_event.wait(), timeout=INTERCEPT_WAIT_TIMEOUT)
                 except asyncio.TimeoutError:
