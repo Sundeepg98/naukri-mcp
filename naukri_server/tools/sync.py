@@ -27,6 +27,8 @@ from naukri_server.services.sync_service import (  # noqa: F401
     _parse_applied_jobs,
     _parse_saved_jobs,
     _map_naukri_status,
+    merge_applications as _merge_applications,
+    merge_saved_jobs as _merge_saved_jobs,
 )
 
 
@@ -63,121 +65,8 @@ async def _save_sync_state_async(state: dict):
     await asyncio.to_thread(_save_sync_state, state)
 
 
-# ---------------------------------------------------------------------------
-# Merge logic
-# ---------------------------------------------------------------------------
-
-def _merge_applications(local_apps: list, remote_jobs: list) -> dict:
-    """Merge remote applied jobs into local list. Mutates local_apps in place.
-
-    Rules:
-    - Existing job_id: update status/title/company from remote, preserve local fields.
-    - New job_id: add with source="naukri_sync".
-    - Local-only jobs are left untouched.
-    """
-    # Deduplicate local_apps by job_id (keep last entry per id)
-    local_by_id = {}
-    for a in local_apps:
-        jid = a.get("job_id")
-        if jid:
-            local_by_id[jid] = a
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    updated = 0
-    unchanged = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_by_id:
-            existing = local_by_id[rid]
-            changed = False
-            for field in ("title", "company", "recruiter_active", "apply_type",
-              "ars_score", "star_rating", "job_activity", "company_rating", "is_open"):
-                if rj.get(field) is not None and rj[field] != existing.get(field):
-                    existing[field] = rj[field]
-                    changed = True
-            # Status: update from remote but log conflicts
-            new_status = rj.get("status")
-            if new_status and new_status != existing.get("status"):
-                logger.info("Sync: status conflict for %s — local=%s, remote=%s (using remote)",
-                            rid, existing.get("status"), new_status)
-                existing["status"] = new_status
-                changed = True
-            for field in ("applied_date", "salary", "location", "url"):
-                if rj.get(field) is not None and field not in existing:
-                    existing[field] = rj[field]
-            # PRESERVE existing applied_at — never overwrite with now
-            if changed:
-                existing["last_synced"] = now
-                updated += 1
-            else:
-                unchanged += 1
-        else:
-            # NEW entry: use remote applied_date if available, else now
-            entry = {
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "status": rj.get("status", "applied"),
-                "applied_at": rj.get("applied_date") or rj.get("appliedDate") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-            }
-            for k, v in rj.items():
-                if k not in entry and v is not None:
-                    entry[k] = v
-            local_by_id[rid] = entry
-            new_added += 1
-
-    # Rebuild local_apps from deduplicated dict (preserves merge results)
-    local_apps.clear()
-    local_apps.extend(local_by_id.values())
-
-    local_only = sum(1 for a in local_apps
-                     if a.get("job_id") and a["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "updated": updated,
-            "unchanged": unchanged, "local_only": local_only}
-
-
-def _merge_saved_jobs(local_saved: list, remote_jobs: list) -> dict:
-    """Merge remote saved jobs into local list. Mutates local_saved in place."""
-    local_ids = {j["job_id"] for j in local_saved if j.get("job_id")}
-    now = datetime.now(timezone.utc).isoformat()
-
-    new_added = 0
-    already_local = 0
-    remote_ids = set()
-
-    for rj in remote_jobs:
-        rid = rj["job_id"]
-        remote_ids.add(rid)
-
-        if rid in local_ids:
-            already_local += 1
-        else:
-            local_saved.append({
-                "job_id": rid,
-                "title": rj.get("title"),
-                "company": rj.get("company"),
-                "saved_at": rj.get("saved_date") or now,
-                "source": "naukri_sync",
-                "last_synced": now,
-                **{k: v for k, v in rj.items()
-                   if k not in ("job_id", "title", "company", "saved_date") and v is not None},
-            })
-            new_added += 1
-
-    local_only = sum(1 for j in local_saved
-                     if j.get("job_id") and j["job_id"] not in remote_ids)
-
-    return {"new_added": new_added, "already_local": already_local,
-            "local_only": local_only}
-
+# Merge helpers moved to services/sync_service.py — re-exported above as
+# _merge_applications / _merge_saved_jobs to preserve test import paths.
 
 # URL patterns for browser interception (discovered)
 _APPLIED_JOBS_URL_PATTERN = "applyapi/v5/history"  # matches /cloudgateway-apply/.../applyapi/v5/history
