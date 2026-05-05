@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Naukri Dashboard</title>
+    <style>
+        /* === Reset & Base === */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #1a1a2e;
+            --card-bg: #16213e;
+            --accent: #0f3460;
+            --highlight: #e94560;
+            --text: #e0e0e0;
+            --text-dim: #8892a4;
+            --text-bright: #ffffff;
+            --healthy: #00d97e;
+            --degraded: #f5a623;
+            --unhealthy: #e94560;
+            --border: #1e2d4a;
+            --radius: 8px;
+            --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-sans);
+            line-height: 1.5;
+            min-height: 100vh;
+            padding: 0;
+        }
+
+        /* === Header / Status Bar === */
+        header {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-bright);
+            letter-spacing: -0.01em;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+
+        .health-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            display: inline-block;
+            transition: background 0.3s ease;
+        }
+        .health-dot.healthy { background: var(--healthy); box-shadow: 0 0 6px var(--healthy); }
+        .health-dot.degraded { background: var(--degraded); box-shadow: 0 0 6px var(--degraded); }
+        .health-dot.unhealthy { background: var(--unhealthy); box-shadow: 0 0 6px var(--unhealthy); }
+
+        #refresh-countdown {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        #last-refresh {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+        }
+
+        /* === Main Grid === */
+        main.grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            padding: 20px 24px;
+            max-width: 1440px;
+            margin: 0 auto;
+        }
+
+        /* === Panel (Card) === */
+        .panel {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .panel:hover {
+            border-color: var(--accent);
+        }
+
+        .panel-title {
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-title .icon { font-size: 1rem; }
+
+        /* Stats row spans full width */
+        .stats-row {
+            grid-column: 1 / -1;
+        }
+
+        /* Funnel spans 2 columns */
+        .panel-funnel {
+            grid-column: span 2;
+        }
+
+        /* Stale table spans 2 columns */
+        .panel-stale {
+            grid-column: span 2;
+        }
+
+        /* === Quick Stats Cards === */
+        .stats-grid {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .stat-card {
+            flex: 1;
+            min-width: 140px;
+            background: var(--accent);
+            border-radius: 6px;
+            padding: 16px 18px;
+            text-align: center;
+            transition: transform 0.2s ease, background 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            background: #133a6e;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-bright);
+            line-height: 1.1;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 4px;
+        }
+
+        /* === Funnel Bars === */
+        .funnel-stage {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 12px;
+        }
+
+        .funnel-label {
+            width: 110px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .funnel-bar-track {
+            flex: 1;
+            height: 28px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .funnel-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.6s ease;
+            min-width: 2px;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+        }
+
+        .funnel-bar-fill span {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-bright);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .funnel-bar-fill.stage-applied { background: linear-gradient(90deg, #0f3460, #1a5276); }
+        .funnel-bar-fill.stage-viewed { background: linear-gradient(90deg, #1a5276, #2471a3); }
+        .funnel-bar-fill.stage-shortlisted { background: linear-gradient(90deg, #00796b, #00897b); }
+        .funnel-bar-fill.stage-interview { background: linear-gradient(90deg, #00d97e, #26de81); }
+        .funnel-bar-fill.stage-offered { background: linear-gradient(90deg, #f5a623, #f7b731); }
+        .funnel-bar-fill.stage-default { background: linear-gradient(90deg, var(--accent), #1a5276); }
+
+        .funnel-conversion {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+        .funnel-conversion strong {
+            color: var(--text-bright);
+            font-family: var(--font-mono);
+        }
+
+        /* === Actions List === */
+        .action-item {
+            padding: 10px 12px;
+            border-left: 3px solid var(--accent);
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 0 4px 4px 0;
+            font-size: 0.88rem;
+            transition: background 0.2s ease;
+        }
+        .action-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .action-item.priority-high { border-left-color: var(--unhealthy); }
+        .action-item.priority-medium { border-left-color: var(--degraded); }
+        .action-item.priority-low { border-left-color: var(--healthy); }
+
+        .action-priority {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 3px;
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-right: 6px;
+        }
+        .priority-high .action-priority { background: rgba(233, 69, 96, 0.2); color: var(--unhealthy); }
+        .priority-medium .action-priority { background: rgba(245, 166, 35, 0.2); color: var(--degraded); }
+        .priority-low .action-priority { background: rgba(0, 217, 126, 0.2); color: var(--healthy); }
+
+        /* === Health Grid === */
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+        }
+
+        .probe-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+            font-size: 0.85rem;
+            transition: background 0.2s ease;
+        }
+        .probe-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .probe-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .probe-dot.healthy { background: var(--healthy); }
+        .probe-dot.degraded { background: var(--degraded); }
+        .probe-dot.unhealthy { background: var(--unhealthy); }
+        .probe-dot.unknown { background: var(--text-dim); }
+
+        .probe-name {
+            color: var(--text);
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .probe-time {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            color: var(--text-dim);
+        }
+
+        .probe-criticality {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            font-weight: 600;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+        .probe-criticality.critical { background: rgba(233, 69, 96, 0.2); color: var(--unhealthy); }
+        .probe-criticality.warning { background: rgba(245, 166, 35, 0.2); color: var(--degraded); }
+
+        /* === Table (Stale Applications) === */
+        .stale-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        .stale-table th {
+            text-align: left;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .stale-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            color: var(--text);
+        }
+        .stale-table tr:hover td {
+            background: rgba(255, 255, 255, 0.03);
+        }
+        .stale-table .score {
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+        .stale-table .score.high { color: var(--unhealthy); }
+        .stale-table .score.medium { color: var(--degraded); }
+        .stale-table .score.low { color: var(--text-dim); }
+
+        .stale-table .days {
+            font-family: var(--font-mono);
+            color: var(--text-dim);
+        }
+
+        /* === Scheduler Tasks === */
+        .task-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+            font-size: 0.85rem;
+            transition: background 0.2s ease;
+        }
+        .task-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .task-name {
+            flex: 1;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .task-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 2px 7px;
+            border-radius: 3px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge.enabled { background: rgba(0, 217, 126, 0.2); color: var(--healthy); }
+        .badge.disabled { background: rgba(136, 146, 164, 0.2); color: var(--text-dim); }
+        .badge.success { background: rgba(0, 217, 126, 0.2); color: var(--healthy); }
+        .badge.failure { background: rgba(233, 69, 96, 0.2); color: var(--unhealthy); }
+        .badge.running { background: rgba(245, 166, 35, 0.2); color: var(--degraded); }
+        .badge.skipped { background: rgba(136, 146, 164, 0.2); color: var(--text-dim); }
+
+        .task-time {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        /* === Activity List === */
+        .activity-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .activity-name {
+            flex: 1;
+            color: var(--text);
+        }
+
+        .activity-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .activity-duration {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .activity-time {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        /* === Loading & Error States === */
+        .loading {
+            text-align: center;
+            padding: 24px;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--text-dim);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            text-align: center;
+            padding: 20px;
+            color: var(--unhealthy);
+            font-size: 0.85rem;
+            background: rgba(233, 69, 96, 0.08);
+            border-radius: 4px;
+            border: 1px solid rgba(233, 69, 96, 0.2);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+
+        /* === Dead Zones === */
+        .dead-zone {
+            display: inline-block;
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 3px;
+            background: rgba(233, 69, 96, 0.15);
+            color: var(--unhealthy);
+            margin-right: 6px;
+            margin-top: 4px;
+        }
+
+        /* === Responsive === */
+        @media (max-width: 1024px) {
+            main.grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .panel-funnel {
+                grid-column: 1 / -1;
+            }
+            .panel-stale {
+                grid-column: 1 / -1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            main.grid {
+                grid-template-columns: 1fr;
+                padding: 12px;
+                gap: 12px;
+            }
+            .stats-row, .panel-funnel, .panel-stale {
+                grid-column: 1;
+            }
+            header {
+                padding: 12px 16px;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .stats-grid {
+                flex-direction: column;
+            }
+            .stat-card {
+                min-width: unset;
+            }
+            .funnel-label {
+                width: 80px;
+                font-size: 0.75rem;
+            }
+            .health-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        /* === Scrollbar === */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #1a5276; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Naukri Job Hunting Dashboard</h1>
+        <div class="status-bar">
+            <span class="health-dot" id="health-dot" title="Server health"></span>
+            <span id="refresh-countdown"></span>
+            <span id="last-refresh"></span>
+        </div>
+    </header>
+
+    <main class="grid">
+        <!-- Quick Stats Row -->
+        <section class="panel stats-row" id="panel-stats">
+            <div class="panel-title"><span class="icon">&#x1F4CA;</span> Application Stats</div>
+            <div class="loading" id="stats-loading">Loading stats</div>
+        </section>
+
+        <!-- Application Funnel -->
+        <section class="panel panel-funnel" id="panel-funnel">
+            <div class="panel-title"><span class="icon">&#x1F4C8;</span> Application Funnel (30 days)</div>
+            <div class="loading" id="funnel-loading">Loading funnel</div>
+        </section>
+
+        <!-- Recommended Actions -->
+        <section class="panel" id="panel-actions">
+            <div class="panel-title"><span class="icon">&#x26A1;</span> Recommended Actions</div>
+            <div class="loading" id="actions-loading">Loading actions</div>
+        </section>
+
+        <!-- System Health -->
+        <section class="panel" id="panel-health">
+            <div class="panel-title"><span class="icon">&#x1F3E5;</span> System Health</div>
+            <div class="loading" id="health-loading">Loading health</div>
+        </section>
+
+        <!-- Stale Applications -->
+        <section class="panel panel-stale" id="panel-stale">
+            <div class="panel-title"><span class="icon">&#x23F3;</span> Stale Applications</div>
+            <div class="loading" id="stale-loading">Loading stale applications</div>
+        </section>
+
+        <!-- Scheduler -->
+        <section class="panel" id="panel-scheduler">
+            <div class="panel-title"><span class="icon">&#x23F0;</span> Scheduler</div>
+            <div class="loading" id="scheduler-loading">Loading scheduler</div>
+        </section>
+
+        <!-- Recent Activity -->
+        <section class="panel" id="panel-activity">
+            <div class="panel-title"><span class="icon">&#x1F4DD;</span> Recent Activity</div>
+            <div class="loading" id="activity-loading">Loading activity</div>
+        </section>
+    </main>
+
+    <script>
+        /* ================================================================
+         * Naukri Dashboard - Client-side rendering
+         * Fetches 7 API endpoints, renders panels, auto-refreshes.
+         * ================================================================ */
+
+        var REFRESH_INTERVAL = 60; // seconds
+        var countdown = REFRESH_INTERVAL;
+        var countdownTimer = null;
+
+        // -- Helpers -------------------------------------------------
+
+        function formatTime(dateStr) {
+            if (!dateStr) return '--';
+            try {
+                var d = new Date(dateStr);
+                if (isNaN(d.getTime())) return dateStr;
+                return d.toLocaleTimeString();
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function formatDuration(ms) {
+            if (ms == null) return '--';
+            if (ms < 1000) return ms + 'ms';
+            return (ms / 1000).toFixed(1) + 's';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            var div = document.createElement('div');
+            div.textContent = String(str);
+            return div.textContent.replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        /**
+         * Safely build and set panel content using DOM methods.
+         * Accepts an HTML string or a DocumentFragment/Element.
+         */
+        function setPanelContent(panelId, content) {
+            var panel = document.getElementById(panelId);
+            if (!panel) return;
+            // Preserve the panel title
+            var title = panel.querySelector('.panel-title');
+            // Clear all children
+            while (panel.firstChild) panel.removeChild(panel.firstChild);
+            if (title) panel.appendChild(title);
+
+            if (typeof content === 'string') {
+                // Use a template element for safe parsing of our own markup
+                var tpl = document.createElement('template');
+                tpl.innerHTML = content;
+                panel.appendChild(tpl.content);
+            } else if (content && content.nodeType) {
+                panel.appendChild(content);
+            }
+        }
+
+        function makeErrorEl(message) {
+            var div = document.createElement('div');
+            div.className = 'error-message';
+            div.textContent = 'Failed to load: ' + message;
+            return div;
+        }
+
+        function makeEmptyEl(message) {
+            var div = document.createElement('div');
+            div.className = 'empty-state';
+            div.textContent = message;
+            return div;
+        }
+
+        // -- Render: Stats -------------------------------------------
+
+        function renderStats(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-stats', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+            var counts = data.applications_by_status || {};
+            var statEntries = [
+                { label: 'Applied', value: counts.applied || counts.Applied || 0, color: '#0f3460' },
+                { label: 'Viewed', value: counts.viewed || counts.Viewed || 0, color: '#1a5276' },
+                { label: 'Shortlisted', value: counts.shortlisted || counts.Shortlisted || 0, color: '#00796b' },
+                { label: 'Interviews', value: counts.interview || counts.Interview || counts.interviews || 0, color: '#00d97e' },
+                { label: 'Offered', value: counts.offered || counts.Offered || 0, color: '#f5a623' },
+                { label: 'Rejected', value: counts.rejected || counts.Rejected || 0, color: '#e94560' }
+            ];
+
+            var total = 0;
+            var keys = Object.keys(counts);
+            for (var i = 0; i < keys.length; i++) {
+                total += parseInt(counts[keys[i]]) || 0;
+            }
+
+            var frag = document.createDocumentFragment();
+            var grid = document.createElement('div');
+            grid.className = 'stats-grid';
+
+            // Total card
+            var totalCard = document.createElement('div');
+            totalCard.className = 'stat-card';
+            totalCard.style.background = 'var(--accent)';
+            var tv = document.createElement('div');
+            tv.className = 'stat-value';
+            tv.textContent = total;
+            var tl = document.createElement('div');
+            tl.className = 'stat-label';
+            tl.textContent = 'Total';
+            totalCard.appendChild(tv);
+            totalCard.appendChild(tl);
+            grid.appendChild(totalCard);
+
+            for (var j = 0; j < statEntries.length; j++) {
+                var s = statEntries[j];
+                var card = document.createElement('div');
+                card.className = 'stat-card';
+                card.style.background = s.color;
+                var sv = document.createElement('div');
+                sv.className = 'stat-value';
+                sv.textContent = s.value;
+                var sl = document.createElement('div');
+                sl.className = 'stat-label';
+                sl.textContent = s.label;
+                card.appendChild(sv);
+                card.appendChild(sl);
+                grid.appendChild(card);
+            }
+
+            frag.appendChild(grid);
+            setPanelContent('panel-stats', frag);
+        }
+
+        // -- Render: Funnel ------------------------------------------
+
+        function renderFunnel(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-funnel', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            var funnel = data.funnel || {};
+            var maxVal = 1;
+            var funnelKeys = Object.keys(funnel);
+            for (var i = 0; i < funnelKeys.length; i++) {
+                var v = Number(funnel[funnelKeys[i]]);
+                if (v > maxVal) maxVal = v;
+            }
+
+            var stageOrder = ['applied', 'viewed', 'shortlisted', 'interview', 'offered', 'rejected'];
+            var stageClasses = {
+                applied: 'stage-applied',
+                viewed: 'stage-viewed',
+                shortlisted: 'stage-shortlisted',
+                interview: 'stage-interview',
+                offered: 'stage-offered',
+                rejected: 'stage-default'
+            };
+
+            var orderedKeys = [];
+            for (var si = 0; si < stageOrder.length; si++) {
+                if (funnel[stageOrder[si]] != null) orderedKeys.push(stageOrder[si]);
+            }
+            for (var ki = 0; ki < funnelKeys.length; ki++) {
+                if (orderedKeys.indexOf(funnelKeys[ki]) === -1) orderedKeys.push(funnelKeys[ki]);
+            }
+
+            var frag = document.createDocumentFragment();
+
+            for (var fi = 0; fi < orderedKeys.length; fi++) {
+                var stage = orderedKeys[fi];
+                var count = funnel[stage] || 0;
+                var pct = Math.max(2, Math.round((count / maxVal) * 100));
+                var cls = stageClasses[stage] || 'stage-default';
+                var label = stage.charAt(0).toUpperCase() + stage.slice(1);
+
+                var row = document.createElement('div');
+                row.className = 'funnel-stage';
+
+                var labelEl = document.createElement('div');
+                labelEl.className = 'funnel-label';
+                labelEl.textContent = label;
+
+                var track = document.createElement('div');
+                track.className = 'funnel-bar-track';
+
+                var fill = document.createElement('div');
+                fill.className = 'funnel-bar-fill ' + cls;
+                fill.style.width = pct + '%';
+
+                var numEl = document.createElement('span');
+                numEl.textContent = count;
+                fill.appendChild(numEl);
+                track.appendChild(fill);
+
+                row.appendChild(labelEl);
+                row.appendChild(track);
+                frag.appendChild(row);
+            }
+
+            // Conversion rate
+            if (data.conversion_rate != null) {
+                var convDiv = document.createElement('div');
+                convDiv.className = 'funnel-conversion';
+                convDiv.textContent = 'Overall conversion rate: ';
+                var strong = document.createElement('strong');
+                strong.textContent = (data.conversion_rate * 100).toFixed(1) + '%';
+                convDiv.appendChild(strong);
+                frag.appendChild(convDiv);
+            }
+
+            // Dead zones
+            if (data.dead_zones && data.dead_zones.length > 0) {
+                var dzDiv = document.createElement('div');
+                dzDiv.className = 'funnel-conversion';
+                dzDiv.style.borderTop = 'none';
+                dzDiv.style.paddingTop = '4px';
+                dzDiv.textContent = 'Dead zones: ';
+                for (var dz = 0; dz < data.dead_zones.length; dz++) {
+                    var dzSpan = document.createElement('span');
+                    dzSpan.className = 'dead-zone';
+                    dzSpan.textContent = data.dead_zones[dz];
+                    dzDiv.appendChild(dzSpan);
+                }
+                frag.appendChild(dzDiv);
+            }
+
+            setPanelContent('panel-funnel', frag);
+        }
+
+        // -- Render: Recommended Actions -----------------------------
+
+        function renderActions(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-actions', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            var actions = data.recommended_actions || [];
+            if (actions.length === 0) {
+                setPanelContent('panel-actions', makeEmptyEl('No actions recommended right now.'));
+                return;
+            }
+
+            var priorityOrder = { high: 0, medium: 1, low: 2 };
+            var sorted = actions.slice().sort(function(a, b) {
+                var pa = priorityOrder[a.priority] != null ? priorityOrder[a.priority] : 3;
+                var pb = priorityOrder[b.priority] != null ? priorityOrder[b.priority] : 3;
+                return pa - pb;
+            });
+
+            var frag = document.createDocumentFragment();
+
+            for (var i = 0; i < sorted.length; i++) {
+                var action = sorted[i];
+                var priority = (action.priority || 'low').toLowerCase();
+                var text = action.text || action.action || action.message || action.description || JSON.stringify(action);
+
+                var item = document.createElement('div');
+                item.className = 'action-item priority-' + priority;
+
+                var badge = document.createElement('span');
+                badge.className = 'action-priority';
+                badge.textContent = priority;
+
+                var textNode = document.createTextNode(text);
+
+                item.appendChild(badge);
+                item.appendChild(textNode);
+                frag.appendChild(item);
+            }
+
+            setPanelContent('panel-actions', frag);
+        }
+
+        // -- Render: System Health -----------------------------------
+
+        function renderHealth(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-health', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            // Update header health dot
+            var dot = document.getElementById('health-dot');
+            if (dot) {
+                dot.className = 'health-dot ' + (data.overall || 'unknown');
+                dot.title = 'Server: ' + (data.overall || 'unknown');
+            }
+
+            var probes = data.probes || {};
+            var probeNames = Object.keys(probes).sort();
+
+            if (probeNames.length === 0) {
+                setPanelContent('panel-health', makeEmptyEl('No health probes registered.'));
+                return;
+            }
+
+            var grid = document.createElement('div');
+            grid.className = 'health-grid';
+
+            for (var i = 0; i < probeNames.length; i++) {
+                var name = probeNames[i];
+                var probe = probes[name];
+                var status = probe.status || 'unknown';
+                var elapsed = probe.elapsed_ms != null ? formatDuration(probe.elapsed_ms) : '';
+                var crit = probe.criticality || '';
+
+                var item = document.createElement('div');
+                item.className = 'probe-item';
+                item.title = probe.message || '';
+
+                var dotEl = document.createElement('span');
+                dotEl.className = 'probe-dot ' + status;
+
+                var nameEl = document.createElement('span');
+                nameEl.className = 'probe-name';
+                nameEl.textContent = name;
+
+                item.appendChild(dotEl);
+                item.appendChild(nameEl);
+
+                if (elapsed) {
+                    var timeEl = document.createElement('span');
+                    timeEl.className = 'probe-time';
+                    timeEl.textContent = elapsed;
+                    item.appendChild(timeEl);
+                }
+
+                if (crit === 'critical') {
+                    var critEl = document.createElement('span');
+                    critEl.className = 'probe-criticality critical';
+                    critEl.textContent = 'crit';
+                    item.appendChild(critEl);
+                } else if (crit === 'warning') {
+                    var warnEl = document.createElement('span');
+                    warnEl.className = 'probe-criticality warning';
+                    warnEl.textContent = 'warn';
+                    item.appendChild(warnEl);
+                }
+
+                grid.appendChild(item);
+            }
+
+            setPanelContent('panel-health', grid);
+        }
+
+        // -- Render: Stale Applications ------------------------------
+
+        function renderStale(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-stale', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            var apps = data.stale_applications || [];
+            if (apps.length === 0) {
+                setPanelContent('panel-stale', makeEmptyEl('No stale applications found.'));
+                return;
+            }
+
+            var frag = document.createDocumentFragment();
+
+            var table = document.createElement('table');
+            table.className = 'stale-table';
+
+            var thead = document.createElement('thead');
+            var headRow = document.createElement('tr');
+            var headers = ['Title', 'Company', 'Days', 'Staleness'];
+            for (var h = 0; h < headers.length; h++) {
+                var th = document.createElement('th');
+                th.textContent = headers[h];
+                headRow.appendChild(th);
+            }
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            var tbody = document.createElement('tbody');
+            for (var i = 0; i < apps.length; i++) {
+                var app = apps[i];
+                var score = app.staleness_score || 0;
+                var scoreCls = 'low';
+                if (score >= 70) scoreCls = 'high';
+                else if (score >= 40) scoreCls = 'medium';
+
+                var tr = document.createElement('tr');
+
+                var tdTitle = document.createElement('td');
+                tdTitle.textContent = app.title || 'Unknown';
+                tr.appendChild(tdTitle);
+
+                var tdCompany = document.createElement('td');
+                tdCompany.textContent = app.company || '--';
+                tr.appendChild(tdCompany);
+
+                var tdDays = document.createElement('td');
+                tdDays.className = 'days';
+                tdDays.textContent = (app.days_since_applied || '--') + 'd';
+                tr.appendChild(tdDays);
+
+                var tdScore = document.createElement('td');
+                tdScore.className = 'score ' + scoreCls;
+                tdScore.textContent = score;
+                tr.appendChild(tdScore);
+
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            frag.appendChild(table);
+
+            var summary = document.createElement('div');
+            summary.style.cssText = 'margin-top: 8px; font-size: 0.8rem; color: var(--text-dim);';
+            summary.textContent = apps.length + ' of ' + (data.total || apps.length) + ' stale applications';
+            frag.appendChild(summary);
+
+            setPanelContent('panel-stale', frag);
+        }
+
+        // -- Render: Scheduler ---------------------------------------
+
+        function renderScheduler(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-scheduler', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            var tasks = data.tasks || {};
+            var taskNames = Object.keys(tasks).sort();
+
+            if (taskNames.length === 0) {
+                setPanelContent('panel-scheduler', makeEmptyEl('No scheduled tasks.'));
+                return;
+            }
+
+            var frag = document.createDocumentFragment();
+
+            // Summary line
+            var summaryDiv = document.createElement('div');
+            summaryDiv.style.cssText = 'font-size: 0.8rem; color: var(--text-dim); margin-bottom: 10px;';
+            var summaryText = (data.enabled_tasks || 0) + ' / ' + (data.total_tasks || taskNames.length) + ' tasks enabled';
+            if (!data.running) {
+                summaryText += ' \u2014 ';
+            }
+            summaryDiv.textContent = summaryText;
+            if (!data.running) {
+                var stoppedSpan = document.createElement('span');
+                stoppedSpan.style.color = 'var(--unhealthy)';
+                stoppedSpan.textContent = 'scheduler stopped';
+                summaryDiv.appendChild(stoppedSpan);
+            }
+            frag.appendChild(summaryDiv);
+
+            for (var i = 0; i < taskNames.length; i++) {
+                var name = taskNames[i];
+                var task = tasks[name];
+                var lastRun = task.last_run;
+
+                var item = document.createElement('div');
+                item.className = 'task-item';
+
+                var nameEl = document.createElement('span');
+                nameEl.className = 'task-name';
+                nameEl.textContent = name;
+                item.appendChild(nameEl);
+
+                var meta = document.createElement('div');
+                meta.className = 'task-meta';
+
+                // Interval
+                if (task.interval_seconds) {
+                    var mins = Math.round(task.interval_seconds / 60);
+                    var intervalEl = document.createElement('span');
+                    intervalEl.className = 'task-time';
+                    intervalEl.textContent = mins >= 60 ? (mins / 60).toFixed(0) + 'h' : mins + 'm';
+                    meta.appendChild(intervalEl);
+                }
+
+                // Last run status
+                if (lastRun) {
+                    var runStatus = (lastRun.status || '').toLowerCase();
+                    var badgeCls = runStatus === 'success' ? 'success'
+                        : (runStatus === 'failure' || runStatus === 'error') ? 'failure'
+                        : runStatus === 'running' ? 'running'
+                        : 'skipped';
+                    var runBadge = document.createElement('span');
+                    runBadge.className = 'badge ' + badgeCls;
+                    runBadge.textContent = lastRun.status || '--';
+                    meta.appendChild(runBadge);
+
+                    if (lastRun.started_at) {
+                        var timeEl = document.createElement('span');
+                        timeEl.className = 'task-time';
+                        timeEl.textContent = formatTime(lastRun.started_at);
+                        meta.appendChild(timeEl);
+                    }
+                }
+
+                // Enabled badge
+                var enBadge = document.createElement('span');
+                enBadge.className = 'badge ' + (task.enabled ? 'enabled' : 'disabled');
+                enBadge.textContent = task.enabled ? 'on' : 'off';
+                meta.appendChild(enBadge);
+
+                item.appendChild(meta);
+                frag.appendChild(item);
+            }
+
+            setPanelContent('panel-scheduler', frag);
+        }
+
+        // -- Render: Recent Activity ---------------------------------
+
+        function renderActivity(data) {
+            if (!data || data.status === 'error') {
+                setPanelContent('panel-activity', makeErrorEl(data ? data.message : 'No data'));
+                return;
+            }
+
+            var runs = data.recent_scheduled_runs || [];
+            if (runs.length === 0) {
+                setPanelContent('panel-activity', makeEmptyEl('No recent activity.'));
+                return;
+            }
+
+            var recent = runs.slice(0, 8);
+            var frag = document.createDocumentFragment();
+
+            for (var i = 0; i < recent.length; i++) {
+                var run = recent[i];
+                var status = (run.status || '').toLowerCase();
+                var badgeCls = status === 'success' ? 'success'
+                    : (status === 'failure' || status === 'error') ? 'failure'
+                    : status === 'running' ? 'running'
+                    : 'skipped';
+
+                var item = document.createElement('div');
+                item.className = 'activity-item';
+
+                var nameEl = document.createElement('span');
+                nameEl.className = 'activity-name';
+                nameEl.textContent = run.task_name || run.name || 'task';
+                item.appendChild(nameEl);
+
+                var metaEl = document.createElement('div');
+                metaEl.className = 'activity-meta';
+
+                if (run.duration_ms != null) {
+                    var durEl = document.createElement('span');
+                    durEl.className = 'activity-duration';
+                    durEl.textContent = formatDuration(run.duration_ms);
+                    metaEl.appendChild(durEl);
+                }
+
+                var statusBadge = document.createElement('span');
+                statusBadge.className = 'badge ' + badgeCls;
+                statusBadge.textContent = run.status || '--';
+                metaEl.appendChild(statusBadge);
+
+                if (run.started_at) {
+                    var timeEl = document.createElement('span');
+                    timeEl.className = 'activity-time';
+                    timeEl.textContent = formatTime(run.started_at);
+                    metaEl.appendChild(timeEl);
+                }
+
+                item.appendChild(metaEl);
+                frag.appendChild(item);
+            }
+
+            setPanelContent('panel-activity', frag);
+        }
+
+        // -- Data Fetching -------------------------------------------
+
+        function fetchJson(url) {
+            return fetch(url).then(function(resp) {
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status + ': ' + resp.statusText);
+                }
+                return resp.json();
+            });
+        }
+
+        function refreshDashboard() {
+            var now = new Date();
+            document.getElementById('last-refresh').textContent =
+                'Last refresh: ' + now.toLocaleTimeString();
+
+            var endpoints = [
+                { url: '/api/stats',                   render: renderStats,     panelId: 'panel-stats' },
+                { url: '/api/funnel?days=30',          render: renderFunnel,    panelId: 'panel-funnel' },
+                { url: '/api/dashboard',               render: renderActions,   panelId: 'panel-actions' },
+                { url: '/api/health',                  render: renderHealth,    panelId: 'panel-health' },
+                { url: '/api/stale?days=14&score=40',  render: renderStale,     panelId: 'panel-stale' },
+                { url: '/api/scheduler',               render: renderScheduler, panelId: 'panel-scheduler' },
+                { url: '/api/stats',                   render: renderActivity,  panelId: 'panel-activity' }
+            ];
+
+            var promises = endpoints.map(function(ep) {
+                return fetchJson(ep.url)
+                    .then(function(data) {
+                        ep.render(data);
+                    })
+                    .catch(function(err) {
+                        console.error('Failed to fetch ' + ep.url, err);
+                        setPanelContent(ep.panelId, makeErrorEl(err.message));
+                        // If health endpoint fails, mark dot as unknown
+                        if (ep.url === '/api/health') {
+                            var hdot = document.getElementById('health-dot');
+                            if (hdot) hdot.className = 'health-dot';
+                        }
+                    });
+            });
+
+            return Promise.all(promises);
+        }
+
+        // -- Countdown Timer -----------------------------------------
+
+        function startCountdown() {
+            countdown = REFRESH_INTERVAL;
+            if (countdownTimer) clearInterval(countdownTimer);
+
+            countdownTimer = setInterval(function() {
+                countdown--;
+                var el = document.getElementById('refresh-countdown');
+                if (el) {
+                    el.textContent = 'Refreshing in ' + countdown + 's';
+                }
+
+                if (countdown <= 0) {
+                    clearInterval(countdownTimer);
+                    refreshDashboard().then(startCountdown);
+                }
+            }, 1000);
+
+            // Initial display
+            var el = document.getElementById('refresh-countdown');
+            if (el) el.textContent = 'Refreshing in ' + countdown + 's';
+        }
+
+        // -- Init ----------------------------------------------------
+
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshDashboard().then(startCountdown);
+        });
+    </script>
+</body>
+</html>
