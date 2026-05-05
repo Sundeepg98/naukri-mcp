@@ -13,6 +13,9 @@ from naukri_server.services.search_service import (
     build_search_result,
     build_recommendations_result,
     build_similar_jobs_result,
+    build_rest_search_params,
+    build_search_url,
+    build_search_filters,
 )
 
 
@@ -67,113 +70,41 @@ async def naukri_search_jobs(
     page = validate_page(page)
     page_no = page  # save before shadowing by page_pool
 
-    # REST-first search — faster than browser intercept; falls back on failure
-    try:
-        rest_params = {"keyword": keywords, "noOfResults": str(limit), "pageNo": str(page_no)}
-        if location:
-            rest_params["location"] = location
-        if experience is not None:
-            rest_params["experience"] = str(experience)
-        if salary_min is not None:
-            rest_params["salary"] = f"{salary_min}-{salary_max or 999}"
-        if sort_by:
-            rest_params["sortBy"] = sort_by
-        if freshness is not None:
-            rest_params["jobAge"] = str(freshness)
-        if industry:
-            rest_params["industry"] = industry
-        if education:
-            rest_params["education"] = education
-        if role_category:
-            rest_params["roleCategory"] = role_category
-        if job_type:
-            _JOB_TYPE_MAP = {"fulltime": "1", "parttime": "2", "contract": "3", "internship": "4", "temporary": "5"}
-            jt = _JOB_TYPE_MAP.get(job_type.lower())
-            if jt:
-                rest_params["jobType"] = jt
-        if company_type:
-            rest_params["companyType"] = company_type
-        if work_mode:
-            rest_params["wfhType"] = work_mode
-        if posted_within is not None:
-            rest_params["jobAge"] = str(posted_within)
+    # Filter dict echoed in result — single source of truth shared by both paths.
+    filters = build_search_filters(
+        experience=experience, salary_min=salary_min, salary_max=salary_max,
+        sort_by=sort_by, freshness=freshness, work_mode=work_mode,
+        job_type=job_type, company_type=company_type, industry=industry,
+        education=education, role_category=role_category, posted_within=posted_within,
+    )
 
+    # REST-first search — faster than browser intercept; falls back on failure.
+    try:
+        rest_params = build_rest_search_params(
+            keywords, location, page_no, limit,
+            experience=experience, salary_min=salary_min, salary_max=salary_max,
+            sort_by=sort_by, freshness=freshness, work_mode=work_mode,
+            job_type=job_type, company_type=company_type, industry=industry,
+            education=education, role_category=role_category, posted_within=posted_within,
+        )
         data = await api_client.get(SEARCH_API, params=rest_params)
         if data and isinstance(data, dict) and "jobDetails" in data:
-            filters = {
-                "experience": experience, "salary_min": salary_min,
-                "salary_max": salary_max, "sort_by": sort_by,
-                "freshness": freshness, "work_mode": work_mode,
-                "job_type": job_type, "company_type": company_type,
-                "industry": industry, "education": education,
-                "role_category": role_category, "posted_within": posted_within,
-            }
             return build_search_result(data, keywords, location, page_no, limit, filters, "rest")
     except Exception as e:
         logger.info("REST search failed (%s), falling back to browser", e)
 
     async def _browser_search():
         async with browser.page_pool.acquire() as page:
-            # Build Naukri search URL (SEO-friendly format)
-            slug = keywords.lower().replace(" ", "-").replace(".", "-")
-            if location:
-                loc_slug = location.lower().replace(" ", "-")
-                page_url = f"{NAUKRI_BASE}/{slug}-jobs-in-{loc_slug}"
-            else:
-                page_url = f"{NAUKRI_BASE}/{slug}-jobs"
-            params = []
-            if experience is not None:
-                params.append(f"experience={experience}")
-            if salary_min is not None:
-                params.append(f"nignbekg={salary_min}")
-            if salary_max is not None:
-                params.append(f"naagnbekg={salary_max}")
-            if sort_by:
-                params.append(f"sortBy={sort_by}")
-            if freshness is not None:
-                params.append(f"jobAge={freshness}")
-            if work_mode:
-                wm_map = {"wfh": "1", "hybrid": "3", "office": "2"}
-                wm_val = wm_map.get(work_mode.lower())
-                if wm_val:
-                    params.append(f"wfhType={wm_val}")
-            if job_type:
-                _JOB_TYPE_MAP = {"fulltime": "1", "parttime": "2", "contract": "3", "internship": "4", "temporary": "5"}
-                jt = _JOB_TYPE_MAP.get(job_type.lower())
-                if jt:
-                    params.append(f"jobType={jt}")
-            if company_type:
-                _COMPANY_TYPE_MAP = {"startup": "startup", "mnc": "mnc", "indian_mnc": "indianMNC", "corporate": "corporate"}
-                ct = _COMPANY_TYPE_MAP.get(company_type.lower())
-                if ct:
-                    params.append(f"companyType={ct}")
-            if industry:
-                params.append(f"industry={industry}")
-            if education:
-                _EDU_MAP = {"any_graduate": "0", "b_tech": "35", "mba": "41", "m_tech": "36", "diploma": "23", "phd": "46"}
-                edu = _EDU_MAP.get(education.lower(), education)
-                params.append(f"education={edu}")
-            if role_category:
-                params.append(f"roleCategory={role_category}")
-            if posted_within is not None:
-                params.append(f"jobAge={posted_within}")
-            if page_no > 1:
-                params.append(f"pageNo={page_no}")
-            if params:
-                page_url += "?" + "&".join(params)
-
+            page_url = build_search_url(
+                NAUKRI_BASE, keywords, location, page_no,
+                experience=experience, salary_min=salary_min, salary_max=salary_max,
+                sort_by=sort_by, freshness=freshness, work_mode=work_mode,
+                job_type=job_type, company_type=company_type, industry=industry,
+                education=education, role_category=role_category, posted_within=posted_within,
+            )
             data = await page_intercept_json(page, page_url, url_pattern="/jobapi/v3/search")
             if not data:
                 return {"status": "error", "message": "Search API response not captured. Try again.", "error_code": "API_ERROR"}
-
-            filters = {
-                "experience": experience, "salary_min": salary_min,
-                "salary_max": salary_max, "sort_by": sort_by,
-                "freshness": freshness, "work_mode": work_mode,
-                "job_type": job_type, "company_type": company_type,
-                "industry": industry, "education": education,
-                "role_category": role_category, "posted_within": posted_within,
-            }
             return build_search_result(data, keywords, location, page_no, limit, filters, "browser")
 
     return await handle_tool_action(_browser_search, "search.browser_fallback")

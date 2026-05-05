@@ -23,7 +23,164 @@ __all__ = [
     "build_search_result",
     "build_recommendations_result",
     "build_similar_jobs_result",
+    "build_rest_search_params",
+    "build_search_url",
+    "build_search_filters",
+    "JOB_TYPE_MAP",
+    "WORK_MODE_MAP",
+    "COMPANY_TYPE_MAP",
+    "EDUCATION_MAP",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Search-param translation tables (kept here as the single source of truth —
+# both the REST and browser search paths consume them)
+# ---------------------------------------------------------------------------
+
+JOB_TYPE_MAP = {
+    "fulltime": "1", "parttime": "2", "contract": "3",
+    "internship": "4", "temporary": "5",
+}
+
+WORK_MODE_MAP = {"wfh": "1", "hybrid": "3", "office": "2"}
+
+COMPANY_TYPE_MAP = {
+    "startup": "startup", "mnc": "mnc",
+    "indian_mnc": "indianMNC", "corporate": "corporate",
+}
+
+EDUCATION_MAP = {
+    "any_graduate": "0", "b_tech": "35", "mba": "41",
+    "m_tech": "36", "diploma": "23", "phd": "46",
+}
+
+
+def build_search_filters(
+    experience: int | None = None, salary_min: int | None = None,
+    salary_max: int | None = None, sort_by: str | None = None,
+    freshness: int | None = None, work_mode: str | None = None,
+    job_type: str | None = None, company_type: str | None = None,
+    industry: str | None = None, education: str | None = None,
+    role_category: str | None = None, posted_within: int | None = None,
+) -> dict:
+    """Return the ``filters`` dict echoed back in search results.
+
+    Centralised so the REST and browser paths cannot drift in shape.
+    """
+    return {
+        "experience": experience, "salary_min": salary_min,
+        "salary_max": salary_max, "sort_by": sort_by,
+        "freshness": freshness, "work_mode": work_mode,
+        "job_type": job_type, "company_type": company_type,
+        "industry": industry, "education": education,
+        "role_category": role_category, "posted_within": posted_within,
+    }
+
+
+def build_rest_search_params(
+    keywords: str, location: str | None, page_no: int, limit: int,
+    *, experience: int | None = None, salary_min: int | None = None,
+    salary_max: int | None = None, sort_by: str | None = None,
+    freshness: int | None = None, work_mode: str | None = None,
+    job_type: str | None = None, company_type: str | None = None,
+    industry: str | None = None, education: str | None = None,
+    role_category: str | None = None, posted_within: int | None = None,
+) -> dict:
+    """Build the REST query-string dict for /jobapi/v3/search.
+
+    Pure, easily unit-testable. Equivalent params should land at the same key
+    regardless of caller (tool, agent, batch).
+    """
+    params: dict = {"keyword": keywords, "noOfResults": str(limit), "pageNo": str(page_no)}
+    if location:
+        params["location"] = location
+    if experience is not None:
+        params["experience"] = str(experience)
+    if salary_min is not None:
+        params["salary"] = f"{salary_min}-{salary_max or 999}"
+    if sort_by:
+        params["sortBy"] = sort_by
+    if freshness is not None:
+        params["jobAge"] = str(freshness)
+    if industry:
+        params["industry"] = industry
+    if education:
+        params["education"] = education
+    if role_category:
+        params["roleCategory"] = role_category
+    if job_type:
+        jt = JOB_TYPE_MAP.get(job_type.lower())
+        if jt:
+            params["jobType"] = jt
+    if company_type:
+        params["companyType"] = company_type
+    if work_mode:
+        # REST passes the string directly (browser path translates); kept identical
+        # to existing wire format so behaviour is unchanged.
+        params["wfhType"] = work_mode
+    if posted_within is not None:
+        params["jobAge"] = str(posted_within)
+    return params
+
+
+def build_search_url(
+    base: str, keywords: str, location: str | None, page_no: int,
+    *, experience: int | None = None, salary_min: int | None = None,
+    salary_max: int | None = None, sort_by: str | None = None,
+    freshness: int | None = None, work_mode: str | None = None,
+    job_type: str | None = None, company_type: str | None = None,
+    industry: str | None = None, education: str | None = None,
+    role_category: str | None = None, posted_within: int | None = None,
+) -> str:
+    """Build the SEO-friendly Naukri search URL with query-string filters.
+
+    Mirrors the browser-path URL builder previously inlined in
+    naukri_search_jobs. Pure helper, no I/O.
+    """
+    slug = keywords.lower().replace(" ", "-").replace(".", "-")
+    if location:
+        loc_slug = location.lower().replace(" ", "-")
+        url = f"{base}/{slug}-jobs-in-{loc_slug}"
+    else:
+        url = f"{base}/{slug}-jobs"
+    qs: list[str] = []
+    if experience is not None:
+        qs.append(f"experience={experience}")
+    if salary_min is not None:
+        qs.append(f"nignbekg={salary_min}")
+    if salary_max is not None:
+        qs.append(f"naagnbekg={salary_max}")
+    if sort_by:
+        qs.append(f"sortBy={sort_by}")
+    if freshness is not None:
+        qs.append(f"jobAge={freshness}")
+    if work_mode:
+        wm_val = WORK_MODE_MAP.get(work_mode.lower())
+        if wm_val:
+            qs.append(f"wfhType={wm_val}")
+    if job_type:
+        jt = JOB_TYPE_MAP.get(job_type.lower())
+        if jt:
+            qs.append(f"jobType={jt}")
+    if company_type:
+        ct = COMPANY_TYPE_MAP.get(company_type.lower())
+        if ct:
+            qs.append(f"companyType={ct}")
+    if industry:
+        qs.append(f"industry={industry}")
+    if education:
+        edu = EDUCATION_MAP.get(education.lower(), education)
+        qs.append(f"education={edu}")
+    if role_category:
+        qs.append(f"roleCategory={role_category}")
+    if posted_within is not None:
+        qs.append(f"jobAge={posted_within}")
+    if page_no > 1:
+        qs.append(f"pageNo={page_no}")
+    if qs:
+        url += "?" + "&".join(qs)
+    return url
 
 
 # ---------------------------------------------------------------------------
