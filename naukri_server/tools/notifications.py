@@ -1,187 +1,53 @@
-"""Notification tools — view and manage Naukri notification center."""
+"""Notification tools — view and manage Naukri notification center.
 
-import asyncio
+Tool layer — business logic lives in ``services/notification_service.py``.
+``api_client``, ``asyncio``, and the underscore-prefixed helpers are
+re-exported on this module because the test suite patches paths like
+``naukri_server.tools.notifications.api_client.get`` and
+``naukri_server.tools.notifications._fetch_notifications`` directly.
+"""
+
+import asyncio  # noqa: F401 — re-exported so tests can patch asyncio.sleep on this module
 from typing import Optional
 
 from naukri_server import mcp
-from naukri_server.interfaces import api_client
-from naukri_server.config import logger, NOTIFICATION_FEED_API, NOTIFICATION_READ_API, NOTIFICATION_COUNT_API, MAX_MARK_ALL_ITERATIONS, RECOMMEND_NOTIFY_API, BROWSER_DOM_SETTLE
 from naukri_server.error_handler import handle_tool_action
-from naukri_server.validation import validate_limit, validate_page
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers (not MCP tools — used by the unified tool)
-# ---------------------------------------------------------------------------
-
-async def _fetch_notifications(limit: int = 20, page: int = 1, notif_type: Optional[str] = None) -> dict:
-    """Fetch notifications from the API and return structured result.
-
-    Args:
-        limit: Max notifications to return (capped at 50).
-        page: Page number (1-based).
-        notif_type: Optional type filter — case-insensitive substring match
-                    against the notification ``type`` field.  Common values
-                    include ``"JA"`` (job alerts), ``"RA"`` (recruiter
-                    activity), ``"SYSTEM"``, ``"APPLICATION_UPDATE"``.
-    """
-    limit = validate_limit(limit)
-    page = validate_page(page)
-    data = await api_client.get(NOTIFICATION_FEED_API, params={
-        "page": str(page),
-        "limit": str(limit),
-    })
-
-    # Response is a list of notification objects
-    notif_list = data if isinstance(data, list) else data.get("notifications", data.get("feed", []))
-
-    notifications = []
-    for notif in notif_list:
-        notifications.append({
-            "id": notif.get("id", ""),
-            "title": notif.get("displayTitle", ""),
-            "message": notif.get("message", ""),
-            "type": notif.get("type", ""),
-            "date": notif.get("createdAt", ""),
-            "is_read": bool(notif.get("readStatus")),
-            "url": notif.get("url", ""),
-            "metadata": notif.get("metadata", {}),
-        })
-
-    # Client-side type filtering (API does not support server-side filtering)
-    if notif_type:
-        notif_type_lower = notif_type.lower()
-        notifications = [n for n in notifications if notif_type_lower in n["type"].lower()]
-
-    result: dict = {
-        "status": "success",
-        "total": data.get("totalCount", len(notifications)) if isinstance(data, dict) else len(notifications),
-        "count": len(notifications),
-        "notifications": notifications,
-    }
-    if notif_type:
-        result["filtered_by"] = notif_type
-    return result
-
-
-async def _mark_single_read(notification_id: str, date: str) -> dict:
-    """Mark a single notification as read via the API."""
-    await api_client.post(NOTIFICATION_READ_API, body={
-        "notificationId": notification_id,
-        "createdAt": date,
-    })
-    return {
-        "status": "success",
-        "notification_id": notification_id,
-    }
-
-
-async def _get_unified_notify() -> dict:
-    """Fetch unified notification dashboard — all categories in one call.
-
-    Returns 8 notification categories with counts, latest status, and display metadata.
-    Single call replaces multiple separate notification API calls.
-    """
-    data = await api_client.get(RECOMMEND_NOTIFY_API)
-    status_obj = data.get("status", data)
-    order = data.get("order", [
-        "recoJobs", "appStatus", "criticalActions", "rmj",
-        "FF", "NL", "RR", "recruiterSearch",
-    ])
-    categories = {}
-    for key in order:
-        cat_data = status_obj.get(key, {})
-        if not cat_data or not isinstance(cat_data, dict):
-            continue
-        entry = {
-            "label": cat_data.get("label", key),
-            "type": cat_data.get("type", key),
-            "count": cat_data.get("noti_count") or cat_data.get("total_count") or cat_data.get("count", 0),
-            "total_count": cat_data.get("total_count"),
-            "noti_count": cat_data.get("noti_count"),
-            "show_on_gnb": cat_data.get("showOnGnb", True),
-            "has_new": bool(cat_data.get("noti_count", 0)),
-        }
-        if "status" in cat_data:
-            entry["latest_status"] = cat_data["status"]
-        if "noti_description" in cat_data:
-            entry["latest_description"] = cat_data["noti_description"]
-        if "freq" in cat_data:
-            entry["frequency_cap"] = cat_data["freq"]
-        categories[key] = entry
-    return {
-        "status": "success",
-        "source": "unified_notify",
-        "new_count": data.get("newCount", 0),
-        "total_count": data.get("totalCount", 0),
-        "categories": categories,
-        "total_types": len([c for c in categories.values() if c.get("show_on_gnb")]),
-        "display_order": order,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Action handlers (registered with the unified registry framework)
-# ---------------------------------------------------------------------------
-
-async def _get_notification_count() -> dict:
-    """Fetch unread notification count from API."""
-    data = await api_client.get(NOTIFICATION_COUNT_API)
-    return {"status": "success", "count": data.get("count", 0)}
+from naukri_server.interfaces import api_client  # noqa: F401 — tests patch this path
+from naukri_server.services.notification_service import (
+    fetch_notifications as _fetch_notifications,
+    mark_single_read as _mark_single_read,
+    get_unified_notify as _get_unified_notify,
+    get_notification_count as _get_notification_count,
+    mark_all_notifications_read as _mark_all_notifications_read_service,
+)
 
 
 async def _mark_all_notifications_read_impl() -> dict:
-    """Iterate through unread notifications and mark all read in parallel batches."""
-    total_marked = 0
-    total_read = 0
-    total_processed = 0
-    all_errors: list[str] = []
+    """Tool-layer adapter — re-binds fetch/mark/sleep to the patchable
+    aliases on this module, then delegates to the service implementation.
 
-    iteration = 0
-    while iteration < MAX_MARK_ALL_ITERATIONS:
-        iteration += 1
-        result = await _fetch_notifications(limit=50)
-        if result.get("status") != "success":
-            if total_processed == 0:
-                return result
-            break
+    This indirection lets tests patch
+    ``naukri_server.tools.notifications._fetch_notifications``,
+    ``_mark_single_read``, and ``asyncio.sleep`` and have those replacements
+    take effect inside the saga loop.
+    """
+    # Late lookup so test patches on this module are honored.
+    import naukri_server.tools.notifications as _self
+    return await _mark_all_notifications_read_service(
+        fetch=_self._fetch_notifications,
+        mark=_self._mark_single_read,
+        sleep=_self.asyncio.sleep,
+    )
 
-        notifications = result.get("notifications", [])
-        if not notifications:
-            break
 
-        total_processed += len(notifications)
-        unread = [n for n in notifications if not n.get("is_read")]
-        total_read += len(notifications) - len(unread)
-
-        if not unread:
-            break
-
-        mark_tasks = [
-            _mark_single_read(notification_id=n["id"], date=n["date"])
-            for n in unread
-        ]
-        mark_results = await asyncio.gather(*mark_tasks, return_exceptions=True)
-        for mr in mark_results:
-            if isinstance(mr, Exception):
-                all_errors.append(str(mr))
-            elif isinstance(mr, dict) and mr.get("status") == "success":
-                total_marked += 1
-            else:
-                all_errors.append(mr.get("message", "unknown") if isinstance(mr, dict) else str(mr))
-
-        await asyncio.sleep(BROWSER_DOM_SETTLE)
-
-        if len(notifications) < 50:
-            break
-
-    return {
-        "status": "success",
-        "marked_count": total_marked,
-        "already_read": total_read,
-        "total_processed": total_processed,
-        "errors": all_errors if all_errors else None,
-    }
+# Re-export for backward compatibility (tests + daily_brief).
+__all__ = [
+    "_fetch_notifications",
+    "_mark_single_read",
+    "_get_unified_notify",
+    "_get_notification_count",
+    "_mark_all_notifications_read_impl",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +101,11 @@ async def naukri_mark_notification_read(
         {status, notification_id}
     """
     if not notification_id or not date:
-        return {"status": "error", "message": "mark_read requires notification_id and date.", "error_code": "VALIDATION_ERROR"}
+        return {
+            "status": "error",
+            "message": "mark_read requires notification_id and date.",
+            "error_code": "VALIDATION_ERROR",
+        }
     return await handle_tool_action(
         lambda: _mark_single_read(notification_id, date),
         "notifications.mark_read",
@@ -249,7 +119,9 @@ async def naukri_mark_all_notifications_read() -> dict:
     Returns:
         {status, marked_count, already_read, total_processed, errors?}
     """
-    return await handle_tool_action(_mark_all_notifications_read_impl, "notifications.mark_all_read")
+    return await handle_tool_action(
+        _mark_all_notifications_read_impl, "notifications.mark_all_read",
+    )
 
 
 @mcp.tool()
