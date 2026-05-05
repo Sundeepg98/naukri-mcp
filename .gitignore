@@ -25,6 +25,9 @@ docs/plans/
 # Auth state (sensitive credentials)
 auth_state.json
 
+# Remote MCP env file (contains secrets — bearer + OAuth client_secret)
+.env
+
 # Sync state
 sync_state.json
 
