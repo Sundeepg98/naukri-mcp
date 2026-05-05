@@ -4,6 +4,11 @@ Business logic lives in naukri_server.services.insights_service.
 Functions that can be cleanly delegated are re-exported from the service.
 _get_taxonomy and _cached_answers remain defined here because tests
 patch module-level state (_taxonomy_cache, _cache_lock, _load_cache).
+
+DDD: external API reads in _get_taxonomy now route through ``safe_get``.
+The ``_cached_answers`` helper reads from the local cache file (not an
+external API) so it stays on plain dict access — that data is internal
+trusted state, not external/untrusted.
 """
 
 from typing import Optional
@@ -13,6 +18,7 @@ from naukri_server.interfaces import api_client  # noqa: F401 — test patch tar
 from naukri_server.cache import _load_cache, _cache_lock  # noqa: F401 — test patch target
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.config import ENTITY_TAXONOMY_API
+from naukri_server.domain import safe_get
 
 from naukri_server.utils import TtlCache
 
@@ -43,33 +49,37 @@ async def _get_taxonomy() -> dict:
         data = await api_client.get(ENTITY_TAXONOMY_API, params={
             "appid": "1", "languageId": "1", "formatType": "nested", "srcAppId": "121",
         })
-        # Response key varies: raw list, "ENTITY_DEPART-ROLE_CATEG-ROLE", "data", or "entities"
-        entities = (
-            data if isinstance(data, list)
-            else data.get("ENTITY_DEPART-ROLE_CATEG-ROLE",
-                          data.get("data", data.get("entities", [])))
-        )
+        # Response key varies across appid versions: raw list at top level, or
+        # one of three wrapper keys. safe_get tries them in priority order with
+        # logging when nothing matches.
+        if isinstance(data, list):
+            entities = data
+        else:
+            entities = safe_get(
+                data, "ENTITY_DEPART-ROLE_CATEG-ROLE", "data", "entities",
+                field_name="taxonomy_entities", warn=True, default=[],
+            )
 
         departments = []
         total_roles = 0
         for dept in (entities if isinstance(entities, list) else []):
             dept_entry = {
-                "id": dept.get("id"),
-                "label": dept.get("label"),
-                "synonyms": dept.get("synonyms", []),
+                "id": safe_get(dept, "id", field_name="dept.id", warn=False),
+                "label": safe_get(dept, "label", field_name="dept.label", warn=False),
+                "synonyms": safe_get(dept, "synonyms", field_name="dept.synonyms", warn=False, default=[]),
                 "role_categories": [],
             }
-            for cat in dept.get("child", []):
+            for cat in safe_get(dept, "child", field_name="dept.child", warn=False, default=[]):
                 cat_entry = {
-                    "id": cat.get("id"),
-                    "label": cat.get("label"),
+                    "id": safe_get(cat, "id", field_name="cat.id", warn=False),
+                    "label": safe_get(cat, "label", field_name="cat.label", warn=False),
                     "roles": [],
                 }
-                for role in cat.get("child", []):
+                for role in safe_get(cat, "child", field_name="cat.child", warn=False, default=[]):
                     cat_entry["roles"].append({
-                        "id": role.get("id"),
-                        "label": role.get("label"),
-                        "synonyms": role.get("synonyms", []),
+                        "id": safe_get(role, "id", field_name="role.id", warn=False),
+                        "label": safe_get(role, "label", field_name="role.label", warn=False),
+                        "synonyms": safe_get(role, "synonyms", field_name="role.synonyms", warn=False, default=[]),
                     })
                     total_roles += 1
                 dept_entry["role_categories"].append(cat_entry)
