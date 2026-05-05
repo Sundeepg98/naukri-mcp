@@ -17,4 +17,15 @@ same pattern as naukri_server/health/probes/.
 
 from naukri_server.probes.drift_detector import DriftDetector, DriftReport
 
+# Importing api_validator triggers its @health_probe registration so the
+# probe scheduler picks it up at startup. Wrapped in try/except so a probe
+# import failure (e.g. missing config constant during dev) doesn't break
+# package import for callers who only need DriftDetector.
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+try:
+    from naukri_server.probes import api_validator  # noqa: F401
+except Exception as _e:  # pragma: no cover — defensive
+    _logger.warning("Failed to load api_validator probe: %s", _e)
+
 __all__ = ["DriftDetector", "DriftReport"]

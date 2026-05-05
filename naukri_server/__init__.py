@@ -192,4 +192,5 @@ from naukri_server.tools import auth, search, jobs, apply, profile, profile_upda
 from naukri_server import subscribers  # noqa: F401 — registers event handlers
 from naukri_server import resources  # noqa: F401 — registers @mcp.resource() handlers
 from naukri_server import prompts  # noqa: F401 — registers @mcp.prompt() handlers
+from naukri_server import probes  # noqa: F401 — registers api_validator @health_probe
 from naukri_server.dashboard import routes  # noqa: F401 — registers @mcp.custom_route() endpoints
