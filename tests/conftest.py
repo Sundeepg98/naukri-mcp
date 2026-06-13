@@ -95,6 +95,21 @@ def _clear_route_caches():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_apply_rate_limiter():
+    """Reset the process-wide apply RateLimiter between tests.
+
+    The limiter is a module-level singleton that accumulates call timestamps;
+    without this, timestamps from earlier tests could fill the window and make
+    a later test that calls the real apply path block on a sleep. Resetting to
+    None forces a fresh, empty limiter to be lazily rebuilt per test.
+    """
+    import naukri_server.resilience as _resilience
+    _resilience._apply_rate_limiter = None
+    yield
+    _resilience._apply_rate_limiter = None
+
+
 @pytest.fixture
 def sample_profile():
     """Standard profile for reuse."""

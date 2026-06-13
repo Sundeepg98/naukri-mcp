@@ -6,7 +6,12 @@ from mcp.server.fastmcp import Context
 
 from naukri_server.interfaces import api_client
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
-from naukri_server.config import APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT, logger
+from naukri_server.config import (
+    APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS,
+    BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT,
+    APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS, logger,
+)
+from naukri_server.resilience import get_apply_rate_limiter, jittered_delay
 from naukri_server.events import event_bus, ApplicationSubmitted
 from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
@@ -38,6 +43,11 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
     job_id = _extract_job_id(job_id)
 
     try:
+        # Throttle every apply (single AND batch route through here) so we never
+        # exceed a human-plausible sustained cadence — a constant/burst cadence
+        # is itself a bot tell. The limiter sleeps if the window is full.
+        await get_apply_rate_limiter().acquire("apply")
+
         async with _cache_lock:
             cache = _load_cache()
 
@@ -352,11 +362,14 @@ async def naukri_batch_apply(
             except asyncio.TimeoutError:
                 return {"status": "error", "job_id": j["job_id"], "message": f"Timed out after {BATCH_APPLY_PER_JOB_TIMEOUT}s", "error_code": "TIMEOUT"}
 
-    # Stagger task launches with delay between each submission
+    # Stagger task launches with a JITTERED delay between each submission.
+    # A constant gap is a bot tell, so we add randomized jitter on top of the
+    # configured base delay (the per-call RateLimiter in _apply_single is the
+    # hard throughput cap; this jitter shapes the cadence between launches).
     tasks = []
     for i, j in enumerate(to_apply):
-        if i > 0 and delay_seconds > 0:
-            await asyncio.sleep(delay_seconds)
+        if i > 0 and (delay_seconds > 0 or APPLY_JITTER_MAX_SECONDS > 0):
+            await jittered_delay(delay_seconds, APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS)
         tasks.append(asyncio.create_task(_apply_with_timeout(j)))
 
     try:

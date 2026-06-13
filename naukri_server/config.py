@@ -203,6 +203,18 @@ DAILY_APPLY_QUOTA = 50  # Naukri's daily application limit
 BATCH_APPLY_DEFAULT_DELAY_MS = 500  # Delay between batch apply requests
 MAX_BULK_JOBS = 50  # Max jobs to score in bulk operations
 
+# Apply throttling / anti-detection cadence.
+# A constant request cadence is itself a bot tell, so the apply path is both
+# rate-limited (token bucket) AND jittered. These are conservative defaults;
+# override via env. APPLY_RATE_MAX_CALLS within APPLY_RATE_PERIOD_SECONDS caps
+# sustained throughput; APPLY_JITTER_* randomizes the gap between submissions.
+APPLY_RATE_MAX_CALLS = int(os.environ.get("NAUKRI_APPLY_RATE_MAX_CALLS", "12"))
+APPLY_RATE_PERIOD_SECONDS = float(os.environ.get("NAUKRI_APPLY_RATE_PERIOD_SECONDS", "60"))
+# Extra random delay (seconds) added to the configured batch delay between
+# submissions so the cadence is non-constant. min must be <= max.
+APPLY_JITTER_MIN_SECONDS = float(os.environ.get("NAUKRI_APPLY_JITTER_MIN_SECONDS", "0.4"))
+APPLY_JITTER_MAX_SECONDS = float(os.environ.get("NAUKRI_APPLY_JITTER_MAX_SECONDS", "1.5"))
+
 # Cache TTLs (seconds)
 PROFILE_CACHE_TTL = 30  # Profile + dashboard cache TTL
 STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale

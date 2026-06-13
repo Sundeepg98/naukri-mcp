@@ -17,6 +17,16 @@ from naukri_server.browser import browser
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
 SUCCESS_STATUSES = {200, 201, 202, 204}
+# Akamai Bot Manager flags requests it classifies as automation with 406/403
+# (see README "Akamai CDN Blocks"). These are NOT generic transient errors and
+# must NOT be retry-hammered — hammering deepens a block. Treat them as a
+# bot-check / re-auth signal: refresh the (likely stale) token ONCE behind the
+# refresh lock, apply a cooldown, then surface a clear "re-auth needed" error.
+BOT_CHECK_STATUSES = {403, 406}
+# Cooldown (seconds) applied after a bot-check before the single re-auth retry.
+# Deliberately a real wait (not jittered-tiny) so we back off the edge instead
+# of immediately re-hitting it. Capped by API_MAX_BACKOFF_SECONDS.
+BOT_CHECK_COOLDOWN_SECONDS = min(5.0, API_MAX_BACKOFF_SECONDS)
 
 # --- Global shared session (avoids per-call ClientSession creation) ---
 _session: aiohttp.ClientSession = None
@@ -97,6 +107,18 @@ class NaukriAPIError(Exception):
         super().__init__(f"HTTP {status}: {message}")
 
 
+class NaukriBotCheckError(NaukriAPIError):
+    """Akamai Bot Manager block (406/403) — re-auth + cooldown needed.
+
+    Subclasses NaukriAPIError so existing ``except NaukriAPIError`` handlers
+    still catch it, but the distinct type + ``code="BOT_CHECK"`` let callers
+    detect a bot-flag specifically (vs a generic API error) and prompt re-auth
+    rather than blindly retrying.
+    """
+    def __init__(self, status: int, message: str):
+        super().__init__(status, message, code="BOT_CHECK")
+
+
 def api_tool(context: Optional[str] = None):
     """Decorator: wraps async MCP tool with standardized error handling.
 
@@ -116,7 +138,12 @@ def api_tool(context: Optional[str] = None):
             try:
                 return await func(*args, **kwargs)
             except NaukriAPIError as e:
-                error_code = "AUTH_ERROR" if e.status == 401 else "API_ERROR"
+                if e.code == "BOT_CHECK":
+                    error_code = "BOT_CHECK"
+                elif e.status == 401:
+                    error_code = "AUTH_ERROR"
+                else:
+                    error_code = "API_ERROR"
                 return {"status": "error", "message": str(e), "http_status": e.status, "error_code": error_code}
             except Exception as e:
                 label = context or func.__name__.replace("naukri_", "").replace("_", " ").title()
@@ -236,6 +263,52 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                             )
                 return await _api_request(method, path, params, body,
                                           extra_headers, _attempt=1)
+
+            # 406/403 — Akamai bot-check. DO NOT retry-hammer (that worsens a
+            # block). The README documents an expired token as the usual cause
+            # of being classified as bot traffic, so on the first hit we refresh
+            # the (stale) token behind the lock + cool down, then retry ONCE.
+            # If it still trips, surface a clear "bot-check / re-auth needed"
+            # error and trip the circuit breaker instead of looping.
+            if resp.status in BOT_CHECK_STATUSES:
+                if _attempt == 0:
+                    api_metrics.auth_refreshes += 1
+                    logger.warning(
+                        "Bot-check (HTTP %s) on %s — refreshing token + cooling down %.1fs before one retry",
+                        resp.status, path, BOT_CHECK_COOLDOWN_SECONDS,
+                    )
+                    async with _refresh_lock:
+                        # Another caller may already have refreshed while we waited.
+                        new_token = await browser.token_manager.ensure_token()
+                        if new_token == token:  # still the same stale token
+                            browser.token_manager.invalidate()
+                            try:
+                                async with browser.page_pool.acquire() as refresh_page:
+                                    await browser.token_manager.refresh(refresh_page)
+                            except Exception as e:
+                                logger.error("Token refresh after bot-check failed: %s: %s", type(e).__name__, e)
+                                api_metrics.errors += 1
+                                _api_circuit.record_failure()
+                                raise NaukriBotCheckError(
+                                    resp.status,
+                                    f"Bot-check (HTTP {resp.status}) and token refresh failed: {e}. "
+                                    "Call naukri_login to re-authenticate.",
+                                )
+                    # Cool down OUTSIDE the lock so we don't serialize all callers
+                    # on the sleep — back off the edge before the single retry.
+                    await asyncio.sleep(BOT_CHECK_COOLDOWN_SECONDS)
+                    return await _api_request(method, path, params, body,
+                                              extra_headers, _attempt=_attempt + 1)
+                # Persisted past the re-auth retry — surface clearly, trip circuit.
+                api_metrics.errors += 1
+                _api_circuit.record_failure()
+                logger.error("Bot-check (HTTP %s) persisted on %s after re-auth", resp.status, path)
+                raise NaukriBotCheckError(
+                    resp.status,
+                    f"Bot-check (HTTP {resp.status}) persisted after re-auth on {path}. "
+                    "Naukri's Akamai Bot Manager is blocking REST access — "
+                    "call naukri_login to re-authenticate, or use a browser-backed tool.",
+                )
 
             # 429 — rate limit with Retry-After / exponential backoff
             if resp.status == 429 and _attempt < API_MAX_RETRIES:
