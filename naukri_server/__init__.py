@@ -42,7 +42,13 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from naukri_server.api import close_api_session
-from naukri_server.browser import browser
+# Import the browser singleton under an alias rather than binding the bare name
+# `browser` on the package. Binding `browser` here shadows the submodule
+# `naukri_server.browser` on the package namespace, which breaks
+# `mock.patch("naukri_server.browser.browser")` on Python 3.10 (its
+# unittest.mock._dot_lookup resolves the package attribute to this instance
+# instead of the submodule; 3.11+ resolves the submodule and is unaffected).
+from naukri_server.browser import browser as _browser_instance
 from naukri_server.database import init_db
 import naukri_server.browser_watchdog as _watchdog_module
 from naukri_server.browser_watchdog import BrowserWatchdog
@@ -61,7 +67,7 @@ async def lifespan(server):
     async with _lifespan_lock:
         _lifespan_refs += 1
         if _lifespan_refs == 1:
-            await browser.start()
+            await _browser_instance.start()
             await init_db()
             # Start browser watchdog for self-healing
             _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
@@ -106,7 +112,7 @@ async def lifespan(server):
                 if _watchdog_module.watchdog:
                     await _watchdog_module.watchdog.stop()
                 try:
-                    await browser.stop()
+                    await _browser_instance.stop()
                 except Exception:
                     pass
                 await close_api_session()

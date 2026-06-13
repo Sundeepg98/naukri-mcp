@@ -8,6 +8,7 @@ Tools are completely unaware of this — it's transparent infrastructure.
 import asyncio
 import logging
 import time
+from naukri_server._compat import timeout as _timeout
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ class BrowserWatchdog:
             if not browser or not browser.available:
                 return False
             # Try to acquire a page with a short timeout
-            async with asyncio.timeout(10):
+            async with _timeout(10):
                 async with browser.page_pool.acquire() as page:
                     # Just check the page is alive
                     _ = page.url

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from naukri_server._compat import timeout as _timeout
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Callable, Awaitable, Optional
@@ -192,7 +193,7 @@ class TaskScheduler:
             start_time = time.monotonic()
 
             try:
-                async with asyncio.timeout(task.timeout_seconds):
+                async with _timeout(task.timeout_seconds):
                     result = await task.fn()
 
                 duration_ms = (time.monotonic() - start_time) * 1000

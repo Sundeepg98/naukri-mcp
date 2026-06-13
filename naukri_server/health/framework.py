@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from naukri_server._compat import timeout as _timeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -267,7 +268,7 @@ class HealthProbeScheduler:
         """Run a single probe with a timeout, then process the result."""
         timeout = min(probe.interval_seconds * 0.8, 30)
         try:
-            async with asyncio.timeout(timeout):
+            async with _timeout(timeout):
                 result = await probe.execute()
         except asyncio.TimeoutError:
             result = ProbeResult(

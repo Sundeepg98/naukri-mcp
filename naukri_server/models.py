@@ -3,7 +3,14 @@
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Any, TypedDict, NotRequired
+from typing import Optional, Any, TypedDict
+
+# NotRequired landed in typing only in Python 3.11; import from the
+# typing_extensions backport so the module also works on Python 3.10.
+try:  # Python 3.11+
+    from typing import NotRequired
+except ImportError:  # Python 3.10
+    from typing_extensions import NotRequired
 
 
 def _safe_int(val) -> Optional[int]:

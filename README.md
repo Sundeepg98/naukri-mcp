@@ -1,5 +1,7 @@
 # Naukri MCP Server
 
+[![CI](https://github.com/Sundeepg98/naukri-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Sundeepg98/naukri-mcp/actions/workflows/ci.yml)
+
 117-tool atomic MCP server for automating [Naukri.com](https://www.naukri.com) (India's largest job portal). Search jobs, apply in bulk, manage your profile, track applications, research companies, and monitor recruiter activity -- all from your MCP client. Designed for Claude Code's progressive Tool Search loading (default since Jan 2026), so each tool is single-purpose and discoverable on demand.
 
 **Tech stack:** Python 3.10+, [FastMCP](https://github.com/jlowin/fastmcp), Playwright (persistent Chromium), aiohttp

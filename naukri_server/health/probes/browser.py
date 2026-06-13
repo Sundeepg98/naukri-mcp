@@ -9,8 +9,8 @@ async def browser_liveness() -> ProbeResult:
     if not browser or not browser.available:
         return ProbeResult(status="unhealthy", message="Browser not available")
     try:
-        import asyncio
-        async with asyncio.timeout(10):
+        from naukri_server._compat import timeout as _timeout
+        async with _timeout(10):
             async with browser.page_pool.acquire() as page:
                 _ = page.url
                 return ProbeResult(status="healthy", message="Browser alive")

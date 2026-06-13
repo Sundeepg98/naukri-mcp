@@ -85,6 +85,12 @@ async def _export_data(
     # Type narrow for mypy/pyright (file_path is non-None when path_err is None)
     assert file_path is not None
 
+    # Ensure the resolved file's parent dir exists. _EXPORTS_DIR.mkdir above only
+    # covers the default dir; a custom output_path may point at a (verbatim) path
+    # whose parent doesn't exist yet, which would make write_text raise
+    # FileNotFoundError on a clean machine.
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Write file
     try:
         if format == "json":
