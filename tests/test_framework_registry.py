@@ -80,13 +80,17 @@ def test_scheduled_task_decorator_returns_original_function():
 
 
 def test_subscriber_count_unchanged_36():
-    """After importing subscribers.py, registry should have 39 subscribers from naukri_server.events.
+    """After importing subscribers.py, registry should have 40 subscribers from naukri_server.events.
 
     Count history: 36 → 38 when InboxMessageRead and InboxInviteAccepted
     subscribers were added to close the CQRS gap for inbox events → 39 when the
     self-healing pipeline was wired (healing/router.py adds the sole subscriber
     of EndpointDriftDetected, registered via subscribers.py importing the
-    healing package before wire_subscribers).
+    healing package before wire_subscribers) → 40 when the auto-fix synthesis
+    layer (healing/synthesis.py) added an AutoFixApplied subscriber that
+    re-snapshots an endpoint's baseline after a successful field fix (so the T2
+    verify pass doesn't spuriously revert a correct alias fix on a stale
+    baseline).
     """
     import naukri_server.subscribers  # triggers decorators
     import naukri_server.events as ev
@@ -95,7 +99,7 @@ def test_subscriber_count_unchanged_36():
     # (other tests may register pytest fixtures with synthetic event types)
     naukri_subs = [it for it in registry.by_kind("subscriber")
                    if hasattr(it.key, "__module__") and it.key.__module__ == "naukri_server.events"]
-    assert len(naukri_subs) == 39
+    assert len(naukri_subs) == 40
 
 
 def test_scheduled_task_count_unchanged_9():

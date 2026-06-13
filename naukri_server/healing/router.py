@@ -48,7 +48,9 @@ from pathlib import Path
 
 from naukri_server.events import EndpointDriftDetected
 from naukri_server.framework.registry import subscriber
-from naukri_server.healing import circuit, tier_registry, t1_autofix, t2_autofix, t3_notify
+from naukri_server.healing import (
+    circuit, tier_registry, t1_autofix, t2_autofix, t3_notify, synthesis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +184,118 @@ async def _notify_t3(event: EndpointDriftDetected, repo_root: Path) -> None:
         )
 
 
+async def _default_dry_run_validate(candidate: "synthesis.FixCandidate") -> bool:
+    """Concrete dry-run validator for the router (the live/network piece).
+
+    Re-probes the candidate's endpoint and confirms the synthesized alias fix is
+    SOUND without committing anything. For the hard-rename case the candidate
+    handles, soundness means:
+
+      1. A fresh response is fetchable.
+      2. The NEW alias leaf is actually PRESENT in the fresh response — proof
+         the rename target exists, so the canonical datum is now readable via
+         the appended alias (a transient/erroneous "added" would already be
+         gone, failing here).
+
+    Conservative on every failure path (fetch error, missing field, exception)
+    -> returns False -> notify-only. This is the only place in the synthesis
+    flow that touches the network, so it is injected into
+    synthesis.enrich_drift_event and mocked wholesale in tests.
+    """
+    constant_name = candidate.constant_name
+    try:
+        from naukri_server import config as _cfg
+        from naukri_server.interfaces import api_client
+        from naukri_server.probes.drift_detector import _build_schema
+
+        try:
+            path = getattr(_cfg, constant_name)
+        except AttributeError:
+            logger.info("dry-run: config constant %s missing", constant_name)
+            return False
+
+        response = await api_client.get(path)
+        schema = _build_schema(response)
+
+        present_leaves = {p.split(".")[-1] for p in schema}
+        if candidate.new_alias not in present_leaves:
+            logger.info("dry-run: new alias %r not present in fresh %s response — declining",
+                        candidate.new_alias, constant_name)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — any failure ⇒ decline
+        logger.info("dry-run validation of %s raised: %s — declining", constant_name, exc)
+        return False
+
+
+async def _store_synthesis_proposal(
+    candidate: "synthesis.FixCandidate", *, shadow: bool, reason: str,
+) -> None:
+    """Persist a notification describing a SYNTHESIZED (but not applied) fix.
+
+    Used in shadow mode (good candidate withheld) so the operator can watch the
+    healer propose correct fixes before flipping HEALING_AUTOFIX_ENABLED on.
+    Never raises.
+    """
+    try:
+        from naukri_server.database import store_notification
+        await store_notification({
+            "event_type": "HealingProposal",
+            "title": (f"Auto-fix proposal (shadow): {candidate.constant_name}"
+                      if shadow else f"Auto-fix proposal: {candidate.constant_name}"),
+            "body": synthesis.proposal_summary(candidate, applied=False, shadow=shadow)
+                    + f"\n\n{reason}",
+            "priority": "medium",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {
+                "constant_name": candidate.constant_name,
+                "canonical_key": candidate.canonical_key,
+                "new_alias": candidate.new_alias,
+                "confidence": candidate.confidence,
+                "dry_run_passed": candidate.dry_run_passed,
+                "shadow": shadow,
+            },
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to store synthesis proposal for %s: %s",
+                       candidate.constant_name, exc)
+
+
+async def _try_enrich_field_drift(
+    event: EndpointDriftDetected, repo_root: Path,
+) -> EndpointDriftDetected | None:
+    """Attempt to synthesize fix params for a param-less field-drift event.
+
+    Returns an ENRICHED event (carrying __canonical_key__/__new_alias__) when a
+    deterministic, evidence-derived candidate passes the dry-run AND auto-fix is
+    enabled — the caller then runs it through the normal apply->verify->revert
+    path. Returns None for every notify-only case (no candidate, low confidence,
+    dry-run failed, or shadow mode); a shadow/proposal notification is stored as
+    a side effect so the outcome is observable. Never raises.
+    """
+    try:
+        outcome = await synthesis.enrich_drift_event(
+            event, repo_root, _default_dry_run_validate,
+        )
+    except Exception as exc:  # noqa: BLE001 — synthesis must never wedge the router
+        logger.warning("Drift enrichment crashed for %s: %s — notify only",
+                       event.constant_name, exc)
+        return None
+
+    if outcome.enriched_event is not None:
+        return outcome.enriched_event
+
+    # No applied fix. If we computed a real candidate (shadow mode), surface it.
+    if outcome.candidate is not None and outcome.candidate.dry_run_passed:
+        await _store_synthesis_proposal(
+            outcome.candidate, shadow=outcome.shadow, reason=outcome.reason,
+        )
+    else:
+        logger.info("No auto-fix synthesized for %s: %s",
+                    event.constant_name, outcome.reason)
+    return None
+
+
 @subscriber(EndpointDriftDetected)
 async def on_endpoint_drift(event: EndpointDriftDetected) -> None:
     """The single subscriber of EndpointDriftDetected. Routes by tier.
@@ -232,12 +346,20 @@ async def on_endpoint_drift(event: EndpointDriftDetected) -> None:
             canonical_key = new_alias = None
         elif event.drift_type == "field":
             if not _has_field_fix_params(event):
-                logger.info("Drift on %s (field) lacks explicit alias mapping — notify only",
-                            constant_name)
-                await _store_drift_notification(
-                    constant_name, "no verified alias mapping to apply (would be a guess)", event,
-                )
-                return
+                # No explicit alias mapping on the raw event. Try to SYNTHESIZE
+                # one from evidence (deterministic, dry-run-gated, shadow-default).
+                # Success ⇒ continue through the unchanged apply->verify->revert
+                # path with an enriched event; otherwise fall back to notify.
+                enriched = await _try_enrich_field_drift(event, repo_root)
+                if enriched is None:
+                    logger.info("Drift on %s (field) — no applicable synthesized fix, notify only",
+                                constant_name)
+                    await _store_drift_notification(
+                        constant_name,
+                        "no verified alias mapping to apply (would be a guess)", event,
+                    )
+                    return
+                event = enriched  # carries __canonical_key__/__new_alias__ now
             canonical_key = event.changed_fields[KEY_CANONICAL]
             new_alias = event.changed_fields[KEY_NEW_ALIAS]
             new_url = None

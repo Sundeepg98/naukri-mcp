@@ -240,6 +240,25 @@ APPLY_THINK_TIME_MEDIAN_SECONDS = float(os.environ.get("NAUKRI_APPLY_THINK_MEDIA
 # Spread (sigma of the underlying normal in log-space) — higher = more variance.
 APPLY_THINK_TIME_SIGMA = float(os.environ.get("NAUKRI_APPLY_THINK_SIGMA", "0.6"))
 
+# Self-healing auto-fix gate (SHADOW MODE by default).
+# The healing pipeline can SYNTHESIZE a concrete fix from detected drift
+# (see healing/synthesis.py) and route it through the existing
+# apply->verify->revert path. By default that synthesis runs in SHADOW MODE:
+# it computes + logs the proposed fix and stores a notification, but commits
+# NOTHING. Set NAUKRI_HEALING_AUTOFIX_ENABLED=true ONLY after observing the
+# healer propose correct fixes in shadow logs. This is independent of (and
+# stricter than) the healing circuit breaker — BOTH must allow a fix before
+# anything is committed: the circuit must be enabled AND this flag must be true.
+HEALING_AUTOFIX_ENABLED = (
+    os.environ.get("NAUKRI_HEALING_AUTOFIX_ENABLED", "false").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+# Minimum synthesis confidence (0.0-1.0) required before a synthesized fix is
+# eligible to apply. Below this -> notify-only. A dry-run must ALSO pass.
+HEALING_AUTOFIX_MIN_CONFIDENCE = float(
+    os.environ.get("NAUKRI_HEALING_AUTOFIX_MIN_CONFIDENCE", "0.99")
+)
+
 # Cache TTLs (seconds)
 PROFILE_CACHE_TTL = 30  # Profile + dashboard cache TTL
 STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale
