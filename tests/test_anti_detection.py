@@ -571,18 +571,19 @@ class TestApplyPathThrottled:
         assert resilience.get_apply_rate_limiter() is rl
 
     @pytest.mark.asyncio
-    async def test_batch_apply_uses_jittered_delay(self):
-        """batch_apply staggers submissions via jittered_delay (not a constant
-        asyncio.sleep) — proven by spying on the jitter helper."""
+    async def test_batch_apply_uses_human_think_time(self):
+        """batch_apply paces submissions with a randomized human-like think-time
+        (NOT a fixed delay) — proven by spying on human_think_time. DECISION
+        stealth>throughput: the cadence is a sampled think-time, not delay_ms."""
         import naukri_server.tools.apply as apply_mod
 
-        jitter_calls = []
+        think_calls = []
 
-        async def fake_jitter(base, jmin, jmax, **kwargs):
-            jitter_calls.append((base, jmin, jmax))
-            return base
+        async def fake_think(median, sigma, lo, hi, **kwargs):
+            think_calls.append((median, sigma, lo, hi))
+            return 0.0  # don't actually sleep
 
-        # Two appl-able jobs so exactly one inter-submission gap occurs.
+        # Two appl-able jobs so exactly one inter-application gap occurs.
         search_result = {
             "status": "success",
             "jobs": [
@@ -601,17 +602,64 @@ class TestApplyPathThrottled:
                   new_callable=AsyncMock, return_value=set()),
             patch("naukri_server.tools.apply._apply_single",
                   new_callable=AsyncMock, side_effect=fake_apply_single),
-            patch("naukri_server.tools.apply.jittered_delay", side_effect=fake_jitter),
+            patch("naukri_server.tools.apply.human_think_time", side_effect=fake_think),
             patch("naukri_server.tools.apply.asyncio.sleep", new_callable=AsyncMock) as mock_const_sleep,
         ):
-            result = await apply_mod.naukri_batch_apply(keywords="python", limit=5, delay_ms=500)
+            result = await apply_mod.naukri_batch_apply(keywords="python", limit=5, delay_ms=0)
 
         assert result["status"] == "success"
         assert result["applied"] == 2
-        # Jittered delay used exactly once (between the 2 submissions)...
-        assert len(jitter_calls) == 1
-        base, jmin, jmax = jitter_calls[0]
-        assert base == pytest.approx(0.5)  # 500ms
-        assert (jmin, jmax) == (apply_mod.APPLY_JITTER_MIN_SECONDS, apply_mod.APPLY_JITTER_MAX_SECONDS)
+        # Human think-time used exactly once (between the 2 serial submissions),
+        # sourced from the config distribution params.
+        assert len(think_calls) == 1
+        median, sigma, lo, hi = think_calls[0]
+        assert median == apply_mod.APPLY_THINK_TIME_MEDIAN_SECONDS
+        assert sigma == apply_mod.APPLY_THINK_TIME_SIGMA
+        assert (lo, hi) == (apply_mod.APPLY_THINK_TIME_MIN_SECONDS, apply_mod.APPLY_THINK_TIME_MAX_SECONDS)
         # ...and NOT a bare constant sleep for cadence.
         mock_const_sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_apply_is_serial_not_concurrent(self):
+        """Applies run ONE AT A TIME — overlapping concurrency is an automation
+        tell. Verify max in-flight _apply_single is 1."""
+        import asyncio as _asyncio
+        import naukri_server.tools.apply as apply_mod
+
+        search_result = {
+            "status": "success",
+            "jobs": [
+                {"job_id": f"J{i}", "title": "T", "company": "C", "is_applied": False}
+                for i in range(4)
+            ],
+        }
+
+        in_flight = 0
+        max_in_flight = 0
+
+        async def fake_apply_single(job_id, *a, **k):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await _asyncio.sleep(0)  # yield to let any concurrency manifest
+            in_flight -= 1
+            return {"status": "applied", "job_id": job_id}
+
+        async def no_think(*a, **k):
+            return 0.0
+
+        with (
+            patch("naukri_server.tools.search.naukri_search_jobs",
+                  new_callable=AsyncMock, return_value=search_result),
+            patch("naukri_server.database.get_applied_job_ids",
+                  new_callable=AsyncMock, return_value=set()),
+            patch("naukri_server.tools.apply._apply_single",
+                  new_callable=AsyncMock, side_effect=fake_apply_single),
+            patch("naukri_server.tools.apply.human_think_time", side_effect=no_think),
+        ):
+            result = await apply_mod.naukri_batch_apply(keywords="python", limit=5,
+                                                        max_concurrent=3)
+
+        assert result["applied"] == 4
+        # Even with max_concurrent=3 (deprecated/ignored), applies were serial.
+        assert max_in_flight == 1

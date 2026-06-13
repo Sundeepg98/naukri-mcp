@@ -195,7 +195,10 @@ class TestCheckSearchApi:
 
         assert result["name"] == "search_api"
         assert result["status"] == "warn"
-        assert "406" in result["message"] or "reCAPTCHA" in result["message"]
+        # Message is now classifier-driven (block_kind tagged) rather than the
+        # old hardcoded "406 reCAPTCHA" string. A reCAPTCHA marker classifies as
+        # captcha; the structured block_kind is the durable contract.
+        assert result.get("block_kind") in ("captcha", "soft_block")
 
     @pytest.mark.asyncio
     async def test_recaptcha_case_insensitive(self):

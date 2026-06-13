@@ -46,6 +46,9 @@ exports/
 # Healer circuit-breaker state (per-machine; should not be committed)
 healing_state.json
 
+# Kill-switch state (per-machine; should not be committed)
+kill_switch_state.json
+
 # Serena
 .serena/
 

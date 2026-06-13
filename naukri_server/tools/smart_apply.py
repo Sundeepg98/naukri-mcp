@@ -288,6 +288,12 @@ async def _apply_top_fits(
                             entry["reminder_set"] = False
 
                 results.append(entry)
+
+                # FAIL-CLOSED: stop the batch if a block tripped the kill-switch
+                # or we hit the hard daily quota — don't keep hammering.
+                if status in ("halted", "quota_reached"):
+                    entry["message"] = apply_result.get("message")
+                    break
             except Exception as e:
                 errors.append(f"Job {jid}: {type(e).__name__}: {e}")
                 results.append({

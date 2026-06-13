@@ -366,9 +366,18 @@ async def _act(decide_result: dict) -> dict:
     else:
         # mode == "auto"
         from naukri_server.tools.apply import _apply_single
+        from naukri_server import kill_switch
         applied = 0
         errors = []
+        halted = False
         for candidate in candidates:
+            # FAIL-CLOSED: stop the auto-apply loop the moment the kill-switch
+            # trips (e.g. a prior apply in this loop hit a block and tripped it).
+            if kill_switch.is_tripped():
+                halted = True
+                logger.warning("Agent %s: auto-apply HALTED by kill-switch after %d applies",
+                               cycle_id, applied, extra={"cycle_id": cycle_id, "step": "act"})
+                break
             logger.info("Agent %s: auto-applying to %s at %s (fit: %d)",
                         cycle_id, candidate.job_id, candidate.company, candidate.fit_score,
                         extra={"cycle_id": cycle_id, "step": "act"})
@@ -396,6 +405,13 @@ async def _act(decide_result: dict) -> dict:
                     except Exception as e:
                         logger.warning("Failed to emit %s: %s", "AgentJobApplied", e,
                                        extra={"cycle_id": cycle_id, "step": "act"})
+                elif status == "halted":
+                    # This apply hit a block and tripped the kill-switch — stop
+                    # the loop now rather than firing more traffic into a block.
+                    halted = True
+                    logger.warning("Agent %s: auto-apply HALTED by kill-switch (apply returned halted)",
+                                   cycle_id, extra={"cycle_id": cycle_id, "step": "act"})
+                    break
             except Exception as e:
                 errors.append(f"{candidate.job_id}: {e}")
                 await update_agent_decision(cycle_id, candidate.job_id, "error")
@@ -408,6 +424,9 @@ async def _act(decide_result: dict) -> dict:
             "errors": errors[:5],
             "mode": "auto",
         }
+        if halted:
+            act_result["halted"] = True
+            act_result["note"] = "Auto-apply halted by kill-switch (block detected)"
 
     try:
         from naukri_server.events import AgentActCompleted

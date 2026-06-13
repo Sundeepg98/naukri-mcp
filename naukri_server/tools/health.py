@@ -5,7 +5,8 @@ import os
 import time
 
 from naukri_server import mcp
-from naukri_server.api import api_metrics
+from naukri_server.api import api_metrics, NaukriAPIError
+from naukri_server.block_state import BlockState, classify_block_state
 from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.browser import browser, page_goto
 from naukri_server.config import (
@@ -20,6 +21,25 @@ from naukri_server.config import (
     SEARCH_API,
     logger,
 )
+
+
+def _classify_health_error(exc: Exception) -> BlockState:
+    """Map a raised health-check error to a BlockState.
+
+    Prefers the structured ``block_kind`` that api.py tags onto NaukriAPIError /
+    NaukriBotCheckError. Falls back to running the pure classifier over the
+    error message (which embeds status + body snippet) so older/untagged errors
+    still classify. Returns BlockState.HEALTHY when nothing block-like is found
+    (the caller then treats it as a hard failure).
+    """
+    block_kind = getattr(exc, "block_kind", None)
+    if block_kind:
+        try:
+            return BlockState(block_kind)
+        except ValueError:
+            pass
+    status = getattr(exc, "status", 0) or 0
+    return classify_block_state(status=status, content_type="", body=str(exc)).state
 
 
 # ---------------------------------------------------------------------------
@@ -72,10 +92,26 @@ async def _check_search_api() -> dict:
         return {"name": "search_api", "status": "warn", "message": f"Response received but jobDetails empty (noOfJobs={no_of_jobs})", "elapsed_ms": elapsed}
     except Exception as e:
         elapsed = int((time.monotonic() - t0) * 1000)
-        msg = str(e)
-        # 406 reCAPTCHA is expected — direct API is blocked, browser intercept works
-        if "406" in msg or "recaptcha" in msg.lower():
-            return {"name": "search_api", "status": "warn", "message": "API returns 406 reCAPTCHA (expected — search uses browser intercept)", "elapsed_ms": elapsed}
+        # Classify the failure via the block-state classifier instead of the old
+        # hardcoded `if "406" in msg` string check. A direct search API call
+        # being bot-blocked (soft_block / captcha) is EXPECTED — the real
+        # naukri_search_jobs tool uses browser intercept — so those are "warn",
+        # not "fail". Other block kinds (login_wall) and non-block errors are
+        # surfaced distinctly. Prefer the structured block_kind tagged on the
+        # error by api.py; fall back to marker matching on the message.
+        assessment = _classify_health_error(e)
+        if assessment is BlockState.SOFT_BLOCK or assessment is BlockState.CAPTCHA:
+            return {"name": "search_api", "status": "warn",
+                    "message": f"API bot-checked ({assessment.value}) — expected; search uses browser intercept",
+                    "elapsed_ms": elapsed, "block_kind": assessment.value}
+        if assessment is BlockState.RATE_LIMITED:
+            return {"name": "search_api", "status": "warn",
+                    "message": "API rate-limited (429) — expected under load; search uses browser intercept",
+                    "elapsed_ms": elapsed, "block_kind": assessment.value}
+        if assessment is BlockState.LOGIN_WALL:
+            return {"name": "search_api", "status": "fail",
+                    "message": "API redirected to login — session expired (re-auth needed)",
+                    "elapsed_ms": elapsed, "block_kind": assessment.value}
         return {"name": "search_api", "status": "fail", "message": f"{type(e).__name__}: {e}", "elapsed_ms": elapsed}
 
 

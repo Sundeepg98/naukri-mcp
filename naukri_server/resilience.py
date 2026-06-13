@@ -118,6 +118,52 @@ async def jittered_delay(
     return total
 
 
+def sample_think_time(
+    median: float,
+    sigma: float,
+    min_seconds: float,
+    max_seconds: float,
+    rand_func: Callable[[float, float], float] = random.lognormvariate,
+) -> float:
+    """Sample a human-like think-time (seconds) from a log-normal distribution.
+
+    A real person's gap between applications is right-skewed: usually a handful
+    of seconds, occasionally much longer — NOT a fixed constant. We model that
+    with a log-normal centred on ``median`` (its geometric mean) with log-space
+    spread ``sigma``, then clamp to ``[min_seconds, max_seconds]``.
+
+    ``rand_func(mu, sigma)`` defaults to ``random.lognormvariate`` and is
+    injectable so tests can force a deterministic value. ``mu`` is ``ln(median)``
+    so the distribution's median is exactly ``median``.
+    """
+    import math
+    lo = max(0.0, min(min_seconds, max_seconds))
+    hi = max(min_seconds, max_seconds)
+    if hi <= 0:
+        return 0.0
+    mu = math.log(median) if median > 0 else 0.0
+    try:
+        sample = rand_func(mu, max(0.0, sigma))
+    except (ValueError, OverflowError):
+        sample = median
+    return max(lo, min(hi, sample))
+
+
+async def human_think_time(
+    median: float,
+    sigma: float,
+    min_seconds: float,
+    max_seconds: float,
+    sleep_func: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    rand_func: Callable[[float, float], float] = random.lognormvariate,
+) -> float:
+    """Sleep for a sampled human-like think-time. Returns the seconds slept."""
+    delay = sample_think_time(median, sigma, min_seconds, max_seconds, rand_func=rand_func)
+    if delay > 0:
+        await sleep_func(delay)
+    return delay
+
+
 # Shared apply-path rate limiter (anti-detection). Lazily built from config so
 # env overrides are honored and tests can substitute their own instance.
 _apply_rate_limiter: Optional[RateLimiter] = None

@@ -12,8 +12,9 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, API_MAX_RETRIES, API_BACKOFF_BASE, API_MAX_BACKOFF_SECONDS, logger
+from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, API_MAX_RETRIES, API_BACKOFF_BASE, API_MAX_BACKOFF_SECONDS, BLOCK_STATE_CLASSIFIER_ENFORCE, logger
 from naukri_server.browser import browser, AuthExpiredError
+from naukri_server.block_state import classify_block_state, BlockState, BlockAssessment
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
 SUCCESS_STATUSES = {200, 201, 202, 204}
@@ -46,6 +47,18 @@ class _ApiMetrics:
         self.errors = 0
         self.retries = 0
         self.auth_refreshes = 0
+        # Count of responses the block-state classifier flagged as non-healthy
+        # (soft_block / captcha / rate_limited / login_wall). A soft block that
+        # arrives as a 200 interstitial would otherwise be invisible — this is
+        # the probe signal that distinguishes "API healthy" from "API is being
+        # silently blocked". Broken down per state for diagnostics.
+        self.blocks = 0
+        self.blocks_by_state: dict[str, int] = {}
+
+    def record_block(self, state: str) -> None:
+        """Increment the block counters for a classified non-healthy state."""
+        self.blocks += 1
+        self.blocks_by_state[state] = self.blocks_by_state.get(state, 0) + 1
 
     def get_stats(self) -> dict:
         return {
@@ -54,6 +67,8 @@ class _ApiMetrics:
             "errors": self.errors,
             "retries": self.retries,
             "auth_refreshes": self.auth_refreshes,
+            "blocks": self.blocks,
+            "blocks_by_state": dict(self.blocks_by_state),
         }
 
 api_metrics = _ApiMetrics()
@@ -104,11 +119,21 @@ _api_circuit = ApiCircuitBreaker()
 
 
 class NaukriAPIError(Exception):
-    """Structured API error with status code and parsed message."""
-    def __init__(self, status: int, message: str, code: Optional[str] = None):
+    """Structured API error with status code and parsed message.
+
+    ``block_kind`` (optional) carries the block-state classifier's verdict when
+    the error was raised because a response was classified as a block (e.g. a
+    200 CAPTCHA interstitial, or a 403/406 bot-check). It is one of the
+    ``BlockState`` values ("soft_block" / "captcha" / "rate_limited" /
+    "login_wall") or None for ordinary API errors. Callers (kill-switch,
+    health) can branch on it without re-parsing the message.
+    """
+    def __init__(self, status: int, message: str, code: Optional[str] = None,
+                 block_kind: Optional[str] = None):
         self.status = status
         self.message = message
         self.code = code
+        self.block_kind = block_kind
         super().__init__(f"HTTP {status}: {message}")
 
 
@@ -120,8 +145,9 @@ class NaukriBotCheckError(NaukriAPIError):
     detect a bot-flag specifically (vs a generic API error) and prompt re-auth
     rather than blindly retrying.
     """
-    def __init__(self, status: int, message: str):
-        super().__init__(status, message, code="BOT_CHECK")
+    def __init__(self, status: int, message: str, block_kind: Optional[str] = None):
+        super().__init__(status, message, code="BOT_CHECK",
+                         block_kind=block_kind or BlockState.SOFT_BLOCK.value)
 
 
 def api_tool(context: Optional[str] = None):
@@ -157,8 +183,13 @@ def api_tool(context: Optional[str] = None):
     return decorator
 
 
-def _raise_api_error(status: int, text: str):
-    """Parse JSON error body and raise structured NaukriAPIError."""
+def _raise_api_error(status: int, text: str, block_kind: Optional[str] = None):
+    """Parse JSON error body and raise structured NaukriAPIError.
+
+    ``block_kind`` (from the block-state classifier) is attached to the raised
+    error so downstream handlers can tell a bot-block apart from an ordinary
+    API error without re-parsing the body.
+    """
     message = text[:500]
     code = None
     try:
@@ -169,7 +200,7 @@ def _raise_api_error(status: int, text: str):
         stripped = text.strip()
         if stripped.startswith("<") or stripped.lower().startswith("<!doctype"):
             message = f"Server returned HTTP {status} (non-JSON response)"
-    raise NaukriAPIError(status, message, code)
+    raise NaukriAPIError(status, message, code, block_kind=block_kind)
 
 
 def _cookie_header() -> str:
@@ -206,6 +237,50 @@ async def close_api_session():
         _session = None
 
 
+def _assess_block(resp, text: str) -> BlockAssessment:
+    """Run the pure block-state classifier over an aiohttp response + body text.
+
+    Pulls the (already-received) status, content-type, redirect history and
+    final URL off ``resp`` and hands them to the pure classifier. Never raises.
+    """
+    try:
+        content_type = resp.headers.get("content-type", "")
+        redirected = bool(getattr(resp, "history", None))
+        final_url = str(getattr(resp, "url", "") or "")
+        return classify_block_state(
+            status=resp.status,
+            content_type=content_type,
+            body=text,
+            redirected=redirected,
+            final_url=final_url,
+        )
+    except Exception as exc:  # classifier must never break the request path
+        logger.debug("block-state classifier errored (ignored): %s", exc)
+        return BlockAssessment(BlockState.HEALTHY)
+
+
+def _handle_block_assessment(assessment: BlockAssessment, method: str, path: str,
+                             status: int) -> None:
+    """Log + count a non-healthy classification.
+
+    LOG-ONLY by default (see config.BLOCK_STATE_CLASSIFIER_ENFORCE): this always
+    records the block in api_metrics and logs it, but does NOT itself alter
+    control flow. Enforcement (kill-switch trip, raising tagged errors) is layered
+    on top by callers reading ``api_metrics`` / the tagged ``block_kind`` once the
+    classifier is trusted. Keeping this side-effecting step centralized means the
+    log-only→enforce switch is observable in one place.
+    """
+    if not assessment.is_block:
+        return
+    api_metrics.record_block(assessment.state.value)
+    log = logger.warning if BLOCK_STATE_CLASSIFIER_ENFORCE else logger.info
+    log(
+        "block-state=%s (%s) on %s %s [HTTP %s] enforce=%s — signal=%s",
+        assessment.state.value, assessment.reason, method, path, status,
+        BLOCK_STATE_CLASSIFIER_ENFORCE, assessment.signal,
+    )
+
+
 async def _api_request(method: str, path: str, params: Optional[dict] = None,
                        body=None, extra_headers: Optional[dict] = None,
                        _attempt: int = 0) -> dict:
@@ -237,16 +312,60 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
         async with session.request(method, url, **kwargs) as resp:
             logger.info("API %s %s -> %s", method, path, resp.status)
             if resp.status in SUCCESS_STATUSES:
-                api_metrics.success += 1
-                _api_circuit.record_success()
+                # 204 No Content: nothing to inspect — a genuine success.
                 if resp.status == 204:
+                    api_metrics.success += 1
+                    _api_circuit.record_success()
                     return {}
                 content_type = resp.headers.get("content-type", "").lower()
+                # --- BUG FIX (block-state corruption) -------------------------
+                # Previously success was recorded HERE, before the content-type
+                # guard. A 200 that is actually a CAPTCHA/HTML interstitial would
+                # bump api_metrics.success + reset the circuit breaker, THEN raise
+                # — so a soft-blocked session read as "healthy" and corrupted the
+                # error-rate probe + breaker. We now read + classify the body and
+                # only record success once we've confirmed it is a real JSON
+                # payload (not an interstitial). The non-JSON guard, the
+                # classifier, and success-recording all happen AFTER inspection.
                 if "json" not in content_type and "javascript" not in content_type:
                     text = await resp.text()
-                    raise NaukriAPIError(resp.status, f"Expected JSON response, got {content_type}: {text[:200]}")
+                    assessment = _assess_block(resp, text)
+                    _handle_block_assessment(assessment, method, path, resp.status)
+                    # A non-JSON 2xx is never a usable API success — it's an
+                    # interstitial/HTML. Count it as an error (NOT success) and
+                    # let the circuit see a failure. Tag with the block verdict.
+                    api_metrics.errors += 1
+                    _api_circuit.record_failure()
+                    block_kind = assessment.state.value if assessment.is_block else None
+                    if assessment.is_block:
+                        raise NaukriBotCheckError(
+                            resp.status,
+                            f"Soft block on {path}: {assessment.reason} "
+                            f"(HTTP {resp.status}, content-type={content_type}): {text[:200]}",
+                            block_kind=block_kind,
+                        )
+                    raise NaukriAPIError(
+                        resp.status,
+                        f"Expected JSON response, got {content_type}: {text[:200]}",
+                    )
+                # Content-type is JSON-ish — the happy path. A genuine JSON API
+                # payload is healthy by definition; an interstitial arrives as
+                # HTML and is caught by the non-JSON guard above. We record
+                # success only now (AFTER the guard) and parse the body. The
+                # response body is consumed once, so we do NOT additionally
+                # re-read it for classification here (that would require a second
+                # read on a real aiohttp response).
+                api_metrics.success += 1
+                _api_circuit.record_success()
                 return await resp.json()
             text = await resp.text()
+
+            # Classify every non-success response (log-only counter side-effect)
+            # so 403/406/redirect-to-login bodies feed api_metrics.blocks and the
+            # raised error can be tagged with the specific block_kind below.
+            err_assessment = _assess_block(resp, text)
+            _handle_block_assessment(err_assessment, method, path, resp.status)
+            err_block_kind = err_assessment.state.value if err_assessment.is_block else None
 
             # 401 — token refresh. Serialized through the TokenManager's SINGLE
             # refresh lock (Fix B): both this path and a concurrent ensure_token()
@@ -309,6 +428,7 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                         raise NaukriBotCheckError(
                             resp.status,
                             f"Bot-check (HTTP {resp.status}) and session expired: {e}",
+                            block_kind=err_block_kind or BlockState.LOGIN_WALL.value,
                         )
                     except Exception as e:
                         logger.error("Token refresh after bot-check failed: %s: %s", type(e).__name__, e)
@@ -318,6 +438,7 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                             resp.status,
                             f"Bot-check (HTTP {resp.status}) and token refresh failed: {e}. "
                             "Call naukri_login to re-authenticate.",
+                            block_kind=err_block_kind,
                         )
                     # Cool down before the single retry — back off the edge.
                     await asyncio.sleep(BOT_CHECK_COOLDOWN_SECONDS)
@@ -332,6 +453,7 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                     f"Bot-check (HTTP {resp.status}) persisted after re-auth on {path}. "
                     "Naukri's Akamai Bot Manager is blocking REST access — "
                     "call naukri_login to re-authenticate, or use a browser-backed tool.",
+                    block_kind=err_block_kind,
                 )
 
             # 429 — rate limit with Retry-After / exponential backoff
@@ -361,7 +483,7 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
 
             api_metrics.errors += 1
             _api_circuit.record_failure()
-            _raise_api_error(resp.status, text)
+            _raise_api_error(resp.status, text, block_kind=err_block_kind)
     except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
         if _attempt < API_MAX_RETRIES:
             delay = API_BACKOFF_BASE * (2 ** _attempt) * (0.5 + random.random())

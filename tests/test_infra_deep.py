@@ -25,6 +25,8 @@ class TestApiMetrics:
             "errors": 0,
             "retries": 0,
             "auth_refreshes": 0,
+            "blocks": 0,
+            "blocks_by_state": {},
         }
 
     def test_increment_counters(self):
@@ -47,7 +49,20 @@ class TestApiMetrics:
         m = _ApiMetrics()
         stats = m.get_stats()
         assert isinstance(stats, dict)
-        assert set(stats.keys()) == {"total_requests", "success", "errors", "retries", "auth_refreshes"}
+        assert set(stats.keys()) == {
+            "total_requests", "success", "errors", "retries", "auth_refreshes",
+            "blocks", "blocks_by_state",
+        }
+
+    def test_record_block_increments_total_and_per_state(self):
+        from naukri_server.api import _ApiMetrics
+        m = _ApiMetrics()
+        m.record_block("soft_block")
+        m.record_block("soft_block")
+        m.record_block("captcha")
+        stats = m.get_stats()
+        assert stats["blocks"] == 3
+        assert stats["blocks_by_state"] == {"soft_block": 2, "captcha": 1}
 
 
 # =====================================================================

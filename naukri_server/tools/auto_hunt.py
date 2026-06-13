@@ -63,6 +63,15 @@ async def naukri_auto_hunt(
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
 
+    # FAIL-CLOSED: halt auto-hunt when the kill-switch is tripped. Auto-hunt
+    # drives search traffic and feeds the apply loop; both must stop on a block.
+    from naukri_server import kill_switch
+    try:
+        kill_switch.guard()
+    except kill_switch.KillSwitchTrippedError as e:
+        return {"status": "halted", "message": str(e),
+                "error_code": "KILL_SWITCH_TRIPPED", "block_kind": e.block_kind}
+
     async def _do_work() -> dict:
         from naukri_server.tools.search import naukri_search_jobs
         from naukri_server.tools.profile import get_cached_profile

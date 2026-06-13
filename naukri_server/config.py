@@ -204,16 +204,41 @@ BATCH_APPLY_DEFAULT_DELAY_MS = 500  # Delay between batch apply requests
 MAX_BULK_JOBS = 50  # Max jobs to score in bulk operations
 
 # Apply throttling / anti-detection cadence.
-# A constant request cadence is itself a bot tell, so the apply path is both
-# rate-limited (token bucket) AND jittered. These are conservative defaults;
+# DECISION: stealth > throughput. A constant/burst request cadence is itself a
+# bot tell, so the apply path is rate-limited (token bucket), serial (no
+# concurrent applies — concurrency is an automation tell), AND paced with
+# human-like think-time between applications. These are conservative defaults;
 # override via env. APPLY_RATE_MAX_CALLS within APPLY_RATE_PERIOD_SECONDS caps
-# sustained throughput; APPLY_JITTER_* randomizes the gap between submissions.
+# sustained throughput; APPLY_JITTER_* randomizes per-action gaps.
 APPLY_RATE_MAX_CALLS = int(os.environ.get("NAUKRI_APPLY_RATE_MAX_CALLS", "12"))
 APPLY_RATE_PERIOD_SECONDS = float(os.environ.get("NAUKRI_APPLY_RATE_PERIOD_SECONDS", "60"))
 # Extra random delay (seconds) added to the configured batch delay between
 # submissions so the cadence is non-constant. min must be <= max.
 APPLY_JITTER_MIN_SECONDS = float(os.environ.get("NAUKRI_APPLY_JITTER_MIN_SECONDS", "0.4"))
 APPLY_JITTER_MAX_SECONDS = float(os.environ.get("NAUKRI_APPLY_JITTER_MAX_SECONDS", "1.5"))
+
+# Verify-after-apply read-back. When True, after an apply POST reports success
+# we re-read the applied-jobs history (APPLIED_JOBS_API) and confirm the job
+# actually registered before recording a confirmed success — a soft block can
+# return a success-shaped body that didn't really apply. Off by default: it's an
+# extra API call per apply (a throughput/stealth cost), and a failed read-back
+# only DOWNGRADES to "applied_unverified" (never a false failure), so it's opt-in
+# via env NAUKRI_VERIFY_APPLY_READBACK=1.
+VERIFY_APPLY_READBACK = (
+    os.environ.get("NAUKRI_VERIFY_APPLY_READBACK", "").strip() in ("1", "true", "True")
+)
+
+# Human-like inter-application "think time" (seconds). A real person reads a job,
+# decides, and fills the form — the gap between applications is NOT a fixed
+# 500ms; it varies widely. We model it as a log-normal-ish distribution (a few
+# seconds typical, occasionally much longer) sampled per application, bounded by
+# [MIN, MAX]. This REPLACES the old fixed delay_ms as the default cadence.
+APPLY_THINK_TIME_MIN_SECONDS = float(os.environ.get("NAUKRI_APPLY_THINK_MIN_SECONDS", "3.0"))
+APPLY_THINK_TIME_MAX_SECONDS = float(os.environ.get("NAUKRI_APPLY_THINK_MAX_SECONDS", "20.0"))
+# Median (geometric centre) of the think-time distribution.
+APPLY_THINK_TIME_MEDIAN_SECONDS = float(os.environ.get("NAUKRI_APPLY_THINK_MEDIAN_SECONDS", "7.0"))
+# Spread (sigma of the underlying normal in log-space) — higher = more variance.
+APPLY_THINK_TIME_SIGMA = float(os.environ.get("NAUKRI_APPLY_THINK_SIGMA", "0.6"))
 
 # Cache TTLs (seconds)
 PROFILE_CACHE_TTL = 30  # Profile + dashboard cache TTL
@@ -257,6 +282,17 @@ INTERCEPT_WAIT_TIMEOUT = 10         # Wait for API response intercept
 API_MAX_RETRIES = 2                 # Max retries for retriable HTTP status codes
 API_BACKOFF_BASE = 1.0              # Base delay (seconds) for exponential backoff
 API_MAX_BACKOFF_SECONDS = 8         # Cap on backoff delay
+
+# Block-state classifier (naukri_server/block_state.py).
+# When False (default) the classifier runs in LOG-ONLY mode: every response is
+# classified and non-healthy verdicts are logged + counted (api_metrics.blocks),
+# but the verdict does NOT change request handling — so we can observe its
+# accuracy on real traffic before it gates anything. Flip to True (env
+# NAUKRI_BLOCK_CLASSIFIER_ENFORCE=1) once validated to let soft-block/captcha
+# verdicts feed the kill-switch and raise tagged errors.
+BLOCK_STATE_CLASSIFIER_ENFORCE = (
+    os.environ.get("NAUKRI_BLOCK_CLASSIFIER_ENFORCE", "").strip() in ("1", "true", "True")
+)
 
 # Additional operational limits
 MAX_MARK_ALL_ITERATIONS = 10        # Cap on mark-all-read loop iterations

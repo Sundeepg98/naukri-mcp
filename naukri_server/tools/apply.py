@@ -5,13 +5,17 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from naukri_server.interfaces import api_client
+from naukri_server import kill_switch
+from naukri_server.api import NaukriAPIError
 from naukri_server.cache import _cache_lock, _load_cache, _save_cache, _cache_key
 from naukri_server.config import (
     APPLY_TRAILER, APPLY_WORKFLOW_API, BATCH_APPLY_DEFAULT_DELAY_MS,
-    BATCH_APPLY_PER_JOB_TIMEOUT, BATCH_APPLY_TOTAL_TIMEOUT,
-    APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS, logger,
+    BATCH_APPLY_PER_JOB_TIMEOUT,
+    APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS, DAILY_APPLY_QUOTA,
+    APPLY_THINK_TIME_MIN_SECONDS, APPLY_THINK_TIME_MAX_SECONDS,
+    APPLY_THINK_TIME_MEDIAN_SECONDS, APPLY_THINK_TIME_SIGMA, logger,
 )
-from naukri_server.resilience import get_apply_rate_limiter, jittered_delay
+from naukri_server.resilience import get_apply_rate_limiter, jittered_delay, human_think_time
 from naukri_server.events import event_bus, ApplicationSubmitted
 from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
@@ -31,6 +35,97 @@ from naukri_server.services.apply_service import (
 # ============================================================================
 
 
+async def _daily_quota_exceeded() -> tuple[bool, int]:
+    """Return (exceeded, applied_today) against the HARD DAILY_APPLY_QUOTA.
+
+    Counts today's locally-tracked successful applications. This is a hard
+    circuit (not a string warning): once we've applied DAILY_APPLY_QUOTA times we
+    STOP, both to respect Naukri's limit and because pushing past a daily cap is
+    an easy automation tell. Best-effort: if the count can't be read we fail
+    OPEN here (return not-exceeded) so a transient DB hiccup doesn't wedge all
+    applies — the kill-switch + rate limiter remain the hard safety stops.
+    """
+    try:
+        from datetime import datetime, timezone
+        from naukri_server.database import count_daily_applied
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        applied = await count_daily_applied(today)
+        return applied >= DAILY_APPLY_QUOTA, applied
+    except Exception as exc:
+        logger.warning("Daily-quota check failed (allowing apply): %s", exc)
+        return False, 0
+
+
+async def _verify_apply_readback(job_id: str) -> Optional[bool]:
+    """Confirm an apply actually registered by reading the applied-jobs history.
+
+    Returns:
+        True  — job_id found in the recent applied-jobs history (confirmed).
+        False — history fetched OK but job_id NOT present (suspicious — the POST
+                claimed success but nothing registered, e.g. a soft block).
+        None  — couldn't verify (read failed / API unavailable); caller should
+                treat as "unverified", NOT as a failure.
+
+    Gated by config.VERIFY_APPLY_READBACK; when disabled the caller skips this.
+    """
+    from naukri_server.config import APPLIED_JOBS_API
+    if not APPLIED_JOBS_API:
+        return None
+    try:
+        # First page only — a just-submitted apply is the most recent entry.
+        params = {"pageSize": "20", "days": "1", "pageNumber": "1", "filterInfo": "2"}
+        data = await api_client.get(APPLIED_JOBS_API, params)
+    except Exception as e:
+        logger.info("Apply read-back fetch failed for %s (treating as unverified): %s", job_id, e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    details = data.get("applyDetails", []) or []
+    target = str(job_id)
+    for entry in details:
+        if not isinstance(entry, dict):
+            continue
+        eid = str(entry.get("jobId") or entry.get("job_id") or entry.get("id") or "")
+        if eid == target:
+            return True
+    return False
+
+
+async def _finalize_applied(job_id: str, *, title, company, tracking_extra,
+                            base_result: dict) -> dict:
+    """Record + return an 'applied' result, optionally verifying via read-back.
+
+    When config.VERIFY_APPLY_READBACK is on, confirm the apply actually landed
+    in the applied-jobs history. A failed/absent read-back DOWNGRADES the status
+    to 'applied_unverified' and tags ``verified`` — it is never turned into a
+    failure (the POST itself reported success). When verification is off, behaves
+    exactly as before (status='applied').
+    """
+    from naukri_server.config import VERIFY_APPLY_READBACK
+    status = "applied"
+    verified: Optional[bool] = None
+    if VERIFY_APPLY_READBACK:
+        verified = await _verify_apply_readback(job_id)
+        if verified is False:
+            status = "applied_unverified"
+            logger.warning("Apply to %s reported success but was NOT found on read-back "
+                           "— marking applied_unverified", job_id)
+
+    # Always record as "applied" in tracking — the POST reported success; an
+    # unverified read-back is a confidence flag (in extra), not a different
+    # application state, so dedup/quota counting stays correct.
+    await record_application(job_id, title=title, company=company, status="applied",
+                             extra={**(tracking_extra or {}),
+                                    **({"verified": verified} if verified is not None else {})})
+    await event_bus.emit(ApplicationSubmitted(
+        job_id=job_id, company=company or "", title=title or "",
+    ))
+    result = {**base_result, "status": status, "job_id": job_id}
+    if verified is not None:
+        result["verified"] = verified
+    return result
+
+
 async def _apply_single(job_id: str, answers: Optional[dict] = None,
                          title: Optional[str] = None, company: Optional[str] = None,
                          tracking_extra: Optional[dict] = None) -> dict:
@@ -41,6 +136,35 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
     if answers is None:
         answers = {}
     job_id = _extract_job_id(job_id)
+
+    # FAIL-CLOSED: if the global kill-switch is tripped (Akamai block / soft
+    # lockout detected), do NOT submit — halt immediately. Surfacing this as a
+    # halted status (not a generic error) lets batch/agent callers stop the run.
+    try:
+        kill_switch.guard()
+    except kill_switch.KillSwitchTrippedError as e:
+        await record_application(job_id, title=title, company=company,
+                                 status="error",
+                                 extra={"message": str(e), "halted": True, **(tracking_extra or {})})
+        return {"status": "halted", "job_id": job_id, "message": str(e),
+                "error_code": "KILL_SWITCH_TRIPPED", "block_kind": e.block_kind}
+
+    # HARD daily-quota circuit — stop applying once the daily cap is reached
+    # (previously only a non-blocking string "warning"). Pushing past the daily
+    # limit is both a policy breach and an automation tell.
+    exceeded, applied_today = await _daily_quota_exceeded()
+    if exceeded:
+        logger.warning("Daily apply quota reached (%d/%d) — refusing apply to %s",
+                       applied_today, DAILY_APPLY_QUOTA, job_id)
+        return {
+            "status": "quota_reached",
+            "job_id": job_id,
+            "message": f"Daily apply quota reached ({applied_today}/{DAILY_APPLY_QUOTA}). "
+                       "Applications halted until tomorrow.",
+            "error_code": "DAILY_QUOTA_REACHED",
+            "daily_applied": applied_today,
+            "daily_quota": DAILY_APPLY_QUOTA,
+        }
 
     try:
         # Throttle every apply (single AND batch route through here) so we never
@@ -93,16 +217,10 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     cache = _load_cache()
                     _cache_answers(questionnaire, answers, cache)
                     _save_cache(cache)
-            await record_application(job_id, title=title, company=company, status="applied",
-                                     extra={**(tracking_extra or {})})
-            await event_bus.emit(ApplicationSubmitted(
-                job_id=job_id, company=company or "", title=title or "",
-            ))
-            return {
-                "status": "applied",
-                "job_id": job_id,
-                "daily_applied": data.get("quotaDetails", {}).get("dailyApplied"),
-            }
+            return await _finalize_applied(
+                job_id, title=title, company=company, tracking_extra=tracking_extra,
+                base_result={"daily_applied": data.get("quotaDetails", {}).get("dailyApplied")},
+            )
 
         if questionnaire:
             pending = []
@@ -156,17 +274,13 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                 )
                 jobs2 = data2.get("jobs", [])
                 if jobs2 and jobs2[0].get("status") == 200:
-                    await record_application(job_id, title=title, company=company, status="applied",
-                                             extra={**(tracking_extra or {})})
-                    await event_bus.emit(ApplicationSubmitted(
-                        job_id=job_id, company=company or "", title=title or "",
-                    ))
-                    return {
-                        "status": "applied",
-                        "job_id": job_id,
-                        "questions_answered": len(auto_answers),
-                        "daily_applied": data2.get("quotaDetails", {}).get("dailyApplied"),
-                    }
+                    return await _finalize_applied(
+                        job_id, title=title, company=company, tracking_extra=tracking_extra,
+                        base_result={
+                            "questions_answered": len(auto_answers),
+                            "daily_applied": data2.get("quotaDetails", {}).get("dailyApplied"),
+                        },
+                    )
 
             if pending:
                 await record_application(job_id, title=title, company=company,
@@ -190,6 +304,30 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                                  status="error",
                                  extra={"message": str(e), **(tracking_extra or {})})
         return {"status": "error", "job_id": job_id, "message": str(e), "error_code": "API_ERROR"}
+    except NaukriAPIError as e:
+        # If the apply call came back as a block (CAPTCHA/bot-check/login-wall),
+        # TRIP the kill-switch: keep hammering the apply endpoint while blocked is
+        # exactly what risks an account lockout. trip_and_halt flips the agent to
+        # dry_run + notifies the operator. Then surface a halted status.
+        block_kind = getattr(e, "block_kind", None)
+        if block_kind:
+            try:
+                await kill_switch.trip_and_halt(
+                    f"apply to {job_id} hit a block: {e.message}", block_kind=block_kind,
+                )
+            except Exception as trip_err:
+                logger.error("Failed to trip kill-switch after apply block: %s", trip_err)
+            await record_application(job_id, title=title, company=company,
+                                     status="error",
+                                     extra={"message": str(e), "halted": True,
+                                            "block_kind": block_kind, **(tracking_extra or {})})
+            return {"status": "halted", "job_id": job_id, "message": str(e),
+                    "error_code": "KILL_SWITCH_TRIPPED", "block_kind": block_kind}
+        await record_application(job_id, title=title, company=company,
+                                 status="error",
+                                 extra={"message": f"{type(e).__name__}: {e!r}", **(tracking_extra or {})})
+        return {"status": "error", "job_id": job_id, "message": f"{type(e).__name__}: {e!r}",
+                "error_code": "API_ERROR", "http_status": e.status}
     except Exception as e:
         await record_application(job_id, title=title, company=company,
                                  status="error",
@@ -264,12 +402,19 @@ async def naukri_batch_apply(
     max_concurrent: int = 3,
     ctx: Context | None = None,
 ) -> dict:
-    """Search and apply to multiple jobs with rate limiting.
+    """Search and apply to multiple jobs, SERIALLY, at a human-like pace.
 
-    Searches for jobs, filters out already-applied ones, then applies to
-    remaining jobs with controlled concurrency and delay between submissions.
-    Screening questions are auto-answered from the cache or the provided
-    answers dict.
+    Searches for jobs, filters out already-applied ones, then applies to the
+    remaining jobs ONE AT A TIME with a randomized human-like think-time between
+    applications. Screening questions are auto-answered from the cache or the
+    provided answers dict.
+
+    DECISION: stealth > throughput. Concurrent applies were removed — submitting
+    several applications in parallel is an automation tell no human produces; the
+    ``max_concurrent`` argument is now DEPRECATED and ignored (kept only so
+    existing callers don't break). Cadence is paced by a log-normal think-time,
+    not a fixed delay, so ``delay_ms`` is likewise deprecated (used only as a
+    floor if larger than the sampled think-time).
 
     For applying to a single specific job, use naukri_apply instead.
 
@@ -287,10 +432,12 @@ async def naukri_batch_apply(
         limit: Max jobs to apply to (default 5, max 20)
         answers: Pre-filled answers for common screening questions.
                  Keys are question text substrings: {"current ctc": "16", "notice period": "15 days"}
-        delay_ms: Delay in milliseconds between each application submission (default 500, min 0).
-                  Helps avoid triggering Naukri rate limits.
-        max_concurrent: Maximum number of parallel applications at a time (default 3, min 1).
-                        Higher values are faster but risk rate-limit blocks.
+        delay_ms: DEPRECATED. Applies are paced by a randomized human-like
+                  think-time; this is only used as a minimum floor (ms) if it
+                  exceeds the sampled think-time. Default 500.
+        max_concurrent: DEPRECATED and IGNORED — applies are always serial now
+                        (concurrent apply is an automation tell). Kept for
+                        backward compatibility only.
 
     Returns:
         - {status: "success"/"partial_success"/"error", searched, filtered, applied, already_applied, needs_input, errors, pending_questions: [...], results: [...]}
@@ -302,8 +449,8 @@ async def naukri_batch_apply(
     limit = validate_limit(limit, max_allowed=20)
     if delay_ms < 0:
         return {"status": "error", "message": "delay_ms must be >= 0", "error_code": "VALIDATION_ERROR"}
-    if max_concurrent < 1:
-        return {"status": "error", "message": "max_concurrent must be >= 1", "error_code": "VALIDATION_ERROR"}
+    # max_concurrent is deprecated/ignored (serial applies). A bad value is no
+    # longer an error — we simply don't use it for concurrency.
 
     # Step 1: Search
     search_result = await naukri_search_jobs(
@@ -339,61 +486,66 @@ async def naukri_batch_apply(
             "skipped_duplicates": skipped_duplicates,
         }
 
-    # Step 3: Rate-limited parallel apply (Phase 1 + auto-answer from cache)
+    # Step 3: SERIAL, human-paced apply (Phase 1 + auto-answer from cache).
+    # DECISION stealth>throughput: one application at a time (no Semaphore /
+    # gather — concurrent apply is an automation tell), with a randomized
+    # log-normal think-time between applications (NOT a fixed delay). The
+    # per-call RateLimiter inside _apply_single is the hard throughput cap; the
+    # think-time shapes a human-plausible cadence on top of it.
     total = len(to_apply)
     if ctx:
         try:
-            await ctx.info(f"Applying to {total} jobs (concurrency={max_concurrent})")
+            await ctx.info(f"Applying to {total} jobs serially (human-paced)")
         except Exception:
             pass
 
-    semaphore = asyncio.Semaphore(max_concurrent)
-    delay_seconds = delay_ms / 1000
+    # delay_ms (deprecated) acts only as a floor on the inter-application gap.
+    delay_floor_seconds = max(0.0, delay_ms / 1000)
 
-    async def _apply_with_timeout(j):
-        async with semaphore:
-            try:
-                return await asyncio.wait_for(
-                    _apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
-                                  tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
-                                                  "url": j.get("url"), "source": "batch"}),
-                    timeout=BATCH_APPLY_PER_JOB_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                return {"status": "error", "job_id": j["job_id"], "message": f"Timed out after {BATCH_APPLY_PER_JOB_TIMEOUT}s", "error_code": "TIMEOUT"}
-
-    # Stagger task launches with a JITTERED delay between each submission.
-    # A constant gap is a bot tell, so we add randomized jitter on top of the
-    # configured base delay (the per-call RateLimiter in _apply_single is the
-    # hard throughput cap; this jitter shapes the cadence between launches).
-    tasks = []
+    results: list = []
+    halted_early = False
     for i, j in enumerate(to_apply):
-        if i > 0 and (delay_seconds > 0 or APPLY_JITTER_MAX_SECONDS > 0):
-            await jittered_delay(delay_seconds, APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS)
-        tasks.append(asyncio.create_task(_apply_with_timeout(j)))
+        # Human-like think-time BEFORE each application after the first. A real
+        # person pauses to read/decide/fill; we sample that pause per-job.
+        if i > 0:
+            think = await human_think_time(
+                APPLY_THINK_TIME_MEDIAN_SECONDS, APPLY_THINK_TIME_SIGMA,
+                APPLY_THINK_TIME_MIN_SECONDS, APPLY_THINK_TIME_MAX_SECONDS,
+            )
+            # Honour the deprecated delay_ms floor + a small per-action jitter so
+            # even the floor isn't a constant.
+            if delay_floor_seconds > think:
+                await jittered_delay(delay_floor_seconds - think,
+                                     APPLY_JITTER_MIN_SECONDS, APPLY_JITTER_MAX_SECONDS)
 
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=BATCH_APPLY_TOTAL_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        logger.warning("Batch apply timed out after 120s")
-        results = []
-        for task in tasks:
-            try:
-                results.append(task.result() if task.done() else TimeoutError("Cancelled due to batch timeout"))
-            except (asyncio.CancelledError, Exception) as e:
-                results.append(e)
+        try:
+            res = await asyncio.wait_for(
+                _apply_single(j["job_id"], answers, j.get("title"), j.get("company"),
+                              tracking_extra={"salary": j.get("salary"), "location": j.get("location"),
+                                              "url": j.get("url"), "source": "batch"}),
+                timeout=BATCH_APPLY_PER_JOB_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            res = {"status": "error", "job_id": j["job_id"],
+                   "message": f"Timed out after {BATCH_APPLY_PER_JOB_TIMEOUT}s", "error_code": "TIMEOUT"}
+        results.append(res)
+
+        # FAIL-CLOSED short-circuit: if an apply was halted by the kill-switch
+        # (block detected) or hit the hard daily quota, STOP the batch now rather
+        # than firing more traffic. Remaining jobs are simply not attempted.
+        if isinstance(res, dict) and res.get("status") in ("halted", "quota_reached"):
+            halted_early = True
+            logger.warning("Batch apply stopped early after job %d/%d: %s",
+                           i + 1, total, res.get("status"))
+            break
 
     # Step 4: Collect results
     applied = 0
     needs_input = 0
     errors = 0
     already = 0
+    halted = 0
+    quota_reached = 0
     pending_questions = {}  # deduplicated: question_text -> {info, job_ids}
     per_job = []
 
@@ -438,14 +590,26 @@ async def naukri_batch_apply(
                         "affects_jobs": [],
                     }
                 pending_questions[q_key]["affects_jobs"].append(job_info["job_id"])
+        elif status == "halted":
+            halted += 1
+            entry["message"] = result.get("message")
+            entry["block_kind"] = result.get("block_kind")
+        elif status == "quota_reached":
+            quota_reached += 1
+            entry["message"] = result.get("message")
         else:
             errors += 1
             entry["message"] = result.get("message")
 
         per_job.append(entry)
 
-    # Determine final status based on outcomes
-    if applied > 0 and errors == 0 and needs_input == 0:
+    # Determine final status based on outcomes. A kill-switch halt or daily-quota
+    # stop is its own terminal status so the caller knows traffic was cut.
+    if halted > 0:
+        final_status = "halted"
+    elif quota_reached > 0 and applied == 0:
+        final_status = "quota_reached"
+    elif applied > 0 and errors == 0 and needs_input == 0:
         final_status = "success"
     elif applied > 0 and (errors > 0 or needs_input > 0):
         final_status = "partial_success"
@@ -461,14 +625,17 @@ async def naukri_batch_apply(
             await ctx.info(
                 f"Batch apply complete: {applied} applied, {already} already_applied, "
                 f"{needs_input} needs_input, {errors} errors"
+                + (f", HALTED ({halted})" if halted else "")
+                + (f", quota_reached ({quota_reached})" if quota_reached else "")
             )
         except Exception:
             pass
 
-    return {
+    result_payload = {
         "status": final_status,
         "searched": len(all_jobs),
         "filtered": len(to_apply),
+        "attempted": len(results),
         "skipped_duplicates": skipped_duplicates,
         "applied": applied,
         "already_applied": already,
@@ -477,6 +644,12 @@ async def naukri_batch_apply(
         "pending_questions": list(pending_questions.values()),
         "results": per_job,
     }
+    if halted or quota_reached or halted_early:
+        result_payload["halted_early"] = halted_early
+        result_payload["halted"] = halted
+        result_payload["quota_reached"] = quota_reached
+        result_payload["not_attempted"] = max(0, len(to_apply) - len(results))
+    return result_payload
 
 
 _batch_apply = naukri_batch_apply
