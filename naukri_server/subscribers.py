@@ -27,6 +27,13 @@ from naukri_server.events import (
 )
 from naukri_server.framework.registry import subscriber
 
+# Import the healing package so router.py's @subscriber(EndpointDriftDetected)
+# decorator runs and is present in the registry BEFORE register_all() (at the
+# bottom of this module) calls wire_subscribers(event_bus). Without this import
+# the drift→heal subscriber would never be wired and EndpointDriftDetected would
+# have zero subscribers.
+import naukri_server.healing as _healing  # noqa: F401, E402
+
 logger = logging.getLogger(__name__)
 
 

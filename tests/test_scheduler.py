@@ -258,13 +258,19 @@ class TestTaskDefinitions:
     """Tests for scheduler_tasks.py — task registration and definitions."""
 
     def test_register_all_registers_9_tasks(self):
-        """register_all puts 9 tasks into the scheduler (8 original + agent_cycle)."""
+        """register_all puts 10 tasks into the scheduler.
+
+        History: 8 original + agent_cycle = 9, then + t2_verify_pending = 10
+        when the self-healing pipeline was wired (the verify task drives the
+        T2 snapshot+revert safety net).
+        """
         from naukri_server.scheduler_tasks import register_all
 
         sched = TaskScheduler()
         register_all(sched)
 
-        assert len(sched._tasks) == 9
+        assert len(sched._tasks) == 10
+        assert "t2_verify_pending" in sched._tasks
 
     def test_task_definitions_have_valid_intervals(self):
         """All task definitions should have interval_seconds > 0."""

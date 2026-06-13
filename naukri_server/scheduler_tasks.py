@@ -140,6 +140,70 @@ async def _task_agent_cycle() -> dict:
     return await run_agent_cycle()
 
 
+# Interval for T2 verification. Must be <= VERIFY_DELAY_SECONDS (600s) so a fix
+# that becomes due is picked up promptly rather than sitting an extra cycle.
+INTERVAL_5MIN = 300
+
+
+async def _revalidate_endpoint(constant_name: str) -> bool:
+    """Return True if `constant_name`'s endpoint is currently healthy (no drift).
+
+    Used by the t2_verify_pending task to decide whether a provisional T2
+    auto-fix should be confirmed or reverted. Conservative on every failure
+    path: if we can't positively confirm health (config missing, fetch fails,
+    no snapshot to compare, or any exception) we return False so the fix is
+    REVERTED rather than trusted. A bad fix being reverted is always safer than
+    a bad fix being kept.
+    """
+    try:
+        from naukri_server import config as _cfg
+        from naukri_server.interfaces import api_client
+        from naukri_server.probes.drift_detector import detector as _detector
+
+        try:
+            path = getattr(_cfg, constant_name)
+        except AttributeError:
+            logger.warning("revalidate: config constant %s missing", constant_name)
+            return False
+
+        if not _detector.has_snapshot(path):
+            # No baseline to compare against — we can't prove the fix worked.
+            logger.info("revalidate: no snapshot for %s — cannot confirm, reverting", path)
+            return False
+
+        response = await api_client.get(path)
+        report = _detector.check_drift(path, response)
+        return report is None  # None == schemas match == healthy
+    except Exception as exc:  # noqa: BLE001 — any failure ⇒ treat as unhealthy
+        logger.warning("revalidate of %s raised: %s — treating as unhealthy", constant_name, exc)
+        return False
+
+
+@scheduled_task(
+    name="t2_verify_pending",
+    interval_seconds=INTERVAL_5MIN,
+    description="Verify pending T2 auto-fixes; revert any that still drift",
+    timeout_seconds=120,
+)
+async def _task_t2_verify_pending() -> dict:
+    """Verify due T2 auto-fixes and revert the ones that didn't fix the drift.
+
+    This is the scheduler half of the T2 snapshot+revert safety contract:
+    apply_t2_fix records a pending row, and this task (running every 5 min)
+    re-validates each endpoint once its verify_at has passed — confirming the
+    fix if the endpoint is healthy, or git-reverting it (and disabling the
+    healer on revert failure) otherwise. Without this task a bad T2 fix would
+    sit `pending` and unverified forever.
+
+    Repo root is the package root (the dir containing naukri_server/), which is
+    the live git checkout the healer commits into.
+    """
+    from naukri_server.config import _PACKAGE_ROOT
+    from naukri_server.healing import t2_autofix
+    counts = await t2_autofix.verify_due_pending_rows(_PACKAGE_ROOT, _revalidate_endpoint)
+    return {"status": "completed", **counts}
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------

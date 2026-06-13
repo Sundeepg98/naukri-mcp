@@ -80,10 +80,13 @@ def test_scheduled_task_decorator_returns_original_function():
 
 
 def test_subscriber_count_unchanged_36():
-    """After importing subscribers.py, registry should have 38 subscribers from naukri_server.events.
+    """After importing subscribers.py, registry should have 39 subscribers from naukri_server.events.
 
-    Count was 36; bumped to 38 when InboxMessageRead and InboxInviteAccepted
-    subscribers were added to close the CQRS gap for inbox events.
+    Count history: 36 → 38 when InboxMessageRead and InboxInviteAccepted
+    subscribers were added to close the CQRS gap for inbox events → 39 when the
+    self-healing pipeline was wired (healing/router.py adds the sole subscriber
+    of EndpointDriftDetected, registered via subscribers.py importing the
+    healing package before wire_subscribers).
     """
     import naukri_server.subscribers  # triggers decorators
     import naukri_server.events as ev
@@ -92,17 +95,22 @@ def test_subscriber_count_unchanged_36():
     # (other tests may register pytest fixtures with synthetic event types)
     naukri_subs = [it for it in registry.by_kind("subscriber")
                    if hasattr(it.key, "__module__") and it.key.__module__ == "naukri_server.events"]
-    assert len(naukri_subs) == 38
+    assert len(naukri_subs) == 39
 
 
 def test_scheduled_task_count_unchanged_9():
-    """After importing scheduler_tasks.py, registry should have 9 production scheduled tasks."""
+    """After importing scheduler_tasks.py, registry should have 10 production scheduled tasks.
+
+    Count was 9; bumped to 10 when the self-healing pipeline was wired and the
+    `t2_verify_pending` task was added — it drives the T2 snapshot+revert
+    verification (without it a bad T2 fix would sit pending forever).
+    """
     import naukri_server.scheduler_tasks  # triggers decorators
     from naukri_server.framework.registry import registry
     # Filter to tasks defined in scheduler_tasks (test fixtures may register elsewhere).
     prod_tasks = [it for it in registry.by_kind("scheduled_task")
                   if it.fn.__module__ == "naukri_server.scheduler_tasks"]
-    assert len(prod_tasks) == 9
+    assert len(prod_tasks) == 10
 
 
 def test_no_consolidated_dispatchers_use_registry():

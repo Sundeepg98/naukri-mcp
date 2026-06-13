@@ -35,14 +35,62 @@ from __future__ import annotations
 
 import ast
 import logging
+import py_compile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from naukri_server.events import event_bus, AutoFixApplied
 from naukri_server.healing import circuit, snapshot, tier_registry
 
 logger = logging.getLogger(__name__)
+
+
+def smoke_check_file(target: Path) -> tuple[bool, str]:
+    """Post-commit smoke check on an auto-fixed file.
+
+    Two cheap, offline checks (no live browser, no network, no import side
+    effects on the running process):
+
+      1. ast.parse the file on disk — catches a corrupt/partial write.
+      2. py_compile.compile to a throwaway temp file — catches anything the
+         CPython compiler rejects that ast.parse alone might let through.
+
+    Returns (ok, reason). reason is "" on success, else the failure detail.
+    This NEVER imports the module into the live interpreter (an auto-fixed
+    module could have import-time side effects); compilation is sufficient to
+    prove the edit is syntactically loadable, which is the failure mode an AST
+    edit can realistically introduce.
+    """
+    try:
+        source = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        return False, f"could not re-read file after commit: {exc}"
+
+    try:
+        ast.parse(source)
+    except SyntaxError as exc:
+        return False, f"ast.parse failed post-commit: {exc}"
+
+    # py_compile to a temp output so we don't litter __pycache__ or mutate state.
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pyc", delete=False) as tmp:
+            tmp_out = tmp.name
+        try:
+            py_compile.compile(str(target), cfile=tmp_out, doraise=True)
+        finally:
+            try:
+                Path(tmp_out).unlink()
+            except OSError:
+                pass
+    except py_compile.PyCompileError as exc:
+        return False, f"py_compile failed post-commit: {exc}"
+    except OSError as exc:
+        # Compiler infra problem (e.g. temp dir) — be conservative, treat as fail
+        # so the caller reverts rather than trusting an unverified commit.
+        return False, f"smoke-check compile infrastructure error: {exc}"
+
+    return True, ""
 
 
 @dataclass(frozen=True)
@@ -317,6 +365,39 @@ async def apply_t1_fix(
 
     new_sha = snapshot.head_sha(repo_root)
     rel_path = str(target.relative_to(repo_root)).replace("\\", "/")
+
+    # 6b. SAFETY: post-commit smoke check. Even though new_source was ast.parse-
+    # validated before writing, a corrupt write or a compiler-level rejection
+    # would leave a broken module committed. Verify the file on disk compiles;
+    # if not, AUTO-REVERT the commit so no unverified/broken auto-fix survives.
+    # This gives T1 the same "an auto-fix that doesn't verify is reverted"
+    # guarantee that T2 gets via the scheduler — but synchronously, in-line.
+    ok, reason = smoke_check_file(target)
+    if not ok:
+        logger.warning("T1 smoke check FAILED for %s (%s) — auto-reverting %s",
+                       constant_name, reason, new_sha)
+        revert_result = snapshot.revert_commit(repo_root, new_sha or "HEAD")
+        if not revert_result.ok:
+            # Worst case: bad fix committed AND revert failed. Disable the healer
+            # so further drift doesn't pile up more bad commits; user must act.
+            circuit.disable(
+                f"T1 smoke check failed for {constant_name} and git revert also "
+                f"failed: {revert_result.stderr.strip()}"
+            )
+            return AutoFixOutcome(
+                applied=False,
+                commit_sha=new_sha,
+                file_path=rel_path,
+                error=(
+                    f"smoke check failed ({reason}) AND revert failed "
+                    f"({revert_result.stderr.strip()}) — healer disabled"
+                ),
+            )
+        return AutoFixOutcome(
+            applied=False,
+            file_path=rel_path,
+            error=f"smoke check failed post-commit ({reason}) — auto-reverted",
+        )
 
     # 7. Emit success event (skip in tests that want to assert manually)
     if not skip_emit:

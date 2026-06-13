@@ -117,6 +117,27 @@ async def api_validator_probe() -> ProbeResult:
                 worst_rank = rank
                 worst_severity = report.severity
 
+            # Emit the drift event so the healing router can react. We emit the
+            # RAW detector output (changed_fields as {dotted_path: change_desc})
+            # and intentionally do NOT synthesise fix parameters here — the
+            # detector knows *what* changed, not the correct remediation. The
+            # router treats a param-less event as detect→notify (the safe
+            # default); it will only auto-fix if an enrichment layer supplies
+            # explicit, validated fix parameters. Wrapped so a bus failure never
+            # downgrades the probe's own status.
+            try:
+                from naukri_server.events import event_bus, EndpointDriftDetected
+                await event_bus.emit(EndpointDriftDetected(
+                    constant_name=const_name,
+                    url=report.url,
+                    severity=report.severity,
+                    drift_type="field",  # schema/field drift; url moves arrive via discovery
+                    changed_fields=dict(report.changed_fields),
+                    snapshot_age_days=report.snapshot_age_days,
+                ))
+            except Exception:  # noqa: BLE001 — never let emit break the probe
+                pass
+
     metadata: dict[str, Any] = {
         "endpoints_total": endpoints_total,
         "endpoints_ok": endpoints_ok,
