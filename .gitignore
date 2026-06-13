@@ -1,6 +1,9 @@
 # Browser profile (cookies, session data)
 chrome-profile/
 
+# Cross-process profile singleton lock (per-machine runtime PID file)
+chrome-profile.lock
+
 # Python
 __pycache__/
 *.pyc

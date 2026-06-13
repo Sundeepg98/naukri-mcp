@@ -14,6 +14,7 @@ from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
 from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT, logger
+from naukri_server import profile_lock
 
 
 class TokenManager:
@@ -415,8 +416,18 @@ class NaukriBrowser:
         self.token_manager = TokenManager()
         self.page_pool: Optional[PagePool] = None
         self.available = False
+        self._holds_profile_lock = False
 
     async def start(self):
+        # Cross-process guard: refuse to launch a SECOND instance against the
+        # same persistent Chrome profile. Two instances on one user-data-dir
+        # corrupt the profile — the highest-cost failure, since the profile is
+        # the anti-detection moat. Re-entrant for our own PID (watchdog
+        # restart) and reclaims stale locks from crashed instances.
+        # ProfileLockedError propagates so the caller knows a live instance
+        # already owns the profile — we do NOT touch it in that case.
+        profile_lock.acquire()
+        self._holds_profile_lock = True
         try:
             self.pw = await async_playwright().start()
             self.context = await self.pw.chromium.launch_persistent_context(
@@ -477,6 +488,12 @@ class NaukriBrowser:
             self.page_pool = None
             self.context = None
             self.pw = None
+            # Startup failed — we never actually held a live persistent context,
+            # so release the profile lock to avoid a self-inflicted false
+            # "already in use" on the next start attempt (e.g. watchdog retry).
+            if self._holds_profile_lock:
+                profile_lock.release()
+                self._holds_profile_lock = False
 
     async def stop(self):
         from naukri_server.api import close_api_session
@@ -487,6 +504,11 @@ class NaukriBrowser:
             await self.context.close()
         if self.pw:
             await self.pw.stop()
+        # Release the cross-process profile lock so another instance (or a
+        # watchdog restart in this process) can re-acquire it cleanly.
+        if self._holds_profile_lock:
+            profile_lock.release()
+            self._holds_profile_lock = False
         logger.info("Browser stopped")
 
     async def get_profile_name(self) -> str:
