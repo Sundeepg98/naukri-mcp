@@ -58,9 +58,12 @@ def _make_token_mgr(tokens):
     """TokenManager mock whose ensure_token() yields successive values, then
     sticks on the last one (so re-entrant attempts don't exhaust the iterator).
 
-    Passing the same value repeatedly models a still-stale token (forces the
-    invalidate + browser-refresh branch); a differing 2nd value models another
-    caller having refreshed it concurrently.
+    Passing the same value repeatedly models a still-stale token; a differing
+    2nd value models another caller having refreshed it concurrently. The api
+    layer now routes every refresh through ``refresh_via_pool`` (Fix B — one
+    shared lock + page checkout inside the lock), so that is the method tests
+    assert against; ``refresh`` (the page-taking lower-level call) and
+    ``invalidate`` remain on the mock for completeness.
     """
     seq = list(tokens)
 
@@ -72,6 +75,7 @@ def _make_token_mgr(tokens):
     mgr.get_cookies = MagicMock(return_value="cookie=val")
     mgr.invalidate = MagicMock()
     mgr.refresh = AsyncMock()
+    mgr.refresh_via_pool = AsyncMock()
     return mgr
 
 
@@ -112,8 +116,7 @@ class TestBotCheckClassification:
         resp_406 = _make_mock_response(406, text="Akamai blocked")
         resp_200 = _make_mock_response(200, json_data={"ok": True})
         session = _make_session_with_responses([resp_406, resp_200])
-        # Same token both times -> forces invalidate + browser refresh branch.
-        token_mgr = _make_token_mgr(["stale", "stale"])
+        token_mgr = _make_token_mgr(["stale", "fresh"])
 
         browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
         with session_patch, browser_patch as mock_browser, sleep_patch as mock_sleep:
@@ -122,9 +125,12 @@ class TestBotCheckClassification:
             result = await _api_request("GET", "/test-path")
 
         assert result == {"ok": True}
-        # Token was invalidated and a browser refresh attempted (re-auth, not hammer).
-        token_mgr.invalidate.assert_called_once()
-        token_mgr.refresh.assert_awaited_once()
+        # Refresh went through the UNIFIED, deadlock-free path (Fix B): one
+        # shared lock + page checkout owned inside refresh_via_pool.
+        token_mgr.refresh_via_pool.assert_awaited_once()
+        # api.py no longer holds + acquires a 2nd page itself; it does not call
+        # page_pool.acquire directly (that now happens inside refresh_via_pool).
+        mock_browser.page_pool.acquire.assert_not_called()
         # Exactly one cooldown sleep of the configured duration.
         mock_sleep.assert_awaited_once_with(BOT_CHECK_COOLDOWN_SECONDS)
 
@@ -207,16 +213,21 @@ class TestBotCheckClassification:
         assert result["http_status"] == 406
 
     @pytest.mark.asyncio
-    async def test_406_concurrent_refresh_skips_browser_refresh(self):
-        """If another caller already refreshed the token (ensure_token returns a
-        NEW value), we skip invalidate/browser-refresh but still cool down +
-        retry once — the second response (200) is returned."""
+    async def test_406_refresh_goes_through_single_unified_lock_path(self):
+        """The bot-check refresh is delegated to TokenManager.refresh_via_pool —
+        the SINGLE serialization point (Fix B) — rather than api.py taking its
+        own lock and separately checking out a pool page. Cooldown + one retry
+        still happen, and the 200 is returned.
+
+        (The "another caller already refreshed → skip the browser round-trip"
+        optimization now lives inside refresh_via_pool's double-check; it is
+        unit-tested directly in tests/test_browser_deep.py.)
+        """
         from naukri_server.api import _api_request
 
         resp_406 = _make_mock_response(406, text="blocked")
         resp_200 = _make_mock_response(200, json_data={"ok": 1})
         session = _make_session_with_responses([resp_406, resp_200])
-        # Different second token -> "someone else refreshed" branch.
         token_mgr = _make_token_mgr(["stale", "fresh-by-other"])
 
         browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
@@ -226,9 +237,39 @@ class TestBotCheckClassification:
             result = await _api_request("GET", "/test-path")
 
         assert result == {"ok": 1}
-        token_mgr.invalidate.assert_not_called()
-        token_mgr.refresh.assert_not_awaited()
+        # Exactly one refresh attempt, via the unified path; api.py itself never
+        # checks out a pool page (no 2nd-page-while-locked deadlock surface).
+        token_mgr.refresh_via_pool.assert_awaited_once()
+        mock_browser.page_pool.acquire.assert_not_called()
         mock_sleep.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_406_auth_expiry_during_refresh_raises_bot_check_error(self):
+        """If the refresh during a bot-check discovers the session is truly gone
+        (AuthExpiredError — login wall / checkpoint), surface a clear
+        NaukriBotCheckError (re-auth) and trip the circuit — no retry loop."""
+        import naukri_server.api as api_module
+        from naukri_server.api import _api_request, NaukriBotCheckError
+        from naukri_server.browser import AuthExpiredError
+
+        resp_406 = _make_mock_response(406, text="blocked")
+        session = _make_session_with_responses([resp_406])
+        token_mgr = _make_token_mgr(["stale", "stale"])
+        token_mgr.refresh_via_pool = AsyncMock(side_effect=AuthExpiredError("login wall"))
+
+        before = api_module._api_circuit._failures
+        browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
+        with session_patch, browser_patch as mock_browser, sleep_patch as mock_sleep:
+            mock_browser.token_manager = token_mgr
+            mock_browser.page_pool.acquire = MagicMock(return_value=page_ctx)
+            with pytest.raises(NaukriBotCheckError) as exc_info:
+                await _api_request("GET", "/test-path")
+
+        assert exc_info.value.code == "BOT_CHECK"
+        assert "expired" in str(exc_info.value).lower()
+        # Auth expiry is terminal here — no cooldown-then-retry, and the circuit trips.
+        mock_sleep.assert_not_awaited()
+        assert api_module._api_circuit._failures > before
 
     @pytest.mark.asyncio
     async def test_retriable_5xx_still_hammers_and_recovers(self):
@@ -248,6 +289,91 @@ class TestBotCheckClassification:
 
         assert result == {"recovered": True}
         assert session.request.call_count == 2
+
+
+# ===========================================================================
+# Fix B (api 401 path) — unified single-lock refresh, no 2nd-page deadlock
+# ===========================================================================
+
+class Test401RefreshUnifiedLock:
+    """The 401 refresh path delegates to TokenManager.refresh_via_pool (the one
+    shared lock + page-checkout-inside-the-lock), instead of api.py taking its
+    own module lock and SEPARATELY checking out a pool page. This removes both
+    the refresh storm (two locks) and the 2nd-page-while-locked deadlock."""
+
+    @pytest.mark.asyncio
+    async def test_401_then_200_via_unified_refresh(self):
+        """401 → refresh_via_pool → retry → 200. api.py never directly acquires
+        a pool page (deadlock surface eliminated)."""
+        from naukri_server.api import _api_request
+
+        resp_401 = _make_mock_response(401, text="Unauthorized")
+        resp_200 = _make_mock_response(200, json_data={"ok": True})
+        session = _make_session_with_responses([resp_401, resp_200])
+        token_mgr = _make_token_mgr(["stale", "fresh"])
+
+        browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
+        with session_patch, browser_patch as mock_browser, sleep_patch:
+            mock_browser.token_manager = token_mgr
+            mock_browser.page_pool.acquire = MagicMock(return_value=page_ctx)
+            result = await _api_request("GET", "/test-path")
+
+        assert result == {"ok": True}
+        token_mgr.refresh_via_pool.assert_awaited_once()
+        # The single page checkout is owned by refresh_via_pool, NOT api.py.
+        mock_browser.page_pool.acquire.assert_not_called()
+        assert session.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_401_refresh_failure_raises_auth_error_no_loop(self):
+        """If refresh_via_pool fails generically after a 401, surface a 401
+        NaukriAPIError telling the user to re-auth — not an infinite retry."""
+        from naukri_server.api import _api_request, NaukriAPIError
+
+        resp_401 = _make_mock_response(401, text="Unauthorized")
+        session = _make_session_with_responses([resp_401])
+        token_mgr = _make_token_mgr(["stale", "stale"])
+        token_mgr.refresh_via_pool = AsyncMock(side_effect=RuntimeError("reload blew up"))
+
+        browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
+        with session_patch, browser_patch as mock_browser, sleep_patch:
+            mock_browser.token_manager = token_mgr
+            mock_browser.page_pool.acquire = MagicMock(return_value=page_ctx)
+            with pytest.raises(NaukriAPIError) as exc_info:
+                await _api_request("GET", "/test-path")
+
+        assert exc_info.value.status == 401
+        assert "re-authenticate" in str(exc_info.value).lower()
+        # One original call only — refresh failed, so no retry was issued.
+        assert session.request.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_401_auth_expired_surfaces_clear_reauth(self):
+        """A 401 whose refresh discovers a dead session (AuthExpiredError) trips
+        the circuit and raises a clear 401 re-auth error (no retry)."""
+        import naukri_server.api as api_module
+        from naukri_server.api import _api_request, NaukriAPIError
+        from naukri_server.browser import AuthExpiredError
+
+        resp_401 = _make_mock_response(401, text="Unauthorized")
+        session = _make_session_with_responses([resp_401])
+        token_mgr = _make_token_mgr(["stale", "stale"])
+        token_mgr.refresh_via_pool = AsyncMock(
+            side_effect=AuthExpiredError("login wall / checkpoint")
+        )
+
+        before = api_module._api_circuit._failures
+        browser_patch, sleep_patch, session_patch, page_ctx, _ = _patch_api(session, token_mgr)
+        with session_patch, browser_patch as mock_browser, sleep_patch:
+            mock_browser.token_manager = token_mgr
+            mock_browser.page_pool.acquire = MagicMock(return_value=page_ctx)
+            with pytest.raises(NaukriAPIError) as exc_info:
+                await _api_request("GET", "/test-path")
+
+        assert exc_info.value.status == 401
+        assert "re-auth" in str(exc_info.value).lower()
+        assert api_module._api_circuit._failures > before
+        assert session.request.call_count == 1
 
 
 # ===========================================================================

@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, API_MAX_RETRIES, API_BACKOFF_BASE, API_MAX_BACKOFF_SECONDS, logger
-from naukri_server.browser import browser
+from naukri_server.browser import browser, AuthExpiredError
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
 SUCCESS_STATUSES = {200, 201, 202, 204}
@@ -30,7 +30,12 @@ BOT_CHECK_COOLDOWN_SECONDS = min(5.0, API_MAX_BACKOFF_SECONDS)
 
 # --- Global shared session (avoids per-call ClientSession creation) ---
 _session: aiohttp.ClientSession = None
-_refresh_lock = asyncio.Lock()
+# NOTE: token-refresh serialization now lives on the SINGLE TokenManager lock
+# (browser.token_manager._refresh_lock), reached via refresh_via_pool(). The old
+# module-level api lock was a SECOND, separate lock — a 401 here and a concurrent
+# ensure_token() serialized on different locks → refresh storm + a pool page
+# acquired while a lock was held → deadlock risk at MAX_TABS. Both paths now share
+# one lock and check out the pool page inside it. (Fix B)
 
 
 class _ApiMetrics:
@@ -243,24 +248,37 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                 return await resp.json()
             text = await resp.text()
 
-            # 401 — token refresh with lock to prevent parallel refresh storms
+            # 401 — token refresh. Serialized through the TokenManager's SINGLE
+            # refresh lock (Fix B): both this path and a concurrent ensure_token()
+            # now contend for the SAME lock, so a 401 and a background renewal
+            # can't both refresh (no storm). The page checkout happens INSIDE
+            # that locked path (refresh_via_pool), so we never hold the refresh
+            # lock while separately blocking on a pool page (no deadlock).
             if resp.status == 401 and _attempt == 0:
                 api_metrics.auth_refreshes += 1
                 logger.info("Token expired, refreshing and retrying...")
-                async with _refresh_lock:
-                    # Re-get token — another caller may have refreshed while we waited
-                    new_token = await browser.token_manager.ensure_token()
-                    if new_token == token:  # Still the same stale token
-                        browser.token_manager.invalidate()
-                        try:
-                            async with browser.page_pool.acquire() as refresh_page:
-                                await browser.token_manager.refresh(refresh_page)
-                        except Exception as e:
-                            logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
-                            raise NaukriAPIError(
-                                401,
-                                f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.",
-                            )
+                # Pass the rejected token as `stale_token` so refresh_via_pool
+                # de-dupes: if another caller already re-minted a DIFFERENT token
+                # while we waited for the shared lock, we reuse it instead of
+                # re-refreshing (collapses a concurrent storm to one refresh).
+                try:
+                    await browser.token_manager.refresh_via_pool(browser.page_pool, stale_token=token)
+                except AuthExpiredError as e:
+                    # Session is truly gone (login-wall / checkpoint) — surface a
+                    # clear re-auth signal and trip the circuit; do NOT retry.
+                    api_metrics.errors += 1
+                    _api_circuit.record_failure()
+                    logger.error("Token refresh after 401 hit auth expiry: %s", e)
+                    raise NaukriAPIError(
+                        401,
+                        f"Session expired and re-auth required: {e}",
+                    )
+                except Exception as e:
+                    logger.error("Token refresh failed: %s: %s", type(e).__name__, e)
+                    raise NaukriAPIError(
+                        401,
+                        f"Session expired and token refresh failed: {e}. Call naukri_login to re-authenticate.",
+                    )
                 return await _api_request(method, path, params, body,
                                           extra_headers, _attempt=1)
 
@@ -277,25 +295,31 @@ async def _api_request(method: str, path: str, params: Optional[dict] = None,
                         "Bot-check (HTTP %s) on %s — refreshing token + cooling down %.1fs before one retry",
                         resp.status, path, BOT_CHECK_COOLDOWN_SECONDS,
                     )
-                    async with _refresh_lock:
-                        # Another caller may already have refreshed while we waited.
-                        new_token = await browser.token_manager.ensure_token()
-                        if new_token == token:  # still the same stale token
-                            browser.token_manager.invalidate()
-                            try:
-                                async with browser.page_pool.acquire() as refresh_page:
-                                    await browser.token_manager.refresh(refresh_page)
-                            except Exception as e:
-                                logger.error("Token refresh after bot-check failed: %s: %s", type(e).__name__, e)
-                                api_metrics.errors += 1
-                                _api_circuit.record_failure()
-                                raise NaukriBotCheckError(
-                                    resp.status,
-                                    f"Bot-check (HTTP {resp.status}) and token refresh failed: {e}. "
-                                    "Call naukri_login to re-authenticate.",
-                                )
-                    # Cool down OUTSIDE the lock so we don't serialize all callers
-                    # on the sleep — back off the edge before the single retry.
+                    # Same unified, deadlock-free refresh path as the 401 case
+                    # (Fix B): one shared lock; the pool page is checked out
+                    # inside refresh_via_pool, never while separately holding a
+                    # lock. The stale_token arg lets its double-check skip the
+                    # browser round-trip if another caller already re-minted it.
+                    try:
+                        await browser.token_manager.refresh_via_pool(browser.page_pool, stale_token=token)
+                    except AuthExpiredError as e:
+                        logger.error("Token refresh after bot-check hit auth expiry: %s", e)
+                        api_metrics.errors += 1
+                        _api_circuit.record_failure()
+                        raise NaukriBotCheckError(
+                            resp.status,
+                            f"Bot-check (HTTP {resp.status}) and session expired: {e}",
+                        )
+                    except Exception as e:
+                        logger.error("Token refresh after bot-check failed: %s: %s", type(e).__name__, e)
+                        api_metrics.errors += 1
+                        _api_circuit.record_failure()
+                        raise NaukriBotCheckError(
+                            resp.status,
+                            f"Bot-check (HTTP {resp.status}) and token refresh failed: {e}. "
+                            "Call naukri_login to re-authenticate.",
+                        )
+                    # Cool down before the single retry — back off the edge.
                     await asyncio.sleep(BOT_CHECK_COOLDOWN_SECONDS)
                     return await _api_request(method, path, params, body,
                                               extra_headers, _attempt=_attempt + 1)

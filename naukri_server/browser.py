@@ -11,10 +11,25 @@ from pathlib import Path
 from typing import Optional
 
 from playwright.async_api import async_playwright, BrowserContext, Page
-from playwright._impl._errors import TargetClosedError
+from playwright._impl._errors import TargetClosedError, TimeoutError as PlaywrightTimeoutError
 
 from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT, logger
 from naukri_server import profile_lock
+
+
+class AuthExpiredError(Exception):
+    """Token refresh failed for an auth reason that re-trying will NOT fix:
+    the session itself is gone (Naukri served a login wall / checkpoint, or the
+    renewal navigation landed somewhere other than a logged-in page) so the
+    short-lived JWT could not be re-minted. The caller must surface a clear
+    "re-authenticate (naukri_login)" signal rather than treat it as transient.
+
+    Distinct from a *transient* failure (navigation timeout, target closed,
+    network blip) where the session may still be valid and a later retry can
+    succeed — those are re-raised as their original exception type so existing
+    backoff/retry logic still applies.
+    """
+    pass
 
 
 class TokenManager:
@@ -73,18 +88,90 @@ class TokenManager:
         """Mark token as stale. Next ensure_token() will refresh."""
         self._token = None
 
+    async def _do_refresh(self, page: Page) -> Optional[str]:
+        """Reload ``page`` and re-extract the token. Caller MUST hold ``_refresh_lock``.
+
+        Failure handling (Fix A — no silent swallow): the reload result is
+        classified rather than ignored.
+          * Navigation timeout / target-closed / connection blip → *transient*:
+            the session may still be valid, so the original exception is
+            re-raised for the caller's existing backoff/retry to handle.
+          * Navigation succeeds but no ``nauk_at`` reappears → *auth expiry /
+            login-wall / checkpoint*: re-trying won't help; raise
+            ``AuthExpiredError`` so the caller can surface "re-authenticate".
+        Both paths are LOGGED (not debug-swallowed) so a checkpoint is no longer
+        indistinguishable from a transient timeout.
+        """
+        try:
+            await page.reload(timeout=NAV_TIMEOUT)
+        except (PlaywrightTimeoutError, TargetClosedError, asyncio.TimeoutError) as e:
+            # Transient: nav didn't complete. Don't swallow — log + re-raise
+            # so the API layer's retry/backoff can act on it.
+            logger.warning(
+                "Token refresh reload failed (transient %s) — session may still be valid, "
+                "surfacing for retry", type(e).__name__,
+            )
+            raise
+        except Exception as e:
+            logger.warning("Token refresh reload failed (transient %s): %s", type(e).__name__, e)
+            raise
+        await self.extract()
+        if not self._token:
+            # Reached a page but no auth cookie reappeared → the session is
+            # gone (login wall / checkpoint), not a transient timeout.
+            logger.error(
+                "Token refresh navigated successfully but no nauk_at cookie returned — "
+                "session expired (login-wall / checkpoint). Re-authentication required."
+            )
+            raise AuthExpiredError(
+                "Session expired — Naukri returned no auth token after reload "
+                "(login-wall or checkpoint). Call naukri_login to re-authenticate."
+            )
+        return self._token
+
     async def refresh(self, page: Page) -> Optional[str]:
-        """Re-extract token by reloading a page. Protected by lock to prevent parallel refreshes."""
+        """Re-extract token by reloading a page. Protected by lock to prevent parallel refreshes.
+
+        See ``_do_refresh`` for the (non-swallowing) failure classification.
+        """
         async with self._refresh_lock:
             # Double-check after acquiring lock — another refresh may have succeeded
             if self._token:
                 return self._token
-            try:
-                await page.reload(timeout=NAV_TIMEOUT)
-            except Exception:
-                pass
-            await self.extract()
-            return self._token
+            return await self._do_refresh(page)
+
+    async def refresh_via_pool(self, page_pool, stale_token: Optional[str] = None) -> Optional[str]:
+        """Full token refresh that owns BOTH the single refresh lock AND the page
+        checkout, used by the API layer (Fix B).
+
+        Why this exists: previously ``api.py`` held its OWN module-level lock,
+        then *separately* called ``page_pool.acquire()`` and ``refresh(page)``
+        (which grabbed a *different* lock). That meant (a) a 401 in api.py and a
+        concurrent ``ensure_token()`` serialized on different locks → refresh
+        storm, and (b) the pool page was checked out while a lock was held →
+        deadlock risk at MAX_TABS. Routing every refresh through this one method
+        unifies serialization on ``self._refresh_lock`` and ensures only ONE
+        page is ever checked out for refresh at a time (the lock gates it), so
+        concurrent refreshers can't exhaust the pool against each other.
+
+        ``stale_token`` is the (now-rejected) token the caller just used. If,
+        after acquiring the lock, the cached token is present AND different from
+        ``stale_token``, another refresher already re-minted it — we skip the
+        browser round-trip entirely (this is what collapses a concurrent storm
+        to a single real refresh). Pass ``None`` to force a refresh.
+
+        The page is acquired INSIDE the lock — but because the lock already
+        serializes refreshers to one-at-a-time, at most a single refresh page is
+        outstanding, so this cannot self-deadlock the pool.
+        """
+        async with self._refresh_lock:
+            # Another refresher already produced a NEW token while we waited for
+            # the lock → reuse it, skip the expensive browser round-trip.
+            if self._token and self._token != stale_token:
+                return self._token
+            self._token = None  # our token is stale → force _do_refresh to reload
+            async with page_pool.acquire() as page:
+                return await self._do_refresh(page)
 
     async def ensure_token(self) -> str:
         """Get token, attempting extraction if cache is empty.
@@ -112,8 +199,23 @@ class TokenManager:
                     await page.goto(f"{NAUKRI_BASE}/mnjuser/homepage",
                                     wait_until="domcontentloaded", timeout=TOKEN_RENEWAL_TIMEOUT)
                     await self.extract()
+                    if not self._token:
+                        # Reached the homepage but no auth cookie was reissued —
+                        # the session is gone (login-wall / checkpoint), not a
+                        # transient blip. Log at ERROR so it is distinguishable.
+                        logger.error(
+                            "Token renewal navigation completed but no nauk_at cookie returned — "
+                            "session expired (login-wall / checkpoint). Re-authentication required."
+                        )
+                except (PlaywrightTimeoutError, TargetClosedError, asyncio.TimeoutError) as e:
+                    # Transient navigation failure — the session may still be
+                    # valid; a later call can retry. Don't silently debug-swallow.
+                    logger.warning(
+                        "Token renewal navigation failed (transient %s) — will retry on next call",
+                        type(e).__name__,
+                    )
                 except Exception as e:
-                    logger.debug("Token renewal navigation failed: %s", e)
+                    logger.warning("Token renewal navigation failed (%s): %s", type(e).__name__, e)
         if not self._token:
             raise ValueError("Not logged in — call naukri_login first")
         return self._token

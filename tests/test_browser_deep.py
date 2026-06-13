@@ -3,6 +3,9 @@
 Every test is PURE: no network, no browser, no file I/O.
 """
 
+import asyncio
+from contextlib import asynccontextmanager
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from playwright._impl._errors import TargetClosedError
@@ -124,6 +127,265 @@ class TestTokenManagerRefresh:
         result = await tm.refresh(page)
         assert result == "valid"
         page.reload.assert_not_called()
+
+
+# =====================================================================
+# 4b. TokenManager refresh FAILURE CLASSIFICATION (Fix A)
+#     A swallowed refresh failure (`except: pass` / debug-only) made a
+#     login-wall / checkpoint indistinguishable from a transient timeout.
+#     Now: transient nav errors re-raise (so retry/backoff applies); a
+#     completed nav that yields no token raises AuthExpiredError.
+# =====================================================================
+
+class TestTokenManagerRefreshClassification:
+    @pytest.mark.asyncio
+    async def test_nav_timeout_reraises_transient_not_swallowed(self):
+        """A Playwright navigation timeout during reload must NOT be swallowed —
+        it re-raises so the API layer's retry/backoff can act (session may still
+        be valid)."""
+        from naukri_server.browser import TokenManager
+        from playwright._impl._errors import TimeoutError as PWTimeout
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        tm.bind(ctx)
+        page = AsyncMock()
+        page.reload = AsyncMock(side_effect=PWTimeout("Timeout 20000ms exceeded"))
+        with pytest.raises(PWTimeout):
+            await tm.refresh(page)
+
+    @pytest.mark.asyncio
+    async def test_target_closed_reraises_transient(self):
+        """A TargetClosedError (tab died) during reload re-raises as transient."""
+        from naukri_server.browser import TokenManager
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        tm.bind(ctx)
+        page = AsyncMock()
+        page.reload = AsyncMock(side_effect=TargetClosedError())
+        with pytest.raises(TargetClosedError):
+            await tm.refresh(page)
+
+    @pytest.mark.asyncio
+    async def test_nav_ok_but_no_token_raises_auth_expired(self):
+        """Reload SUCCEEDS but no nauk_at cookie reappears → session is gone
+        (login wall / checkpoint), classified as AuthExpiredError, not a silent
+        None and not a transient error."""
+        from naukri_server.browser import TokenManager, AuthExpiredError
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "other", "value": "v"}])  # no nauk_at
+        tm.bind(ctx)
+        page = AsyncMock()  # reload() succeeds (AsyncMock no-op)
+        with pytest.raises(AuthExpiredError, match="re-authenticate"):
+            await tm.refresh(page)
+
+    @pytest.mark.asyncio
+    async def test_auth_expired_distinct_from_transient_type(self):
+        """AuthExpiredError is NOT a Playwright/transient error type — callers
+        can branch on it to demand re-auth instead of retrying."""
+        from naukri_server.browser import AuthExpiredError
+        from playwright._impl._errors import Error as PWError
+        assert not issubclass(AuthExpiredError, PWError)
+        assert not issubclass(AuthExpiredError, TargetClosedError)
+
+    @pytest.mark.asyncio
+    async def test_ensure_token_nav_failure_not_silently_swallowed(self):
+        """ensure_token's renewal-navigation failure is logged (warning), not
+        debug-swallowed, and still surfaces as the 'Not logged in' signal so
+        callers know re-auth is needed."""
+        from naukri_server.browser import TokenManager
+        from playwright._impl._errors import TimeoutError as PWTimeout
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[])  # extract finds nothing
+        page = AsyncMock()
+        page.goto = AsyncMock(side_effect=PWTimeout("nav timeout"))
+        ctx.pages = [page]
+        tm.bind(ctx)
+        with patch("naukri_server.browser.logger") as mock_log:
+            with pytest.raises(ValueError, match="Not logged in"):
+                await tm.ensure_token()
+        # The failure was logged at warning (classified), not silently dropped.
+        assert mock_log.warning.called
+
+
+# =====================================================================
+# 4c. TokenManager.refresh_via_pool — UNIFIED LOCK + NO DEADLOCK (Fix B)
+#     Both api.py's 401/bot-check refresh AND TokenManager.ensure_token now
+#     serialize on the SAME lock (token_manager._refresh_lock), and the pool
+#     page is checked out INSIDE that lock so only one is ever outstanding —
+#     no refresh storm, no 2nd-page-while-locked deadlock.
+# =====================================================================
+
+class _FakePagePool:
+    """Minimal page pool with a capacity-N semaphore that records the maximum
+    number of pages checked out simultaneously. If refresh_via_pool ever tried
+    to hold one page and acquire a SECOND while serialized poorly, max_in_use
+    would exceed 1 (or, at capacity 1, deadlock)."""
+
+    def __init__(self, capacity=1):
+        self._sem = asyncio.Semaphore(capacity)
+        self.in_use = 0
+        self.max_in_use = 0
+        self.total_acquires = 0
+
+    @asynccontextmanager
+    async def acquire(self):
+        await self._sem.acquire()
+        self.in_use += 1
+        self.total_acquires += 1
+        self.max_in_use = max(self.max_in_use, self.in_use)
+        try:
+            yield AsyncMock()
+        finally:
+            self.in_use -= 1
+            self._sem.release()
+
+
+class TestRefreshViaPoolUnifiedLock:
+    @pytest.mark.asyncio
+    async def test_refresh_via_pool_uses_the_single_token_manager_lock(self):
+        """refresh_via_pool serializes on tm._refresh_lock — the SAME lock
+        ensure_token uses (Fix B: one lock for both paths). Proven by holding
+        the lock externally and asserting refresh_via_pool blocks until release."""
+        from naukri_server.browser import TokenManager
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "nauk_at", "value": "fresh"}])
+        tm.bind(ctx)
+        pool = _FakePagePool(capacity=1)
+
+        await tm._refresh_lock.acquire()  # simulate the OTHER path holding it
+        with patch.object(tm, "_export_auth_state"):
+            task = asyncio.create_task(tm.refresh_via_pool(pool))
+            await asyncio.sleep(0.05)
+            # Blocked on the lock → no page checked out yet.
+            assert pool.total_acquires == 0
+            assert not task.done()
+            tm._refresh_lock.release()
+            result = await asyncio.wait_for(task, timeout=1.0)
+        assert result == "fresh"
+        assert pool.total_acquires == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_refreshers_never_overlap_in_critical_section(self):
+        """N concurrent refresh_via_pool calls serialize: at most ONE page is
+        ever checked out at a time (max_in_use == 1), even on a capacity-1 pool —
+        no refresh storm, no deadlock. After the first re-mints the token, the
+        rest short-circuit on the double-check (no extra browser round-trips)."""
+        from naukri_server.browser import TokenManager
+        tm = TokenManager()
+        tm._token = None
+
+        # First extract yields a token; the double-check then makes later callers
+        # skip the reload entirely.
+        cookies_calls = {"n": 0}
+
+        async def _cookies(_base):
+            cookies_calls["n"] += 1
+            return [{"name": "nauk_at", "value": "fresh"}]
+
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(side_effect=_cookies)
+        tm.bind(ctx)
+        pool = _FakePagePool(capacity=1)
+
+        with patch.object(tm, "_export_auth_state"):
+            results = await asyncio.gather(*[tm.refresh_via_pool(pool) for _ in range(5)])
+
+        assert all(r == "fresh" for r in results)
+        # Lock serialized everyone → never more than one page out at once.
+        assert pool.max_in_use == 1
+        # Only the FIRST caller actually reloaded; the other 4 hit the
+        # post-lock double-check and skipped the browser round-trip (no storm).
+        assert pool.total_acquires == 1
+
+    @pytest.mark.asyncio
+    async def test_stale_token_dedup_skips_reload_when_already_refreshed(self):
+        """If another caller already re-minted a DIFFERENT token while we waited
+        for the lock, refresh_via_pool(stale_token=ours) reuses it WITHOUT a
+        browser round-trip — this is what collapses a concurrent storm to a
+        single real refresh."""
+        from naukri_server.browser import TokenManager
+        tm = TokenManager()
+        tm._token = "fresh-by-other"  # someone already refreshed
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "nauk_at", "value": "should-not-be-used"}])
+        tm.bind(ctx)
+        pool = _FakePagePool(capacity=1)
+        result = await tm.refresh_via_pool(pool, stale_token="my-old-stale")
+        assert result == "fresh-by-other"
+        assert pool.total_acquires == 0  # no reload happened
+        ctx.cookies.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_token_equal_forces_real_refresh(self):
+        """If the cached token still equals our stale token (nobody refreshed),
+        refresh_via_pool performs the real reload."""
+        from naukri_server.browser import TokenManager
+        tm = TokenManager()
+        tm._token = "stale"
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "nauk_at", "value": "freshly-minted"}])
+        tm.bind(ctx)
+        pool = _FakePagePool(capacity=1)
+        with patch.object(tm, "_export_auth_state"):
+            result = await tm.refresh_via_pool(pool, stale_token="stale")
+        assert result == "freshly-minted"
+        assert pool.total_acquires == 1  # real reload happened
+
+    @pytest.mark.asyncio
+    async def test_refresh_via_pool_propagates_auth_expired(self):
+        """If the underlying refresh classifies an auth expiry, refresh_via_pool
+        propagates AuthExpiredError (so the API layer can demand re-auth)."""
+        from naukri_server.browser import TokenManager, AuthExpiredError
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        ctx.cookies = AsyncMock(return_value=[{"name": "other", "value": "v"}])  # no nauk_at
+        tm.bind(ctx)
+        pool = _FakePagePool(capacity=1)
+        with pytest.raises(AuthExpiredError):
+            await tm.refresh_via_pool(pool)
+        # The page was still acquired-and-released cleanly (no leak/deadlock).
+        assert pool.in_use == 0
+        assert pool.total_acquires == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_via_pool_propagates_transient(self):
+        """A transient nav failure inside refresh_via_pool re-raises (not
+        swallowed) and the pool page is released."""
+        from naukri_server.browser import TokenManager
+        from playwright._impl._errors import TimeoutError as PWTimeout
+        tm = TokenManager()
+        tm._token = None
+        ctx = AsyncMock()
+        tm.bind(ctx)
+
+        class _ReloadFailPool(_FakePagePool):
+            @asynccontextmanager
+            async def acquire(self):
+                await self._sem.acquire()
+                self.in_use += 1
+                self.total_acquires += 1
+                self.max_in_use = max(self.max_in_use, self.in_use)
+                page = AsyncMock()
+                page.reload = AsyncMock(side_effect=PWTimeout("nav timeout"))
+                try:
+                    yield page
+                finally:
+                    self.in_use -= 1
+                    self._sem.release()
+
+        pool = _ReloadFailPool(capacity=1)
+        with pytest.raises(PWTimeout):
+            await tm.refresh_via_pool(pool)
+        assert pool.in_use == 0  # released despite the error
 
 
 # =====================================================================
