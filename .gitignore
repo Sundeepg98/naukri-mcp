@@ -46,6 +46,13 @@ healing_state.json
 # Serena
 .serena/
 
+# Local SQLite database (per-machine state)
+naukri.db
+
+# Agent config (local, may contain personal preferences)
+agent_config.json
+naukri_server/agent_config.json
+
 # OS
 .DS_Store
 Thumbs.db

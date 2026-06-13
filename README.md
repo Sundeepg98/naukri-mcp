@@ -30,7 +30,7 @@ naukri_server/
   scoring.py                 # Alias-aware fit scoring
   validation.py              # Response validators (job lists, profiles, etc.)
   utils.py                   # Shared helpers
-  tools/                     # 24 tool modules (26 tools)
+  tools/                     # 27 tool modules (117 tools)
     auth.py                  # Login, OTP verification, login status
     search.py                # Job search, recommendations
     jobs.py                  # Job detail, similar, compare, bulk, report fraud
