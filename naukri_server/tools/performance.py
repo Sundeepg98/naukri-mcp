@@ -11,6 +11,7 @@ from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
 from naukri_server.interfaces import api_client  # noqa: F401 — tests patch this path
 from naukri_server.services.performance_service import (
+    DEFAULT_TOP_KEYWORDS,
     ACTIVITY_FILTERS,
     VALID_DAYS,
     get_search_impressions as _get_search_impressions,
@@ -33,18 +34,33 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def naukri_search_impressions(days: int = 7) -> dict:
+async def naukri_search_impressions(days: int = 7, top_n: int = DEFAULT_TOP_KEYWORDS) -> dict:
     """Get search impression stats — how many times recruiters found your profile.
-
-    Shows total appearances, recruiter actions, daily averages, and top keywords
-    recruiters used to find you.
 
     Args:
         days: Time period — must be 7, 30, or 90 (default 7)
+        top_n: How many search keywords to return, ranked by count
+               (default 15, clamped to 200). The raw upstream map is huge and
+               repetitive — 704 distinct keys in one live capture — so the tail
+               is costly and unread. `keyword_stats` reports what the cap left
+               out, so nothing is hidden silently.
 
     Returns:
-        {status, days, total_appearances, recruiter_actions, daily_average,
-         percentage_change, timeline, top_keywords}
+        {status, days, total_appearances_all_time, window_appearances,
+         daily_average, recruiter_actions, percentage_change, timeline,
+         top_keywords, keyword_stats}
+
+        - total_appearances_all_time: CUMULATIVE, ignores `days` entirely.
+        - window_appearances: total within the requested `days` window. The
+          timeline buckets sum to exactly this.
+        - daily_average: window_appearances / days — a real average.
+          (Before 2026-08-20 this name held the window total; see
+          tests/test_search_impressions_invariants.py.)
+        - top_keywords: {keyword: count}, normalized through the same jobcore
+          taxonomy used for fit scoring, so "Node.js"/"Node"/"Node Js"/"Nodejs"
+          are one row.
+        - keyword_stats: {distinct_raw, distinct_normalized, returned,
+          total_mentions}
     """
     if days not in VALID_DAYS:
         return {
@@ -53,7 +69,7 @@ async def naukri_search_impressions(days: int = 7) -> dict:
             "error_code": "VALIDATION_ERROR",
         }
     try:
-        return await _get_search_impressions(days=days)
+        return await _get_search_impressions(days=days, top_n=top_n)
     except NaukriAPIError as e:
         return {
             "status": "error",

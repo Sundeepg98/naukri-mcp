@@ -22,12 +22,17 @@ class TestGetSearchImpressions:
     @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
     async def test_happy_path(self, mock_get):
         """Returns structured result with all expected keys."""
+        # The window figure is 140 over 7 days, so a correct daily_average is
+        # 20.0. The old fixture used 21.4 -- a fraction picked to LOOK like an
+        # average -- and asserted daily_average == 21.4, which is how the
+        # mislabel survived: the test restated the passthrough instead of
+        # checking that the number matched its name.
         mock_get.return_value = {
             "totalSearchAppearances": 150,
             "recruiterActions": 12,
-            "dayWiseSearchAppearance": 21.4,
+            "dayWiseSearchAppearance": 140,
             "percentageChange": 5.2,
-            "searchAppearanceTimeline": {"Mon": 20, "Tue": 30},
+            "searchAppearanceTimeline": {"Mon": 20, "Tue": 120},
             "searchKeyWords": {"python": 10, "django": 5},
         }
         from naukri_server.tools.performance import _get_search_impressions
@@ -35,12 +40,14 @@ class TestGetSearchImpressions:
 
         assert result["status"] == "success"
         assert result["days"] == 7
-        assert result["total_appearances"] == 150
+        assert result["total_appearances_all_time"] == 150
         assert result["recruiter_actions"] == 12
-        assert result["daily_average"] == 21.4
+        assert result["window_appearances"] == 140
+        assert result["daily_average"] == 20.0
         assert result["percentage_change"] == 5.2
-        assert result["timeline"] == {"Mon": 20, "Tue": 30}
+        assert result["timeline"] == {"Mon": 20, "Tue": 120}
         assert result["top_keywords"] == {"python": 10, "django": 5}
+        assert result["keyword_stats"]["distinct_raw"] == 2
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.performance.api_client.get", new_callable=AsyncMock)
@@ -247,7 +254,7 @@ class TestPerformanceAtomic:
         from naukri_server.tools.performance import naukri_search_impressions
         result = await naukri_search_impressions(days=7)
         assert result["status"] == "success"
-        mock_impressions.assert_awaited_once_with(days=7)
+        mock_impressions.assert_awaited_once_with(days=7, top_n=15)
 
     @pytest.mark.asyncio
     async def test_search_impressions_invalid_days(self):

@@ -13,8 +13,9 @@ from naukri_server.config import (
     SEARCH_IMPRESSIONS_API, RECRUITER_ACTIVITY_API, ACTIVITY_LEVEL_API,
     WIDGET_HEADERS,
 )
+from jobcore import normalize_skill
 from naukri_server.domain import safe_get
-from naukri_server.validation import validate_page
+from naukri_server.validation import validate_limit, validate_page
 
 # Valid filter values for recruiter activity (from activityBucketCount keys)
 ACTIVITY_FILTERS = {"VIEWED", "MOBILE_VIEWED", "DOWNLOADED", "CONTACTED", "ADD_TO_FOLDER"}
@@ -22,37 +23,125 @@ ACTIVITY_FILTERS = {"VIEWED", "MOBILE_VIEWED", "DOWNLOADED", "CONTACTED", "ADD_T
 # Valid day ranges for impressions and recruiter_activity
 VALID_DAYS = {7, 30, 90}
 
+# Recruiter search keywords are free text, so the raw map is enormous and
+# repetitive: one live capture on 2026-08-20 returned 704 distinct keys, of
+# which the top 15 covered the operator's actual profile. Returning the whole
+# tail in every response is pure token cost for a tool called on every daily
+# brief.
+DEFAULT_TOP_KEYWORDS = 15
+MAX_TOP_KEYWORDS = 200
+
 __all__ = [
     "ACTIVITY_FILTERS",
     "VALID_DAYS",
+    "DEFAULT_TOP_KEYWORDS",
+    "MAX_TOP_KEYWORDS",
     "get_search_impressions",
     "get_recruiter_activity",
     "get_activity_level",
 ]
 
 
-async def get_search_impressions(days: int = 7) -> dict:
-    """Fetch search impression stats from the API and return structured result."""
+def _rank_keywords(raw, top_n: int) -> tuple:
+    """Normalize, merge and rank the recruiter search-keyword map.
+
+    Returns ``(top_keywords, stats)``.
+
+    Normalization goes through ``jobcore.normalize_skill`` -- the same taxonomy
+    auto_hunt scores against -- rather than a second table here. A second
+    normalizer is how two of them drift apart, and a keyword ranked by one set
+    of rules while jobs are scored by another is worse than no ranking.
+
+    Raw keys are recruiter free text, so one skill arrives many ways: the
+    2026-08-20 capture had node.js spelled five ways across 161 mentions, which
+    ranked it below single-spelling skills a third its size.
+
+    Deliberately NOT done: splitting mashed keys such as
+    "Criblclick House Monitoring Tool". That mangling is upstream -- this map is
+    a keyword->count dict and nothing here concatenates anything -- and guessing
+    where to cut it would invent data. It survives as one honest entry.
+    """
+    if not isinstance(raw, dict):
+        return {}, {"distinct_raw": 0, "distinct_normalized": 0,
+                    "returned": 0, "total_mentions": 0}
+
+    merged: dict = {}
+    for key, count in raw.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            continue
+        canonical = normalize_skill(key)
+        if not canonical:
+            continue
+        merged[canonical] = merged.get(canonical, 0) + count
+
+    # Count descending, then name, so equal counts have a stable order rather
+    # than whatever the upstream dict happened to yield.
+    ordered = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+    top = dict(ordered[:top_n])
+    stats = {
+        "distinct_raw": len(raw),
+        "distinct_normalized": len(merged),
+        "returned": len(top),
+        "total_mentions": sum(merged.values()),
+    }
+    return top, stats
+
+
+async def get_search_impressions(days: int = 7, top_n: int = DEFAULT_TOP_KEYWORDS) -> dict:
+    """Fetch search impression stats from the API and return structured result.
+
+    Field naming, corrected 2026-08-20. Two names were wrong, which is what made
+    a reviewer read `daily_average: 2314` next to `total: 5660` as impossible:
+
+    * ``totalSearchAppearances`` is CUMULATIVE and ignores ``days`` entirely, so
+      it is now ``total_appearances_all_time``. Sitting next to ``days`` under
+      the old name ``total_appearances``, it read as a window figure.
+    * ``dayWiseSearchAppearance`` is the total WITHIN the requested window --
+      documented as such in probing/analytics-report.md, and provable from the
+      payload itself, since the timeline buckets sum to exactly this value. It
+      is now ``window_appearances``.
+
+    ``daily_average`` survives as a real average, derived here rather than
+    relabelled from upstream.
+    """
+    top_n = validate_limit(top_n, max_allowed=MAX_TOP_KEYWORDS)
     data = await api_client.get(
         SEARCH_IMPRESSIONS_API,
         params={"days": str(days), "totalAppearances": "1"},
         extra_headers=WIDGET_HEADERS,
     )
+    window = safe_get(
+        data, "dayWiseSearchAppearance", default=None,
+        field_name="window_appearances", warn=True, context="search_impressions",
+    )
+    top_keywords, keyword_stats = _rank_keywords(
+        safe_get(data, "searchKeyWords", default={}), top_n,
+    )
     return {
         "status": "success",
         "days": days,
-        "total_appearances": safe_get(
+        "total_appearances_all_time": safe_get(
             data, "totalSearchAppearances", default=None,
-            field_name="total_appearances", warn=True, context="search_impressions",
+            field_name="total_appearances_all_time", warn=True,
+            context="search_impressions",
         ),
         "recruiter_actions": safe_get(
             data, "recruiterActions", default=None,
             field_name="recruiter_actions", warn=True, context="search_impressions",
         ),
-        "daily_average": safe_get(data, "dayWiseSearchAppearance", default=None),
+        "window_appearances": window,
+        "daily_average": (
+            round(window / days, 1)
+            if isinstance(window, (int, float)) and days else None
+        ),
         "percentage_change": safe_get(data, "percentageChange", default=None),
         "timeline": safe_get(data, "searchAppearanceTimeline", default={}),
-        "top_keywords": safe_get(data, "searchKeyWords", default={}),
+        "top_keywords": top_keywords,
+        "keyword_stats": keyword_stats,
     }
 
 

@@ -149,7 +149,7 @@ class TestPerformance:
         from naukri_server.tools.performance import _get_search_impressions
         result = await _get_search_impressions(days=7)
         assert result["status"] == "success"
-        assert result["total_appearances"] == 150
+        assert result["total_appearances_all_time"] == 150
         assert result["days"] == 7
 
     @pytest.mark.asyncio
