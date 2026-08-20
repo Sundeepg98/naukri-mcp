@@ -281,6 +281,45 @@ SESSION_VALIDATE_TIMEOUT = 5  # Seconds for session validation on startup
 TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation
 POOL_CHECKOUT_TIMEOUT = 30  # Max seconds to wait for a browser tab
 
+# --- Wedge guards (2026-08-20) ---------------------------------------------
+# Each of these caps an await that previously had NO bound at all. The reason
+# they matter more than an ordinary timeout: the awaits they cap run while
+# TokenManager._refresh_lock is held, and EVERY REST call in the server passes
+# through that lock (api.py -> ensure_token). One unresponsive Chrome therefore
+# froze not just its own caller but every tool queued behind it.
+BROWSER_OP_TIMEOUT = int(os.environ.get("NAUKRI_BROWSER_OP_TIMEOUT", "20"))
+"""Seconds for a single Playwright call that has no default timeout of its own
+(context.new_page, context.cookies). Playwright's own default-timeout machinery
+does not cover these."""
+
+TOKEN_REFRESH_TIMEOUT = int(os.environ.get("NAUKRI_TOKEN_REFRESH_TIMEOUT", "60"))
+"""Seconds one token-refresh critical section may hold _refresh_lock. Generous:
+a healthy refresh measures well under 10s (5.8s observed live on 2026-08-20)."""
+
+TOKEN_LOCK_WAIT_TIMEOUT = int(os.environ.get("NAUKRI_TOKEN_LOCK_WAIT_TIMEOUT", "75"))
+"""Seconds a caller may wait to ENTER the refresh critical section. Must exceed
+TOKEN_REFRESH_TIMEOUT so a queued caller outlives the holder's own budget and
+gets a real turn rather than a spurious error."""
+
+HEALTH_CHECK_TIMEOUT = int(os.environ.get("NAUKRI_HEALTH_CHECK_TIMEOUT", "30"))
+"""Per-check budget inside naukri_health_check. A check that blows it becomes a
+status="timeout" row; the tool still returns the checks that did finish."""
+
+HEALTH_BROWSER_CHECK_TIMEOUT = int(os.environ.get("NAUKRI_HEALTH_BROWSER_CHECK_TIMEOUT", "45"))
+"""Same, for the browser-backed checks, which legitimately take longer
+(AmbitionBox waits for networkidle)."""
+
+BROWSER_RESTART_TIMEOUT = int(os.environ.get("NAUKRI_BROWSER_RESTART_TIMEOUT", "120"))
+"""Seconds for one browser stop-or-start during a watchdog restart. Unbounded,
+these hang the watchdog's monitor loop on a wedged Chrome - which means no
+FURTHER restart is ever attempted, the exact shape of the 2026-08-20 silent
+outage. A restart that has not finished in two minutes is not going to."""
+
+TOOL_WATCHDOG_TIMEOUT = int(os.environ.get("NAUKRI_TOOL_WATCHDOG_TIMEOUT", "600"))
+"""Last-resort per-tool-call budget. Deliberately far above any legitimate tool
+(auto_hunt and batch_apply run for minutes) -- it exists to convert a PERMANENT
+wedge into an error envelope, not to police slow tools."""
+
 # Cache purge threshold
 CACHE_PURGE_DAYS = 30  # Days before cached answers are purged
 

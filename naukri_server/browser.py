@@ -13,7 +13,12 @@ from typing import Optional
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError, TimeoutError as PlaywrightTimeoutError
 
-from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT, PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT, logger
+from naukri_server.config import (
+    CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT,
+    PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT,
+    BROWSER_OP_TIMEOUT, TOKEN_REFRESH_TIMEOUT, TOKEN_LOCK_WAIT_TIMEOUT,
+    logger,
+)
 from naukri_server import profile_lock
 
 
@@ -44,6 +49,24 @@ class AuthExpiredError(Exception):
     pass
 
 
+class TokenRefreshUnavailable(NotLoggedInError):
+    """A token refresh could not even be attempted, or could not finish, because
+    the browser stopped answering - as distinct from "the session expired".
+
+    Subclasses ``NotLoggedInError`` (and therefore ``ValueError``) so every
+    existing caller keeps working, while remaining distinguishable in logs and
+    in error classification. Raised only by the guarded refresh paths below.
+
+    Why this exists: on 2026-08-20 an unresponsive Chrome parked
+    ``TokenManager._refresh_lock`` forever. Because api.py calls
+    ``ensure_token()`` before EVERY REST request, the whole server queued behind
+    it - `naukri_health_check` hung, and the next unrelated tool
+    (`naukri_activity_level`) hung too. A stuck refresh must now fail loudly and
+    give the lock back instead of becoming a silent server-wide outage.
+    """
+    pass
+
+
 class TokenManager:
     """Caches JWT token + cookies from browser context. Lock-free reads, locked refresh."""
 
@@ -64,12 +87,21 @@ class TokenManager:
         if not self._context:
             return
         try:
-            cookies = await self._context.cookies(NAUKRI_BASE)
+            # context.cookies() carries NO default timeout in Playwright's async
+            # API. A wedged renderer keeps the CDP socket open, so this await
+            # never returned rather than raising - and extract() runs INSIDE
+            # _refresh_lock on two of the three refresh paths, which is how one
+            # stuck cookie read became a server-wide outage.
+            cookies = await asyncio.wait_for(
+                self._context.cookies(NAUKRI_BASE), timeout=BROWSER_OP_TIMEOUT
+            )
             self._cookies = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
             for c in cookies:
                 if c["name"] == "nauk_at":
                     self._token = c["value"]
-                    self._export_auth_state()
+                    # write_text + replace + chmod: three blocking file ops that
+                    # used to run on the event loop, while holding the lock.
+                    await asyncio.to_thread(self._export_auth_state)
                     return
         except Exception as e:
             logger.debug("Token extraction failed: %s", e)
@@ -99,6 +131,54 @@ class TokenManager:
     def invalidate(self):
         """Mark token as stale. Next ensure_token() will refresh."""
         self._token = None
+
+    async def _with_refresh_lock(self, run, what: str):
+        """Run ``run()`` inside ``_refresh_lock`` with a bound on BOTH the wait
+        and the hold.
+
+        Two distinct failure modes, so two distinct bounds:
+
+        * the WAIT (``TOKEN_LOCK_WAIT_TIMEOUT``) - a caller must never queue
+          behind a stuck refresher forever. This is the bound that stops one
+          wedged tool from taking every other tool down with it.
+        * the HOLD (``TOKEN_REFRESH_TIMEOUT``) - the refresher itself must hand
+          the lock back even when Chrome has stopped answering. Without this the
+          first bound only relocates the outage: every caller would fail instead
+          of hanging, which is not a fix.
+
+        The wait budget is deliberately LARGER than the hold budget, so a queued
+        caller outlives the holder's own deadline and gets a real turn rather
+        than a spurious error.
+        """
+        try:
+            await asyncio.wait_for(
+                self._refresh_lock.acquire(), timeout=TOKEN_LOCK_WAIT_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "%s: refresh lock held by another caller for more than %ss - "
+                "refusing to queue further. The browser is not answering.",
+                what, TOKEN_LOCK_WAIT_TIMEOUT,
+            )
+            raise TokenRefreshUnavailable(
+                f"{what}: another token refresh has held the refresh lock for over "
+                f"{TOKEN_LOCK_WAIT_TIMEOUT}s - the browser is not answering. "
+                "Restart the browser (naukri_login) before retrying."
+            )
+        try:
+            return await asyncio.wait_for(run(), timeout=TOKEN_REFRESH_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "%s: token refresh did not complete within %ss - releasing the "
+                "refresh lock so other callers are not wedged behind it.",
+                what, TOKEN_REFRESH_TIMEOUT,
+            )
+            raise TokenRefreshUnavailable(
+                f"{what}: token refresh did not complete within "
+                f"{TOKEN_REFRESH_TIMEOUT}s - the browser is not answering."
+            )
+        finally:
+            self._refresh_lock.release()
 
     async def _do_refresh(self, page: Page) -> Optional[str]:
         """Reload ``page`` and re-extract the token. Caller MUST hold ``_refresh_lock``.
@@ -146,11 +226,13 @@ class TokenManager:
 
         See ``_do_refresh`` for the (non-swallowing) failure classification.
         """
-        async with self._refresh_lock:
+        async def _run():
             # Double-check after acquiring lock — another refresh may have succeeded
             if self._token:
                 return self._token
             return await self._do_refresh(page)
+
+        return await self._with_refresh_lock(_run, "refresh")
 
     async def refresh_via_pool(self, page_pool, stale_token: Optional[str] = None) -> Optional[str]:
         """Full token refresh that owns BOTH the single refresh lock AND the page
@@ -176,7 +258,7 @@ class TokenManager:
         serializes refreshers to one-at-a-time, at most a single refresh page is
         outstanding, so this cannot self-deadlock the pool.
         """
-        async with self._refresh_lock:
+        async def _run():
             # Another refresher already produced a NEW token while we waited for
             # the lock → reuse it, skip the expensive browser round-trip.
             if self._token and self._token != stale_token:
@@ -184,6 +266,8 @@ class TokenManager:
             self._token = None  # our token is stale → force _do_refresh to reload
             async with page_pool.acquire() as page:
                 return await self._do_refresh(page)
+
+        return await self._with_refresh_lock(_run, "refresh_via_pool")
 
     async def ensure_token(self) -> str:
         """Get token, attempting extraction if cache is empty.
@@ -198,16 +282,23 @@ class TokenManager:
         await self.extract()
         if self._token:
             return self._token
-        # JWT missing/expired — try navigating to trigger server-side renewal
-        # Lock prevents multiple parallel callers from navigating simultaneously
-        async with self._refresh_lock:
+        # JWT missing/expired — try navigating to trigger server-side renewal.
+        # The lock prevents multiple parallel callers from navigating at once;
+        # _with_refresh_lock additionally bounds both the wait and the hold, so a
+        # browser that stops answering can no longer park this lock and freeze
+        # every REST-backed tool in the server behind it.
+        async def _renew():
             # Double-check after acquiring lock — another caller may have renewed
             if self._token:
-                return self._token
+                return
             if self._context:
                 try:
                     pages = self._context.pages
-                    page = pages[0] if pages else await self._context.new_page()
+                    # context.new_page() has NO default timeout: on a wedged
+                    # renderer it never returns and never raises.
+                    page = pages[0] if pages else await asyncio.wait_for(
+                        self._context.new_page(), timeout=BROWSER_OP_TIMEOUT
+                    )
                     await page.goto(f"{NAUKRI_BASE}/mnjuser/homepage",
                                     wait_until="domcontentloaded", timeout=TOKEN_RENEWAL_TIMEOUT)
                     await self.extract()
@@ -228,6 +319,10 @@ class TokenManager:
                     )
                 except Exception as e:
                     logger.warning("Token renewal navigation failed (%s): %s", type(e).__name__, e)
+
+        if self._token:
+            return self._token
+        await self._with_refresh_lock(_renew, "ensure_token")
         if not self._token:
             raise NotLoggedInError("Not logged in — call naukri_login first")
         return self._token
@@ -309,7 +404,15 @@ class PagePool:
         a page-level problem rather than "the browser is gone".
         """
         try:
-            page = await self._context.new_page()
+            # new_page() has NO default timeout. A context whose browser has
+            # wedged (socket open, renderer dead) neither answers nor errors, so
+            # an unbounded await here parked the caller - and, on the refresh
+            # path, the process-wide _refresh_lock with it. A browser that
+            # cannot open a tab inside the budget IS dead, which is exactly what
+            # the except branch below already concludes.
+            page = await asyncio.wait_for(
+                self._context.new_page(), timeout=BROWSER_OP_TIMEOUT
+            )
         except Exception as exc:
             self._mark_context_dead("%s: %s" % (type(exc).__name__, exc))
             raise BrowserUnavailableError(
@@ -335,7 +438,15 @@ class PagePool:
         if dead_page in self._all_pages:
             self._all_pages.remove(dead_page)
         try:
-            page = await self._context.new_page()
+            # new_page() has NO default timeout. A context whose browser has
+            # wedged (socket open, renderer dead) neither answers nor errors, so
+            # an unbounded await here parked the caller - and, on the refresh
+            # path, the process-wide _refresh_lock with it. A browser that
+            # cannot open a tab inside the budget IS dead, which is exactly what
+            # the except branch below already concludes.
+            page = await asyncio.wait_for(
+                self._context.new_page(), timeout=BROWSER_OP_TIMEOUT
+            )
         except Exception as exc:
             self._mark_context_dead("%s: %s" % (type(exc).__name__, exc))
             raise BrowserUnavailableError(
@@ -398,8 +509,19 @@ class PagePool:
             elif len(self._all_pages) < self._max_pages:
                 page = await self._create_page()
             else:
-                # All pages in use, wait for one to return
-                page = await self._available.get()
+                # All pages in use, wait for one to return. POOL_CHECKOUT_TIMEOUT
+                # bounds only the semaphore above; this queue wait had no bound
+                # at all, so a page lost from the queue while still counted in
+                # _all_pages left the caller waiting for a tab that would never
+                # arrive. Spend whatever is left of the same budget, then fail.
+                remaining = max(1.0, POOL_CHECKOUT_TIMEOUT - (time.monotonic() - t0))
+                try:
+                    page = await asyncio.wait_for(self._available.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        "Page pool exhausted — no tab returned within %ds"
+                        % POOL_CHECKOUT_TIMEOUT
+                    )
 
             # Verify the page is alive with a REAL round-trip to the browser.
             # See is_page_alive() for why the old "_ = page.url" could not fail.
