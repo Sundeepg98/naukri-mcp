@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+
+from naukri_server.config import BROWSER_RESTART_TIMEOUT
 import time
 from naukri_server._compat import timeout as _timeout
 from dataclasses import dataclass, field
@@ -205,6 +207,10 @@ probe_registry = HealthProbeRegistry()
 # Scheduler
 # ---------------------------------------------------------------------------
 
+# A watchdog restart is stop + start, so allow both halves plus slack.
+WATCHDOG_TRIGGER_TIMEOUT = BROWSER_RESTART_TIMEOUT * 2 + 30
+
+
 class HealthProbeScheduler:
     """Runs registered probes on their declared intervals."""
 
@@ -311,7 +317,21 @@ class HealthProbeScheduler:
             and result.status == "unhealthy"
             and self._watchdog is not None
         ):
+            # Bounded on purpose: this call sits OUTSIDE the probe's own
+            # _timeout block above, and it drives browser.stop()/start(). An
+            # unbounded await here stalls the whole probe-interval bucket, so
+            # every probe in it stops running -- a monitoring system that goes
+            # quiet exactly when the browser dies.
             try:
-                await self._watchdog._handle_failure()
+                await asyncio.wait_for(
+                    self._watchdog._handle_failure(),
+                    timeout=WATCHDOG_TRIGGER_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Watchdog _handle_failure exceeded %ss - abandoning this "
+                    "trigger so the probe scheduler keeps running.",
+                    WATCHDOG_TRIGGER_TIMEOUT,
+                )
             except Exception as exc:
                 logger.debug("Watchdog _handle_failure error: %s", exc)

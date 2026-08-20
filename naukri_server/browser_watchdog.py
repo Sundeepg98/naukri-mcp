@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 from naukri_server._compat import timeout as _timeout
+from naukri_server.config import BROWSER_RESTART_TIMEOUT
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -144,13 +145,24 @@ class BrowserWatchdog:
         t0 = time.monotonic()
         logger.warning("Attempting browser restart (#%d)...", self._restart_count + 1)
 
+        # Both halves are bounded. browser.stop() and browser.start() each await
+        # Playwright calls with no timeout of their own (context.close, pw.stop,
+        # context.new_page), so on a wedged Chrome this coroutine never returned
+        # -- and because the monitor loop awaits it, the watchdog then never
+        # probed again. A self-healer that can itself hang is not one.
         try:
-            await browser.stop()
+            await asyncio.wait_for(browser.stop(), timeout=BROWSER_RESTART_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Browser stop did not finish within %ss - starting anyway; the "
+                "profile lock is re-entrant for this PID, so the launch below "
+                "can still reclaim it.", BROWSER_RESTART_TIMEOUT,
+            )
         except Exception as e:
             logger.debug("Browser stop error (expected): %s", e)
 
         try:
-            await browser.start()
+            await asyncio.wait_for(browser.start(), timeout=BROWSER_RESTART_TIMEOUT)
             self._restart_count += 1
             self._last_restart = time.monotonic()
             self._consecutive_failures = 0
