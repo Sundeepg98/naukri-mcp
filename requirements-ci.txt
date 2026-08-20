@@ -18,8 +18,9 @@
 -r requirements.txt
 
 # Pinned to an exact commit, not @master. naukri's tests assert specific
-# taxonomy behaviour (tests/test_search_impressions_invariants.py requires the
-# typographic-quote folding added in 3f2f742), so a moving branch means this
-# repo's CI can turn red from a commit in another repo with no change here.
+# taxonomy behaviour -- tests/test_search_impressions_invariants.py needs the
+# typographic-quote folding added in jobcore 3f2f742, which this commit contains
+# -- so a moving branch would let a commit in another repo turn this repo's CI
+# red with no change here.
 # Bumping this line is the visible, reviewable way to adopt a jobcore change.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@3f2f74286e5b1f2b5946b71808472314fb14a363
+jobcore @ git+https://github.com/Sundeepg98/jobcore@d1d44bb496334d47ff33a9142e5a35b851cb58e1
