@@ -12,6 +12,25 @@ from naukri_server.framework.registry import scheduled_task
 logger = logging.getLogger(__name__)
 
 
+# CATCH-UP POLICY
+# ---------------
+# The scheduler sleeps a full interval before a task's FIRST run, so on a server
+# whose process lifetime is shorter than the interval a task never runs at all.
+# Measured 2026-08-20: sync_applications / sync_saved_jobs (4h), stale_check
+# (6h), daily_brief and boost_profile (daily) had ZERO rows in scheduled_runs.
+#
+# catch_up=True makes a task run shortly after startup when its persisted last
+# run is older than its interval. It is granted ONLY to tasks that neither
+# mutate the Naukri account nor delete local rows, because it means "runs on
+# every server start". Deliberately excluded:
+#   agent_cycle       - searches AND APPLIES to jobs (consumes the daily quota)
+#   boost_profile     - rewrites the profile headline on naukri.com
+#   sync_applications - its purge step calls delete_applications_before(), which
+#                       drops rows older than AUTO_PURGE_DAYS (config.py)
+#   api_discovery     - probes many endpoints; pacing matters with 7 captcha
+#                       blocks on the account record
+#   daily_brief       - hour-gated (08:00 IST), not interval-gated
+
 # Interval constants (seconds)
 INTERVAL_1H = 3600
 INTERVAL_2H = 7200
@@ -42,6 +61,7 @@ async def _task_sync_applications() -> dict:
     interval_seconds=INTERVAL_4H,
     description="Sync saved jobs from Naukri every 4 hours",
     timeout_seconds=120,
+    catch_up=True,  # read + upsert only; no purge/delete step
 )
 async def _task_sync_saved_jobs() -> dict:
     """Sync saved jobs from Naukri API."""
@@ -67,6 +87,7 @@ async def _task_daily_brief() -> dict:
     interval_seconds=INTERVAL_6H,
     description="Detect stale applications every 6 hours",
     timeout_seconds=60,
+    catch_up=True,  # pure read over the local DB
 )
 async def _task_stale_check() -> dict:
     """Detect stale applications needing follow-up."""
@@ -92,6 +113,7 @@ async def _task_boost_profile() -> dict:
     interval_seconds=INTERVAL_1H,
     description="Check for due reminders every hour",
     timeout_seconds=30,
+    catch_up=True,  # pure read; emits ReminderDue events
 )
 async def _task_reminder_check() -> dict:
     """Check for due reminders and emit events."""
@@ -108,6 +130,7 @@ async def _task_reminder_check() -> dict:
     interval_seconds=INTERVAL_2H,
     description="Fetch notification digest every 2 hours",
     timeout_seconds=60,
+    catch_up=True,  # read-only fetch of the notification summary
 )
 async def _task_notification_digest() -> dict:
     """Fetch notification summary for digest."""

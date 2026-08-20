@@ -68,6 +68,7 @@ def scheduled_task(
     timeout_seconds: float = 120.0,
     run_at_hour: Optional[int] = None,
     enabled: bool = True,
+    catch_up: bool = False,
 ) -> Callable:
     """Register a scheduled task. Equivalent to ScheduledTask(...) in TASK_DEFINITIONS."""
     def deco(fn):
@@ -78,6 +79,7 @@ def scheduled_task(
             "timeout_seconds": timeout_seconds,
             "run_at_hour": run_at_hour,
             "enabled": enabled,
+            "catch_up": catch_up,
         }
         registry.add(_RegisteredItem("scheduled_task", name, fn, meta))
         return fn

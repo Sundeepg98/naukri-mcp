@@ -25,6 +25,12 @@ class ScheduledTask:
     enabled: bool = True
     run_at_hour: Optional[int] = None  # Hour in IST (0-23), None = interval-based
     timeout_seconds: float = 120.0
+    # Run shortly after startup when the persisted last run is older than
+    # interval_seconds, instead of waiting a full interval the process may not
+    # survive. OFF by default: catch-up means "runs on every server start",
+    # which is only safe for tasks that neither mutate the Naukri account nor
+    # delete local rows.
+    catch_up: bool = False
 
 
 class TaskScheduler:
@@ -39,6 +45,17 @@ class TaskScheduler:
         self._asyncio_tasks: list[asyncio.Task] = []
         self._running = False
         self._task_locks: dict[str, asyncio.Lock] = {}
+        # Wall-clock epoch seconds of the last execution START, per task. This
+        # is the interval clock: a task is due only once interval_seconds have
+        # actually elapsed. Before this existed, a bucket wake ran every task
+        # in the bucket, so a WEEKLY task in the >=86400s bucket (which wakes
+        # hourly) fired 168x its declared rate -- measured on 2026-08-20:
+        # api_discovery ran at 08:34 and again at 09:35.
+        self._last_started: dict[str, float] = {}
+
+    # Backstop pause after an unexpected error inside an interval loop, so a
+    # persistent failure degrades to slow retries instead of a hot loop.
+    _ERROR_BACKOFF_SECONDS = 60.0
 
     def register(self, task: ScheduledTask):
         """Register a scheduled task."""
@@ -48,6 +65,7 @@ class TaskScheduler:
     async def start(self):
         """Create one asyncio task per interval bucket (matching HealthProbeScheduler pattern)."""
         self._running = True
+        await self.prime_schedule_from_db()
 
         # Group tasks by interval (bucket pattern from HealthProbeScheduler)
         buckets: dict[float, list[ScheduledTask]] = {}
@@ -98,6 +116,12 @@ class TaskScheduler:
                     "interval_seconds": t.interval_seconds,
                     "run_at_hour": t.run_at_hour,
                     "description": t.description,
+                    "catch_up": t.catch_up,
+                    "due_now": self.is_due(t),
+                    "seconds_since_last_start": (
+                        None if name not in self._last_started
+                        else round(time.time() - self._last_started[name], 1)
+                    ),
                 }
                 for name, t in self._tasks.items()
             },
@@ -124,6 +148,73 @@ class TaskScheduler:
         task = self._tasks[task_name]
         return await self._execute_task(task)
 
+    # -- interval clock -------------------------------------------------------
+
+    def is_due(self, task: ScheduledTask, now: Optional[float] = None) -> bool:
+        """Has interval_seconds actually elapsed since this task last started?
+
+        An unseeded task counts as due. prime_schedule() seeds every
+        non-catch_up task with "now" so the historical sleep-then-run cadence
+        is preserved exactly; catch_up tasks are seeded from their persisted
+        last run, or left unseeded (= due) when there is none.
+        """
+        last = self._last_started.get(task.name)
+        if last is None:
+            return True
+        return (now if now is not None else time.time()) - last >= task.interval_seconds
+
+    def prime_schedule(self, last_started: Optional[dict] = None) -> None:
+        """Seed the interval clock before the loops start.
+
+        `last_started` maps task name -> epoch seconds and wins over defaults.
+        """
+        now = time.time()
+        provided = last_started or {}
+        for name, task in self._tasks.items():
+            if name in provided:
+                self._last_started[name] = provided[name]
+            elif task.catch_up:
+                # Unseeded == due on the first wake.
+                self._last_started.pop(name, None)
+            else:
+                self._last_started[name] = now
+
+    @staticmethod
+    def _epoch_from_run_row(row: Optional[dict]) -> Optional[float]:
+        """Convert a scheduled_runs row into epoch seconds (None if unusable)."""
+        if not row:
+            return None
+        started = row.get("started_at")
+        if not started:
+            return None
+        try:
+            dt = datetime.fromisoformat(started)
+        except (TypeError, ValueError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    async def prime_schedule_from_db(self) -> None:
+        """Seed the interval clock, consulting persisted history for catch_up tasks.
+
+        Failure to read history is never fatal: the task simply falls back to
+        "due now" (catch_up) or "wait a full interval" (everything else).
+        """
+        seed: dict[str, float] = {}
+        for name, task in self._tasks.items():
+            if not task.catch_up:
+                continue
+            try:
+                from naukri_server.database import get_last_run
+                ts = self._epoch_from_run_row(await get_last_run(name))
+            except Exception as exc:
+                logger.warning("Could not read last run for %s: %s", name, exc)
+                continue
+            if ts is not None:
+                seed[name] = ts
+        self.prime_schedule(last_started=seed)
+
     # -- internal -----------------------------------------------------------
 
     async def _run_interval(self, interval: float, tasks: list[ScheduledTask]):
@@ -149,6 +240,16 @@ class TaskScheduler:
                     if task.run_at_hour is not None and not self._is_target_hour(task.run_at_hour):
                         logger.debug("Task %s: not target hour (want %d, now %d)", task.name, task.run_at_hour, datetime.now(IST).hour)
                         continue
+                    if not self.is_due(task):
+                        # Buckets with interval >= 86400 wake HOURLY (they sleep
+                        # min(seconds_until_next_run, 3600)), so without this
+                        # gate every run_at_hour=None task in such a bucket ran
+                        # once an hour regardless of its declared interval.
+                        logger.debug(
+                            "Task %s: not due yet (interval %ss)",
+                            task.name, task.interval_seconds,
+                        )
+                        continue
                     try:
                         await self._execute_task(task)
                     except Exception as exc:
@@ -156,7 +257,16 @@ class TaskScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                # BACKSTOP SLEEP. Anything raised BEFORE this iteration's sleep
+                # (e.g. _seconds_until_next_run on a task with an out-of-range
+                # run_at_hour) used to send the loop straight back to the top
+                # without sleeping -- a hot loop that pins a core and never runs
+                # a single task. Found while writing tests/test_scheduler_cadence.py.
                 logger.warning("Scheduler interval %ss error: %s", interval, exc)
+                try:
+                    await asyncio.sleep(min(interval, self._ERROR_BACKOFF_SECONDS))
+                except asyncio.CancelledError:
+                    break
 
     def _seconds_until_next_run(self, tasks: list[ScheduledTask]) -> float:
         """Calculate seconds until the next task should run."""
@@ -187,6 +297,10 @@ class TaskScheduler:
 
         async with lock:
             from naukri_server.database import insert_scheduled_run, update_scheduled_run
+
+            # Stamp the interval clock at START, not at completion: a task that
+            # takes minutes must not become instantly due again.
+            self._last_started[task.name] = time.time()
 
             started_at = datetime.now(timezone.utc).isoformat()
             run_id = await insert_scheduled_run(task.name, started_at)
