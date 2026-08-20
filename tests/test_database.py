@@ -64,6 +64,7 @@ async def test_init_db_creates_tables(tmp_path):
         "endpoint_audit",
         "event_log",
         "interview_rounds",
+        "migrations",
         "notifications",
         "reminders",
         "saved_jobs",

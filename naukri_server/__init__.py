@@ -69,6 +69,25 @@ async def lifespan(server):
         if _lifespan_refs == 1:
             await _browser_instance.start()
             await init_db()
+            # One-shot JSON -> SQLite import. migrate_json_to_sqlite() has
+            # existed and been unit-tested since the SQLite move, but nothing
+            # in production ever called it: on 2026-08-20 the DB reported 0
+            # applications while applications.json held 151 real records, and
+            # six tracking tools were structurally empty as a result.
+            # Guarded by the `migrations` ledger, so it is a no-op on every
+            # start after the first and cannot resurrect deleted rows.
+            try:
+                from naukri_server.database import migrate_json_to_sqlite
+                _migration = await migrate_json_to_sqlite()
+                if _migration.get("status") == "applied":
+                    logger.info(
+                        "JSON -> SQLite migration applied: apps=%s saved=%s reminders=%s rounds=%s",
+                        _migration.get("applications"), _migration.get("saved_jobs"),
+                        _migration.get("reminders"), _migration.get("interview_rounds"),
+                    )
+            except Exception as e:
+                # Never block startup on a data import.
+                logger.error("JSON -> SQLite migration failed (continuing): %s", e)
             # Start browser watchdog for self-healing
             _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
             await _watchdog_module.watchdog.start()

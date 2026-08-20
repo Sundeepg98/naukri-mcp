@@ -14,6 +14,22 @@ logger = logging.getLogger(__name__)
 DB_PATH = DATA_DIR / "naukri.db"
 _db_lock = asyncio.Lock()
 
+# Name of the one-shot JSON -> SQLite data migration as recorded in the
+# `migrations` ledger table. Bump the suffix only if the import ever has to
+# be re-run against every database as a genuinely new migration.
+JSON_MIGRATION_NAME = "json_to_sqlite_v1"
+
+# Migration ledger. Kept as its own constant (and appended to _SCHEMA_SQL
+# below) so has_migration_run() / record_migration() can create it
+# defensively on a database that was initialised before this table existed.
+_MIGRATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    rows_inserted INTEGER DEFAULT 0
+);
+"""
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS applications (
     job_id TEXT PRIMARY KEY,
@@ -173,7 +189,7 @@ CREATE TABLE IF NOT EXISTS auto_fix_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_auto_fix_pending_status ON auto_fix_pending(status);
 CREATE INDEX IF NOT EXISTS idx_auto_fix_pending_verify ON auto_fix_pending(verify_at);
-"""
+""" + _MIGRATIONS_TABLE_SQL
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -663,8 +679,69 @@ async def get_recruiter_history():
         await db.close()
 
 
-async def migrate_json_to_sqlite():
-    """One-time migration: import existing JSON files into SQLite."""
+async def has_migration_run(name: str) -> bool:
+    """Return True if the named one-shot migration is recorded in the ledger."""
+    db = await get_db()
+    try:
+        # Defensive: the ledger may not exist yet on a database created by
+        # an older init_db(). The DDL is CREATE TABLE IF NOT EXISTS.
+        await db.executescript(_MIGRATIONS_TABLE_SQL)
+        cursor = await db.execute(
+            "SELECT 1 FROM migrations WHERE name = ?", (name,)
+        )
+        return await cursor.fetchone() is not None
+    finally:
+        await db.close()
+
+
+async def record_migration(name: str, rows_inserted: int = 0) -> None:
+    """Record that a one-shot migration ran.
+
+    INSERT OR REPLACE, so `applied_at` / `rows_inserted` always describe the
+    MOST RECENT run of that migration -- a forced re-run overwrites the row.
+    """
+    from datetime import datetime, timezone
+
+    db = await get_db()
+    try:
+        await db.executescript(_MIGRATIONS_TABLE_SQL)
+        await db.execute(
+            "INSERT OR REPLACE INTO migrations (name, applied_at, rows_inserted) "
+            "VALUES (?, ?, ?)",
+            (name, datetime.now(timezone.utc).isoformat(), rows_inserted),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def _empty_counts() -> dict:
+    """Zeroed per-entity counter block."""
+    return {"read": 0, "inserted": 0, "skipped": 0}
+
+
+async def migrate_json_to_sqlite(force: bool = False) -> dict:
+    """One-time migration: import existing JSON files into SQLite.
+
+    Guarded by the `migrations` ledger so that a server restart cannot
+    silently resurrect rows the operator deliberately deleted. Pass
+    ``force=True`` to run regardless of the ledger; the inserts remain
+    INSERT-OR-IGNORE keyed on job_id, so a forced re-run never duplicates a
+    row and never overwrites newer DB state with older JSON state.
+
+    Returns::
+
+        {"status": "applied" | "skipped",
+         "applications":     {"read": N, "inserted": N, "skipped": N},
+         "saved_jobs":       {...},
+         "reminders":        {...},
+         "interview_rounds": {...}}
+
+    where `inserted` is the summed cursor.rowcount of the INSERT statements
+    (1 when the row landed, 0 when it was ignored) and `skipped` is
+    `read` - `inserted`. A missing JSON file is a no-op, not an error --
+    load_json_with_backup() returns [] for a path that does not exist.
+    """
     from naukri_server.utils import load_json_with_backup
     from naukri_server.config import (
         APPLICATIONS_FILE,
@@ -673,13 +750,44 @@ async def migrate_json_to_sqlite():
         INTERVIEW_ROUNDS_FILE,
     )
 
+    if not force and await has_migration_run(JSON_MIGRATION_NAME):
+        logger.info(
+            "Migration %s already recorded -- skipping JSON import",
+            JSON_MIGRATION_NAME,
+        )
+        return {
+            "status": "skipped",
+            "reason": "already_applied",
+            "applications": _empty_counts(),
+            "saved_jobs": _empty_counts(),
+            "reminders": _empty_counts(),
+            "interview_rounds": _empty_counts(),
+        }
+
+    counts = {
+        "applications": _empty_counts(),
+        "saved_jobs": _empty_counts(),
+        "reminders": _empty_counts(),
+        "interview_rounds": _empty_counts(),
+    }
+
     db = await get_db()
     try:
+        # Derive the mapped column set from the live table rather than from a
+        # hardcoded literal, so any future column automatically stops being
+        # routed into `extra`.
+        cursor = await db.execute("PRAGMA table_info(applications)")
+        app_columns = {row[1] for row in await cursor.fetchall()}
+
         # Migrate applications
         apps = load_json_with_backup(APPLICATIONS_FILE, logger)
+        counts["applications"]["read"] = len(apps)
         for app in apps:
-            await db.execute(
-                "INSERT OR IGNORE INTO applications (job_id, title, company, status, applied_at, source, ars_score, star_rating, job_activity, company_rating, is_open, view_count, follow_up_priority, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            # Everything the applications table has no column for goes into
+            # the `extra` JSON blob instead of being silently dropped.
+            extra = {k: v for k, v in app.items() if k not in app_columns}
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO applications (job_id, title, company, status, applied_at, source, ars_score, star_rating, job_activity, company_rating, is_open, view_count, follow_up_priority, last_synced, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     app.get("job_id"),
                     app.get("title"),
@@ -697,13 +805,18 @@ async def migrate_json_to_sqlite():
                     app.get("view_count"),
                     app.get("follow_up_priority", 50),
                     app.get("last_synced"),
+                    json.dumps(extra, ensure_ascii=False, sort_keys=True, default=str)
+                    if extra
+                    else None,
                 ),
             )
+            counts["applications"]["inserted"] += max(cursor.rowcount, 0)
 
         # Migrate saved jobs
         saved = load_json_with_backup(SAVED_JOBS_FILE, logger)
+        counts["saved_jobs"]["read"] = len(saved)
         for sj in saved:
-            await db.execute(
+            cursor = await db.execute(
                 "INSERT OR IGNORE INTO saved_jobs (job_id, title, company, notes, saved_at, source) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     sj.get("job_id"),
@@ -714,11 +827,13 @@ async def migrate_json_to_sqlite():
                     sj.get("source", "manual"),
                 ),
             )
+            counts["saved_jobs"]["inserted"] += max(cursor.rowcount, 0)
 
         # Migrate reminders
         reminders = load_json_with_backup(REMINDERS_FILE, logger)
+        counts["reminders"]["read"] = len(reminders)
         for r in reminders:
-            await db.execute(
+            cursor = await db.execute(
                 "INSERT OR IGNORE INTO reminders (job_id, title, company, remind_at, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     r.get("job_id"),
@@ -729,12 +844,23 @@ async def migrate_json_to_sqlite():
                     r.get("created_at"),
                 ),
             )
+            counts["reminders"]["inserted"] += max(cursor.rowcount, 0)
 
-        # Migrate interview rounds
+        # Migrate interview rounds.
+        # NOTE: interview_rounds.id is INTEGER PRIMARY KEY AUTOINCREMENT and
+        # job_id is NOT unique, so a plain INSERT OR IGNORE here can never
+        # conflict and WOULD duplicate every row on a forced re-run. Guard on
+        # the natural key (job_id, round_type, date) instead so this function
+        # is genuinely idempotent for all four entities.
         rounds = load_json_with_backup(INTERVIEW_ROUNDS_FILE, logger)
+        counts["interview_rounds"]["read"] = len(rounds)
         for rd in rounds:
-            await db.execute(
-                "INSERT OR IGNORE INTO interview_rounds (job_id, round_type, date, notes, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            cursor = await db.execute(
+                "INSERT INTO interview_rounds (job_id, round_type, date, notes, status, created_at) "
+                "SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS ("
+                "  SELECT 1 FROM interview_rounds"
+                "  WHERE job_id IS ? AND round_type IS ? AND date IS ?"
+                ")",
                 (
                     rd.get("job_id"),
                     rd.get("round_type"),
@@ -742,19 +868,35 @@ async def migrate_json_to_sqlite():
                     rd.get("notes"),
                     rd.get("status"),
                     rd.get("created_at"),
+                    rd.get("job_id"),
+                    rd.get("round_type"),
+                    rd.get("date"),
                 ),
             )
+            counts["interview_rounds"]["inserted"] += max(cursor.rowcount, 0)
 
         await db.commit()
-        logger.info(
-            "Migrated %d apps, %d saved, %d reminders, %d rounds to SQLite",
-            len(apps),
-            len(saved),
-            len(reminders),
-            len(rounds),
-        )
     finally:
         await db.close()
+
+    for block in counts.values():
+        block["skipped"] = block["read"] - block["inserted"]
+
+    total_inserted = sum(block["inserted"] for block in counts.values())
+    await record_migration(JSON_MIGRATION_NAME, total_inserted)
+
+    logger.info(
+        "Migrated to SQLite (inserted/read): apps %d/%d, saved %d/%d, "
+        "reminders %d/%d, rounds %d/%d",
+        counts["applications"]["inserted"], counts["applications"]["read"],
+        counts["saved_jobs"]["inserted"], counts["saved_jobs"]["read"],
+        counts["reminders"]["inserted"], counts["reminders"]["read"],
+        counts["interview_rounds"]["inserted"], counts["interview_rounds"]["read"],
+    )
+
+    result = {"status": "applied"}
+    result.update(counts)
+    return result
 
 
 # ---------------------------------------------------------------------------
