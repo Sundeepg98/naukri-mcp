@@ -1,4 +1,16 @@
-mcp[cli]>=1.25.0
+# Upper bound is load-bearing, not defensive habit. mcp 2.0.0 relocated
+# mcp/server/fastmcp to mcp/server/mcpserver, so `from mcp.server.fastmcp import
+# FastMCP` (naukri_server/__init__.py:42) raises on import and every one of the
+# 55 test modules dies at collection. Measured 2026-08-20 in a clean venv: an
+# unbounded resolve picked mcp 2.0.0 and produced "5 deselected, 55 errors,
+# zero tests run"; the identical venv with mcp<2 gave "2130 passed".
+#
+# This was invisible locally because this venv holds mcp 1.26.0, installed
+# before 2.0.0 shipped -- only a clean resolve (i.e. CI) sees it.
+#
+# Removing this cap is a MIGRATION to the mcp 2.x import layout, not a version
+# bump. tests/test_requirements_pins.py fails if it disappears.
+mcp[cli]>=1.25.0,<2
 playwright>=1.58.0
 aiohttp>=3.13.3
 aiosqlite>=0.22.0
