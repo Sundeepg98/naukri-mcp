@@ -9,6 +9,65 @@ import time
 from pathlib import Path
 
 
+import functools
+import logging as _logging
+
+_wd_logger = _logging.getLogger("naukri")
+
+
+def tool_watchdog(timeout: float = None, name: str = None):
+    """Last-resort per-tool-call budget.
+
+    A tool that never returns is worse than a tool that fails: the MCP client
+    waits out its own timeout, the operator sees nothing, and (as on 2026-08-20)
+    the stall can be holding a shared lock the rest of the server needs. This
+    decorator converts "never" into the server's ordinary error envelope,
+    ``{"status": "error", "error_code": "TIMEOUT"}``, which every caller already
+    knows how to read.
+
+    It is a BACKSTOP, not a policy: the default budget
+    (``TOOL_WATCHDOG_TIMEOUT``, 600s) sits far above any legitimate tool -
+    auto_hunt and batch_apply legitimately run for minutes - because its job is
+    to bound a PERMANENT wedge, not to police slow work. The real fixes live at
+    the awaits themselves (see naukri_server/browser.py).
+
+    Deliberately NOT caught: ordinary exceptions. A tool that fails must keep
+    failing with its own error, or the watchdog would mask real bugs as
+    timeouts.
+    """
+    from naukri_server.config import TOOL_WATCHDOG_TIMEOUT
+
+    budget = TOOL_WATCHDOG_TIMEOUT if timeout is None else timeout
+
+    def decorate(fn):
+        label = name or getattr(fn, "__name__", "tool")
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
+            except asyncio.TimeoutError:
+                _wd_logger.error(
+                    "Tool %s exceeded its %.0fs watchdog budget and was cancelled - "
+                    "returning a TIMEOUT envelope instead of hanging the client.",
+                    label, budget,
+                )
+                return {
+                    "status": "error",
+                    "error_code": "TIMEOUT",
+                    "message": (
+                        f"{label} did not complete within {budget:.0f}s and was "
+                        "cancelled. The browser or an upstream API is likely "
+                        "unresponsive; try naukri_health_check."
+                    ),
+                }
+
+        wrapper.__wrapped_by_watchdog__ = True
+        return wrapper
+
+    return decorate
+
+
 def derive_slug(company_name: str) -> str:
     """Derive an AmbitionBox-style URL slug from a company name.
 

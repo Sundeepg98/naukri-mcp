@@ -206,6 +206,45 @@ else:
 
 mcp = FastMCP("naukri", **_fastmcp_kwargs)
 
+# --- Server-wide tool watchdog ----------------------------------------------
+# The 2026-08-20 wedge did not stop at its own handler: a stuck
+# naukri_health_check took an UNRELATED naukri_activity_level down with it, so
+# the blast radius was the whole server. Every tool is therefore registered
+# behind a last-resort budget, and a permanent stall surfaces as the ordinary
+# error envelope {"status": "error", "error_code": "TIMEOUT"} rather than a
+# client that waits forever with nothing to show.
+#
+# This is a BACKSTOP. TOOL_WATCHDOG_TIMEOUT (600s) sits far above any legitimate
+# tool - auto_hunt and batch_apply really do run for minutes - because its job
+# is to bound "never", not to police "slow". The load-bearing fixes are the
+# per-await bounds in naukri_server/browser.py and the per-check budgets in
+# naukri_server/tools/health.py; this only guarantees that anything they miss
+# still ends.
+#
+# Wrapping happens BEFORE the tool modules are imported below, so every
+# @mcp.tool() lands inside it. functools.wraps preserves __name__/__doc__ and
+# sets __wrapped__, so FastMCP's signature introspection (and therefore every
+# tool's input schema) is unchanged.
+import inspect as _inspect  # noqa: E402
+
+from naukri_server.utils import tool_watchdog as _tool_watchdog  # noqa: E402
+
+_undecorated_tool = mcp.tool
+
+
+def _watchdogged_tool(*t_args, **t_kwargs):
+    register = _undecorated_tool(*t_args, **t_kwargs)
+
+    def apply(fn):
+        if _inspect.iscoroutinefunction(fn):
+            fn = _tool_watchdog(name=getattr(fn, "__name__", None))(fn)
+        return register(fn)
+
+    return apply
+
+
+mcp.tool = _watchdogged_tool
+
 # Register OAuth consent UI route only when OAuth is enabled and not in
 # auto-approve mode (otherwise the consent endpoint is unreachable).
 if _oauth_enabled and _oauth_provider is not None and not _oauth_provider._auto_approve:
