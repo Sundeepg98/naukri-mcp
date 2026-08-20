@@ -1,10 +1,49 @@
-"""Shared fit scoring logic for job-profile matching."""
+"""Shared fit scoring logic for job-profile matching.
 
-import re
+RE-EXPORT SHIM. The implementation moved to ``jobcore.scoring``. This module
+binds a :class:`jobcore.scoring.ScoringEngine` to Naukri's salary units and
+re-exports the flat function API, so every existing call site and test import
+still resolves:
+
+    from naukri_server.scoring import normalize_skill, parse_skills, compute_fit_score
+    from naukri_server.scoring import _score_location, _score_work_mode, _score_salary
+
+The ``_score_*`` helpers keep their leading underscore and their exact
+signatures because ``tools/auto_hunt.py``, ``tools/compare.py`` and
+``tools/smart_apply.py`` import them by name and hand them to
+``FitScore.compute()``.
+"""
+
 from typing import Optional
 
-from naukri_server.domain.fit_score import FitScore
-from naukri_server.domain.skill_taxonomy import SKILL_ALIASES, DEFAULT_TAXONOMY
+from jobcore.fit import FitScore
+from jobcore.scoring import ScoringEngine
+
+from naukri_server.domain.skill_taxonomy import DEFAULT_TAXONOMY, SKILL_ALIASES
+
+__all__ = [
+    "normalize_skill",
+    "parse_skills",
+    "compute_fit_score",
+    "FitScore",
+    "SKILL_ALIASES",
+    "DEFAULT_TAXONOMY",
+]
+
+# The engine needs naukri_server.domain.salary, which imports
+# naukri_server.config. Build it on first use rather than at import time so the
+# module keeps the same import-order tolerance it had when the Salary import
+# lived inside _score_salary().
+_ENGINE: Optional[ScoringEngine] = None
+
+
+def _engine() -> ScoringEngine:
+    global _ENGINE
+    if _ENGINE is None:
+        from naukri_server.domain.salary import Salary
+
+        _ENGINE = ScoringEngine(taxonomy=DEFAULT_TAXONOMY, salary_cls=Salary)
+    return _ENGINE
 
 
 def normalize_skill(skill: str) -> str:
@@ -25,29 +64,12 @@ def parse_skills(raw) -> set:
 
 def _score_location(job_location: Optional[str], profile_location: Optional[str]) -> int:
     """Score location match. Returns 0 or 5 bonus points."""
-    if not job_location or not profile_location:
-        return 0
-    jl = job_location.lower().strip()
-    pl = profile_location.lower().strip()
-    # Exact city match (substring to handle "Bangalore/Bengaluru" vs "Bangalore")
-    if pl in jl or jl in pl:
-        return 5
-    # Remote is universally acceptable
-    if any(w in jl for w in ("remote", "wfh", "work from home", "anywhere")):
-        return 5
-    return 0
+    return _engine().score_location(job_location, profile_location)
 
 
 def _score_work_mode(job_work_mode: Optional[str]) -> int:
     """Score work mode. Remote/WFH gets a bonus. Returns 0-5 bonus points."""
-    if not job_work_mode:
-        return 0
-    wm = job_work_mode.lower().strip()
-    if wm in ("wfh", "remote", "work from home"):
-        return 5
-    if wm == "hybrid":
-        return 3
-    return 0  # Office — no penalty, just no bonus
+    return _engine().score_work_mode(job_work_mode)
 
 
 def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
@@ -56,23 +78,7 @@ def _score_salary(job_salary: Optional[str], profile_expected_ctc) -> int:
     Only scores when both job salary and profile expected CTC are available.
     Accepts profile_expected_ctc as float or string (e.g., "15.0 Lacs").
     """
-    from naukri_server.domain.salary import Salary
-
-    if not job_salary or profile_expected_ctc is None:
-        return 0
-    # Parse profile CTC to float if string
-    if isinstance(profile_expected_ctc, str):
-        ctc_nums = re.findall(r'(\d+(?:\.\d+)?)', profile_expected_ctc)
-        if not ctc_nums:
-            return 0
-        profile_expected_ctc = float(ctc_nums[0])
-    elif not isinstance(profile_expected_ctc, (int, float)):
-        return 0
-
-    salary = Salary.from_string(job_salary)
-    if not salary.is_disclosed:
-        return 0
-    return salary.compare_to_ctc(profile_expected_ctc)
+    return _engine().score_salary(job_salary, profile_expected_ctc)
 
 
 # ── Main Scoring Function ───────────────────────────────────────────────────
@@ -100,7 +106,7 @@ def compute_fit_score(
     Additive bonuses: +5 location match, +5 remote/WFH, +5 salary fit (max +15).
     Overall score capped at 100.
 
-    Delegates to FitScore aggregate and returns its dict representation.
+    Delegates to jobcore's ScoringEngine and returns its dict representation.
 
     Args:
         job_skills: Set of normalized job skill strings
@@ -117,7 +123,7 @@ def compute_fit_score(
         {overall_score, skill_match, experience_match, bonuses (if data provided),
          recommendation}
     """
-    return FitScore.compute(
+    return _engine().compute_fit_score(
         job_skills=job_skills,
         profile_skills=profile_skills,
         job_exp_str=job_exp_str,
@@ -130,7 +136,4 @@ def compute_fit_score(
         experience_min=experience_min,
         experience_max=experience_max,
         is_agent_eligible=is_agent_eligible,
-        score_location_fn=_score_location,
-        score_work_mode_fn=_score_work_mode,
-        score_salary_fn=_score_salary,
-    ).to_dict()
+    )

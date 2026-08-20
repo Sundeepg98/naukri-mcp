@@ -8,3 +8,11 @@ python-dotenv>=1.2.1
 PyJWT>=2.10.1
 typing_extensions>=4.0.0  # NotRequired backport for Python 3.10
 async-timeout>=4.0; python_version < "3.11"  # asyncio.timeout() backport for Python 3.10
+
+# jobcore — the shared, platform-agnostic scoring engine (skill taxonomy, fit
+# score, salary parsing) that naukri_server/scoring.py and the domain/ scoring
+# modules re-export. It lives in the sibling repo mcp-servers/jobcore and is NOT
+# on PyPI, so it is deliberately not a pip requirement line here.
+#
+# Install it into this venv before running the server or the tests:
+#     pip install -e ../jobcore
