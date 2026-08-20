@@ -44,10 +44,18 @@ def _counting_task(name, interval, calls, **kw):
 
 
 async def _drive(scheduler, tasks, interval, wakes):
-    """Run _run_interval for exactly `wakes` wake-ups, with no real sleeping."""
-    n = {"i": 0}
+    """Run _run_interval for exactly `wakes` wake-ups, with no real sleeping.
 
-    async def fake_sleep(_seconds):
+    Returns the list of durations the loop ASKED to sleep for -- the schedule
+    it would really have followed. Asserting on task calls alone is not enough:
+    a task can be correctly marked due and still never run in practice because
+    the loop slept four hours before looking.
+    """
+    n = {"i": 0}
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
         n["i"] += 1
         if n["i"] >= wakes:
             scheduler._running = False
@@ -61,6 +69,7 @@ async def _drive(scheduler, tasks, interval, wakes):
         await asyncio.wait_for(
             scheduler._run_interval(interval, tasks), timeout=10
         )
+    return slept
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +160,40 @@ async def test_catch_up_task_runs_on_the_first_wake_when_overdue():
     # wakes=2: the loop breaks immediately after the sleep that flips _running,
     # so N wakes give N-1 effective task passes. Two wakes therefore means one
     # pass -- which must produce exactly ONE run, not a repeat.
-    await _drive(sched, [task], 14400, wakes=2)
+    slept = await _drive(sched, [task], 14400, wakes=2)
     assert calls == ["readonly_sync"]
+
+    # And it must actually happen SOON. Marking the task due while the loop
+    # still sleeps 14400s first would leave the defect exactly where it was:
+    # the process never lives to the first wake.
+    assert slept[0] == TaskScheduler._STARTUP_GRACE_SECONDS, (
+        "first wake was %ss - an overdue catch-up task still waits a full "
+        "interval" % slept[0]
+    )
+    assert slept[0] < 300
+
+
+async def test_startup_grace_is_not_used_when_nothing_is_overdue():
+    """A bucket with no overdue catch_up task keeps its normal cadence."""
+    sched = TaskScheduler()
+    calls = []
+    task = _counting_task("readonly_sync", 14400, calls, catch_up=True)
+    sched.register(task)
+    sched.prime_schedule(last_started={"readonly_sync": _hours_ago(1)})
+
+    slept = await _drive(sched, [task], 14400, wakes=1)
+    assert slept == [14400]
+
+
+async def test_startup_grace_is_not_used_for_non_catch_up_buckets():
+    sched = TaskScheduler()
+    calls = []
+    task = _counting_task("mutating", 7200, calls)
+    sched.register(task)
+    sched.prime_schedule()
+
+    slept = await _drive(sched, [task], 7200, wakes=1)
+    assert slept == [7200]
 
 
 async def test_catch_up_task_does_not_rerun_when_recently_run():

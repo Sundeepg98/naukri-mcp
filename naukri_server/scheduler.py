@@ -57,6 +57,12 @@ class TaskScheduler:
     # persistent failure degrades to slow retries instead of a hot loop.
     _ERROR_BACKOFF_SECONDS = 60.0
 
+    # First-wake delay used INSTEAD of a full interval when a bucket already
+    # holds an overdue catch_up task. Long enough for the browser and the API
+    # session to finish coming up, short enough that the work actually happens
+    # on a process that may only live an hour.
+    _STARTUP_GRACE_SECONDS = 45.0
+
     def register(self, task: ScheduledTask):
         """Register a scheduled task."""
         self._tasks[task.name] = task
@@ -219,10 +225,22 @@ class TaskScheduler:
 
     async def _run_interval(self, interval: float, tasks: list[ScheduledTask]):
         """Loop: sleep → check schedule → run eligible tasks → repeat."""
+        first_wake = True
         while self._running:
             try:
+                if first_wake and self._bucket_has_overdue_catch_up(tasks):
+                    # An opted-in task is ALREADY overdue. Sleeping a whole
+                    # interval here is what made 4h and 6h tasks never run at
+                    # all: the server does not live that long, so the first
+                    # wake never arrived. Use a short startup grace instead.
+                    logger.info(
+                        "Scheduler bucket %ss: overdue catch-up task present, "
+                        "first wake in %.0fs instead of %ss",
+                        interval, self._STARTUP_GRACE_SECONDS, interval,
+                    )
+                    await asyncio.sleep(self._STARTUP_GRACE_SECONDS)
                 # For daily tasks with run_at_hour, calculate sleep to next target
-                if interval >= 86400:
+                elif interval >= 86400:
                     sleep_time = self._seconds_until_next_run(tasks)
                     if sleep_time > 0:
                         await asyncio.sleep(min(sleep_time, 3600))  # Check every hour max
@@ -231,6 +249,7 @@ class TaskScheduler:
                 else:
                     await asyncio.sleep(interval)
 
+                first_wake = False
                 if not self._running:
                     break
                 for task in tasks:
@@ -267,6 +286,10 @@ class TaskScheduler:
                     await asyncio.sleep(min(interval, self._ERROR_BACKOFF_SECONDS))
                 except asyncio.CancelledError:
                     break
+
+    def _bucket_has_overdue_catch_up(self, tasks: list[ScheduledTask]) -> bool:
+        """Is any enabled catch_up task in this bucket already due?"""
+        return any(t.enabled and t.catch_up and self.is_due(t) for t in tasks)
 
     def _seconds_until_next_run(self, tasks: list[ScheduledTask]) -> float:
         """Calculate seconds until the next task should run."""
