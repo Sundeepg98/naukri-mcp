@@ -299,8 +299,37 @@ costs no more than a few multi-purpose ones.
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e ../jobcore     # shared scoring engine - see below
 playwright install chromium
 ```
+
+#### The `jobcore` dependency
+
+The skill taxonomy, fit scoring and salary parsing live in a sibling package,
+[`jobcore`](https://github.com/Sundeepg98/jobcore); `naukri_server/scoring.py`
+and the `domain/` scoring modules are thin re-export shims over it. It is not on
+PyPI, so it is installed one of two ways, and the two are deliberately kept
+apart:
+
+| where | how | why |
+|---|---|---|
+| local dev | `pip install -e ../jobcore` | edit jobcore and naukri together, no reinstall |
+| CI | `requirements-ci.txt`, pinned to an exact commit | the runner has no `../jobcore` checkout |
+
+**Do not add the git URL to `requirements.txt`.** It clobbers the editable
+install: after `pip install -e ../jobcore`, a later `pip install -r
+requirements.txt` uninstalls the editable package and replaces it with a git
+checkout - silently, since pip prints no "already satisfied" line for a
+direct-URL requirement. Measured on a clean venv 2026-08-20 and reproduced
+twice. Local iteration matters more than CI convenience here, so CI is the side
+that installs from git.
+
+If you rebuild the venv, or see `ModuleNotFoundError: jobcore`, re-run
+`pip install -e ../jobcore` from this directory.
+
+Bumping the pin in `requirements-ci.txt` is how a jobcore change is adopted -
+deliberately a visible, reviewable commit rather than a moving `@master` that
+could turn this repo's CI red with no change here.
 
 ### First Login
 

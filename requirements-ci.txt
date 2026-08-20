@@ -1,0 +1,25 @@
+# CI-only requirements. Use requirements.txt for local development.
+#
+# WHY THIS FILE EXISTS, measured rather than assumed:
+# putting the jobcore git URL in requirements.txt CLOBBERS a local editable
+# install. Verified on a clean venv 2026-08-20 -- after `pip install -e
+# ../jobcore`, running `pip install -r <file with the git URL>` printed
+# "Attempting uninstall: jobcore / Successfully uninstalled", the
+# "Editable project location" line disappeared, and the __editable__ shim was
+# replaced by a real jobcore/ directory. Reproduced twice. pip prints no
+# "Requirement already satisfied" line for a direct-URL requirement, so the
+# clobber is silent unless you go looking.
+#
+# Local iteration on jobcore matters more than CI convenience, so CI is the
+# side that installs from git and requirements.txt stays editable-friendly.
+#
+# LOCAL DEVELOPERS: do not use this file. See requirements.txt.
+
+-r requirements.txt
+
+# Pinned to an exact commit, not @master. naukri's tests assert specific
+# taxonomy behaviour (tests/test_search_impressions_invariants.py requires the
+# typographic-quote folding added in 3f2f742), so a moving branch means this
+# repo's CI can turn red from a commit in another repo with no change here.
+# Bumping this line is the visible, reviewable way to adopt a jobcore change.
+jobcore @ git+https://github.com/Sundeepg98/jobcore@3f2f74286e5b1f2b5946b71808472314fb14a363

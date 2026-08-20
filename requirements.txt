@@ -11,8 +11,20 @@ async-timeout>=4.0; python_version < "3.11"  # asyncio.timeout() backport for Py
 
 # jobcore — the shared, platform-agnostic scoring engine (skill taxonomy, fit
 # score, salary parsing) that naukri_server/scoring.py and the domain/ scoring
-# modules re-export. It lives in the sibling repo mcp-servers/jobcore and is NOT
-# on PyPI, so it is deliberately not a pip requirement line here.
+# modules re-export. It is published at github.com/Sundeepg98/jobcore but is NOT
+# on PyPI, and it is deliberately NOT a requirement line in THIS file.
 #
-# Install it into this venv before running the server or the tests:
-#     pip install -e ../jobcore
+# Why not: a `jobcore @ git+...` line here would silently CLOBBER a local
+# editable install. Measured on a clean venv 2026-08-20 -- after
+# `pip install -e ../jobcore`, a later `pip install -r requirements.txt` printed
+# "Attempting uninstall: jobcore", dropped the "Editable project location" line,
+# and replaced the __editable__ shim with a real jobcore/ directory. So every
+# routine `pip install -r requirements.txt` would quietly disconnect you from
+# the sibling checkout you were editing.
+#
+# LOCAL (this is the intended workflow):
+#     pip install -r requirements.txt
+#     pip install -e ../jobcore          # once, and after any venv rebuild
+#
+# CI installs it from git instead, via requirements-ci.txt, which pins an exact
+# commit. See .github/workflows/ci.yml.
