@@ -262,7 +262,10 @@ def status() -> dict[str, Any]:
             "soft_signals_in_window": len(_state._soft_signals),
             "soft_signal_threshold": SOFT_SIGNAL_THRESHOLD,
             "window_seconds": WINDOW_SECONDS,
-            "state_file": str(_STATE_PATH),
+            # NAME only, not the path. Which file holds the state is useful
+            # operational detail; WHERE it lives on this machine is not, and
+            # the full path shipped in every status call.
+            "state_file": _STATE_PATH.name,
         }
 
 

@@ -129,7 +129,7 @@ def status() -> dict[str, Any]:
         return {
             "disabled": _HEALING_DISABLED,
             "reason": _DISABLED_REASON,
-            "state_file": str(_STATE_PATH),
+            "state_file": _STATE_PATH.name,  # name only, not the path
         }
 
 

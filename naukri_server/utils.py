@@ -6,13 +6,86 @@ import os
 import re
 import shutil
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 import functools
 import logging as _logging
 
 _wd_logger = _logging.getLogger("naukri")
+
+
+SERVER_ROOT = Path(__file__).resolve().parent.parent
+"""The naukri/ directory. Paths under it are returned RELATIVE to it."""
+
+# The repo root, as a pattern that tolerates either separator and any casing --
+# the same path arrives as "D:\...", "D:/..." and "d:\..." depending on
+# whether it came from pathlib, a URL-ish string, or a Windows API error.
+_ROOT_PARTS = list(SERVER_ROOT.parts)
+if _ROOT_PARTS:
+    _ROOT_PARTS[0] = _ROOT_PARTS[0].rstrip("\\/")
+_ROOT_RE = re.compile(
+    r"[\\/]+".join(re.escape(part) for part in _ROOT_PARTS) + r"[\\/]*",
+    re.IGNORECASE,
+)
+
+# Any Windows drive-letter path. POSIX absolute paths are deliberately NOT
+# matched generically: every Naukri API path in these responses starts with a
+# slash ("/jobapi/v3/search"), as does the path component of every URL, and a
+# scrubber that ate those would do far more damage than the leak it fixes.
+# The negative lookbehind is load-bearing: without it "https://host/x" matches
+# as drive "s:", and the scrubber turns every URL in every response into
+# "httpx". A drive letter is a SINGLE letter, so anything alphanumeric before it
+# means this is a URL scheme, not a path.
+_DRIVE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s'\"<>|,;)\]}]*")
+
+_SCRUB_MAX_DEPTH = 12
+
+
+def scrub_paths(text):
+    """Remove absolute local filesystem paths from a string.
+
+    Two rules, in order:
+
+    1. A path INSIDE the server root loses the root and keeps the rest, so
+       "<root>/exports/apps.json" becomes "exports/apps.json" -- still enough to
+       find the file, with the machine layout gone.
+    2. Anything still absolute is outside the repo, where not even the directory
+       is the caller's business, so only the basename survives.
+
+    Non-strings are returned untouched, so this is safe to map over a result.
+    """
+    if not isinstance(text, str):
+        return text
+    out = _ROOT_RE.sub("", text)
+    return _DRIVE_PATH_RE.sub(
+        lambda m: PureWindowsPath(m.group(0)).name or m.group(0), out
+    )
+
+
+def scrub_result(value, _depth: int = 0):
+    """Apply :func:`scrub_paths` to every string in a tool result.
+
+    Exists because the leak cannot be held shut site by site. Six of the twenty
+    known emission sites put a path in a field deliberately; the other fourteen
+    got one from `f"...{e}"`, and OSError and Playwright both embed the filename
+    they failed on. Every future `except Exception as e:` re-opens that class,
+    so the guarantee has to live at the boundary, not at the sites.
+    """
+    if _depth > _SCRUB_MAX_DEPTH:
+        return value
+    if isinstance(value, str):
+        return scrub_paths(value)
+    if isinstance(value, dict):
+        return {
+            scrub_result(k, _depth + 1): scrub_result(v, _depth + 1)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [scrub_result(v, _depth + 1) for v in value]
+    if isinstance(value, tuple):
+        return tuple(scrub_result(v, _depth + 1) for v in value)
+    return value
 
 
 def tool_watchdog(timeout: float = None, name: str = None):
@@ -45,7 +118,9 @@ def tool_watchdog(timeout: float = None, name: str = None):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             try:
-                return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
+                return scrub_result(
+                    await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
+                )
             except asyncio.TimeoutError:
                 _wd_logger.error(
                     "Tool %s exceeded its %.0fs watchdog budget and was cancelled - "

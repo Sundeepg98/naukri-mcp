@@ -319,7 +319,12 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
     # Startup validation: Chrome profile directory
     warnings = []
     if not os.path.isdir(CHROME_PROFILE):
-        warnings.append(f"Chrome profile directory missing: {CHROME_PROFILE}")
+        # Basename only: the warning is actionable without publishing where
+        # the profile lives on this machine.
+        warnings.append(
+            "Chrome profile directory missing: %s"
+            % os.path.basename(os.path.normpath(CHROME_PROFILE))
+        )
 
     # PagePool observability stats
     pool_stats = browser.page_pool.get_stats() if browser.page_pool else None
