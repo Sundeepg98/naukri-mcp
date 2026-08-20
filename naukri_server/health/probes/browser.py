@@ -10,10 +10,18 @@ async def browser_liveness() -> ProbeResult:
         return ProbeResult(status="unhealthy", message="Browser not available")
     try:
         from naukri_server._compat import timeout as _timeout
+        from naukri_server.browser import is_page_alive
         async with _timeout(10):
             async with browser.page_pool.acquire() as page:
-                _ = page.url
-                return ProbeResult(status="healthy", message="Browser alive")
+                # `_ = page.url` here was a cached string read that could not
+                # raise, so this probe reported "Browser alive" for 37 minutes
+                # against a dead Chromium on 2026-08-20. Round-trip instead.
+                if await is_page_alive(page):
+                    return ProbeResult(status="healthy", message="Browser alive")
+                return ProbeResult(
+                    status="unhealthy",
+                    message="Page did not answer a liveness round-trip (target closed or wedged)",
+                )
     except Exception as e:
         return ProbeResult(status="unhealthy", message=f"Probe failed: {e}")
 

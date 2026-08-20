@@ -233,6 +233,41 @@ class TokenManager:
         return self._token
 
 
+# Seconds a liveness round-trip may take before the page is declared dead.
+# Deliberately short: this runs on every page checkout.
+BROWSER_LIVENESS_TIMEOUT = 5.0
+
+
+async def is_page_alive(page, timeout: float = BROWSER_LIVENESS_TIMEOUT) -> bool:
+    """Return True only if the page ANSWERED a round-trip from the browser.
+
+    Why not page.url: in Playwright 1.58.0 Page.url resolves to Frame.url ->
+    "self._url or empty string" (_impl/_frame.py), a cached attribute. No IPC
+    leaves the process, so the read cannot raise even when the target, the
+    context and the whole browser are gone. On 2026-08-20 that turned a crashed
+    browser into a 37-minute silent outage: seven BrowserCrashed events, zero
+    restarts, and a pool that kept handing out dead pages.
+
+    page.evaluate("1") is the cheapest expression that must cross the CDP
+    channel and come back, so a dead target raises and a wedged renderer times
+    out. Both are answered False rather than propagated, because callers want a
+    verdict, not an exception.
+    """
+    if page is None:
+        return False
+    try:
+        if page.is_closed():
+            return False
+    except Exception:
+        # A page that cannot even report its own closed-ness is not alive.
+        return False
+    try:
+        await asyncio.wait_for(page.evaluate("1"), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 class BrowserUnavailableError(Exception):
     """Raised when circuit breaker is open — browser is known-dead."""
     pass
@@ -267,21 +302,66 @@ class PagePool:
         await self._available.put(first_page)
 
     async def _create_page(self) -> Page:
-        """Create a new tab in the shared browser context."""
-        page = await self._context.new_page()
+        """Create a new tab in the shared browser context.
+
+        Same contract as _recover_page: a dead context cannot open a tab, and
+        the raw TargetClosedError that used to escape here reads to a caller as
+        a page-level problem rather than "the browser is gone".
+        """
+        try:
+            page = await self._context.new_page()
+        except Exception as exc:
+            self._mark_context_dead("%s: %s" % (type(exc).__name__, exc))
+            raise BrowserUnavailableError(
+                "Browser context is dead - a new tab cannot be opened. "
+                "The watchdog must restart the browser (naukri_login may be "
+                "needed afterwards)."
+            ) from exc
         self._all_pages.append(page)
         logger.info("PagePool: created new tab (%d/%d)", len(self._all_pages), self._max_pages)
         return page
 
     async def _recover_page(self, dead_page: Page) -> Page:
-        """Replace a crashed page with a new one."""
+        """Replace a crashed page with a new one.
+
+        Raises BrowserUnavailableError when the CONTEXT itself is gone. The old
+        version called new_page() on the same dead context and let the resulting
+        TargetClosedError escape, so a caller saw what looked like a second page
+        fault instead of "the browser is dead". The pool does not own the
+        context lifecycle, so the honest move is to declare the browser
+        unavailable and let the watchdog perform the restart.
+        """
         logger.warning("PagePool: recovering crashed tab")
         if dead_page in self._all_pages:
             self._all_pages.remove(dead_page)
-        page = await self._context.new_page()
+        try:
+            page = await self._context.new_page()
+        except Exception as exc:
+            self._mark_context_dead("%s: %s" % (type(exc).__name__, exc))
+            raise BrowserUnavailableError(
+                "Browser context is dead - a new tab cannot be opened. "
+                "The watchdog must restart the browser (naukri_login may be "
+                "needed afterwards)."
+            ) from exc
         self._all_pages.append(page)
         logger.info("PagePool: recovered tab (%d total)", len(self._all_pages))
         return page
+
+    def _mark_context_dead(self, reason: str) -> None:
+        """Latch the browser as unavailable when the context is proven gone.
+
+        browser.available used to be assigned in only three places, none of
+        which fire on out-of-band death, so every health probe kept reporting
+        the browser present while it was a corpse. Opening the circuit here also
+        stops the pool from hammering a dead context on every call.
+        """
+        self._circuit_state = "open"
+        self._circuit_open_time = time.monotonic()
+        self._circuit_failure_count = self._circuit_failure_threshold
+        owner = globals().get("browser")
+        if owner is not None and getattr(owner, "page_pool", None) is self:
+            owner.available = False
+        logger.error("PagePool: browser context is dead (%s) - marked unavailable", reason)
 
     @asynccontextmanager
     async def acquire(self):
@@ -321,14 +401,18 @@ class PagePool:
                 # All pages in use, wait for one to return
                 page = await self._available.get()
 
-            # Verify page is alive
-            try:
-                _ = page.url  # Quick liveness check (property access, not network)
-            except (TargetClosedError, Exception):
+            # Verify the page is alive with a REAL round-trip to the browser.
+            # See is_page_alive() for why the old "_ = page.url" could not fail.
+            if not await is_page_alive(page):
                 self._crashes += 1
                 if self._crashes > self._MAX_CRASHES:
                     logger.error("Page pool unstable (>%d crashes). Consider restarting.", self._MAX_CRASHES)
-                page = await self._recover_page(page)
+                dead_page = page
+                # Drop the reference BEFORE recovery so the finally block can
+                # never put a dead page back into the available queue if
+                # recovery raises.
+                page = None
+                page = await self._recover_page(dead_page)
 
             yield page
             # Success — reset circuit breaker
@@ -345,9 +429,14 @@ class PagePool:
                 logger.warning("Circuit breaker OPEN after %d failures", self._circuit_failure_count)
             raise
         finally:
-            # Return page to pool
+            # Count the checkout as completed EXACTLY once, whether or not a
+            # usable page was produced. The old code skipped _returns when the
+            # checkout failed before a page was assigned, so the
+            # checkouts/returns gap grew monotonically on every failure and was
+            # misread as a lease leak. The semaphore was never leaked -- only
+            # the counters were, which made them useless as a diagnostic.
+            self._returns += 1
             if page is not None:
-                self._returns += 1
                 try:
                     await self._available.put(page)
                 except Exception:
@@ -397,7 +486,10 @@ async def page_goto(page: Page, url: str, wait: str = "domcontentloaded") -> Non
     try:
         await page.goto(url, wait_until=wait, timeout=NAV_TIMEOUT)
     except TargetClosedError:
-        raise  # Let PagePool handle recovery on next acquire()
+        # Let PagePool handle recovery on the next acquire(). That path is now
+        # reachable: acquire() round-trips to the browser instead of reading a
+        # cached string, so a dead target is actually detected.
+        raise
     except Exception:
         try:
             await page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT)
@@ -611,17 +703,39 @@ class NaukriBrowser:
 
     async def stop(self):
         from naukri_server.api import close_api_session
-        await close_api_session()
-        if self.page_pool:
-            await self.page_pool.close_all()
-        if self.context:
-            await self.context.close()
-        if self.pw:
-            await self.pw.stop()
+
+        # Mark unavailable FIRST: from here on the browser is being torn down,
+        # and a probe that runs mid-teardown must not report it healthy.
+        self.available = False
+
+        # Every teardown step is individually guarded. Stopping a browser that
+        # already died is the NORMAL case on the watchdog restart path, and a
+        # raise from any one step used to skip the profile-lock release below,
+        # which is the one piece of state that outlives the process.
+        for label, step in (
+            ("close_api_session", close_api_session()),
+            ("page_pool.close_all", self.page_pool.close_all() if self.page_pool else None),
+            ("context.close", self.context.close() if self.context else None),
+            ("playwright.stop", self.pw.stop() if self.pw else None),
+        ):
+            if step is None:
+                continue
+            try:
+                await step
+            except Exception as e:
+                logger.debug("Browser stop step %s failed (expected if already dead): %s", label, e)
+
+        self.page_pool = None
+        self.context = None
+        self.pw = None
+
         # Release the cross-process profile lock so another instance (or a
         # watchdog restart in this process) can re-acquire it cleanly.
         if self._holds_profile_lock:
-            profile_lock.release()
+            try:
+                profile_lock.release()
+            except Exception as e:
+                logger.warning("Profile lock release failed: %s", e)
             self._holds_profile_lock = False
         logger.info("Browser stopped")
 

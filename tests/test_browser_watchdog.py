@@ -54,10 +54,18 @@ class TestProbe:
 
     @pytest.mark.asyncio
     async def test_probe_returns_true_when_page_acquires(self):
-        """Successful page_pool.acquire returns True."""
+        """Successful page_pool.acquire returns True.
+
+        The page mock must model a LIVE page now: the probe round-trips via
+        browser.is_page_alive() instead of reading the cached .url attribute,
+        so setting only .url no longer counts as alive. That is the point of
+        the fix -- see tests/test_browser_liveness.py.
+        """
         w = BrowserWatchdog()
         mock_page = MagicMock()
         mock_page.url = "https://www.naukri.com"
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.evaluate = AsyncMock(return_value=1)
 
         @asynccontextmanager
         async def fake_acquire():
@@ -104,7 +112,11 @@ class TestHandleFailure:
             # BrowserCrashed shape
             assert hasattr(event, "consecutive_failures")
             assert event.consecutive_failures == 1
-            assert event.crash_count == 0  # restart_count
+            # crash_count is now a REAL crash counter. It used to be
+            # self._restart_count, which is 0 until a restart succeeds, so
+            # every crash event reported 0 and a breaker keyed on it could
+            # never trip.
+            assert event.crash_count == 1
 
     @pytest.mark.asyncio
     async def test_handle_failure_below_threshold_no_restart(self):

@@ -427,14 +427,37 @@ class TestTokenManagerEnsureToken:
 # 6. PagePool.acquire() / initialize / stats / close
 # =====================================================================
 
+def _live_page_mock():
+    """A page mock that survives the real liveness round-trip.
+
+    is_page_alive() calls page.is_closed() and then awaits page.evaluate("1"),
+    so a bare MagicMock now reads as DEAD (is_closed() returns a truthy Mock).
+    Tests that need a live page must model one. Setting only .url used to be
+    enough, which is exactly the blind spot this wave removed.
+    """
+    page = MagicMock()
+    page.url = "about:blank"
+    page.is_closed = MagicMock(return_value=False)
+    page.evaluate = AsyncMock(return_value=1)
+    return page
+
+
+def _dead_page_mock():
+    """A page whose target is gone but whose .url still answers."""
+    page = MagicMock()
+    page.url = "about:blank"
+    page.is_closed = MagicMock(return_value=True)
+    page.evaluate = AsyncMock(side_effect=TargetClosedError())
+    return page
+
+
 class TestPagePoolAcquire:
     @pytest.mark.asyncio
     async def test_returns_initialized_page(self):
         from naukri_server.browser import PagePool
         ctx = AsyncMock()
         pool = PagePool(ctx, max_pages=3)
-        mock_page = MagicMock()
-        mock_page.url = "about:blank"
+        mock_page = _live_page_mock()
         await pool.initialize(mock_page)
         async with pool.acquire() as page:
             assert page is mock_page
@@ -443,8 +466,7 @@ class TestPagePoolAcquire:
     async def test_creates_new_if_empty(self):
         from naukri_server.browser import PagePool
         ctx = AsyncMock()
-        new_page = MagicMock()
-        new_page.url = "about:blank"
+        new_page = _live_page_mock()
         ctx.new_page = AsyncMock(return_value=new_page)
         pool = PagePool(ctx, max_pages=3)
         async with pool.acquire() as page:
@@ -454,12 +476,10 @@ class TestPagePoolAcquire:
     async def test_recovers_crashed_page(self):
         from naukri_server.browser import PagePool
         ctx = AsyncMock()
-        recovered = MagicMock()
-        recovered.url = "about:blank"
+        recovered = _live_page_mock()
         ctx.new_page = AsyncMock(return_value=recovered)
         pool = PagePool(ctx, max_pages=3)
-        crashed = MagicMock()
-        type(crashed).url = PropertyMock(side_effect=TargetClosedError())
+        crashed = _dead_page_mock()
         await pool.initialize(crashed)
         async with pool.acquire() as page:
             assert page is recovered
@@ -470,8 +490,7 @@ class TestPagePoolAcquire:
         from naukri_server.browser import PagePool
         ctx = AsyncMock()
         pool = PagePool(ctx, max_pages=2)
-        mock_page = MagicMock()
-        mock_page.url = "about:blank"
+        mock_page = _live_page_mock()
         await pool.initialize(mock_page)
         async with pool.acquire():
             pass
