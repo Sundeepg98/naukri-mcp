@@ -195,7 +195,20 @@ async def naukri_verify_otp(otp: str) -> dict:
 async def naukri_auth_status() -> dict:
     """Check if the Naukri session is still active.
 
+    This is the preflight gate for agent loops, so it ALWAYS answers rather
+    than erroring: ``logged_in`` is always present and always a bool.
+
     Returns:
-        {status: "success", logged_in: true/false}
+        {status: "success", logged_in: bool, verified: bool, reason: str}
+
+        - logged_in: is the session usable right now?
+        - verified: did we actually DETERMINE that? ``False`` means the check
+          could not be completed (network / 5xx / unexpected error), which is
+          NOT the same claim as a proven logout -- do not treat it as one.
+        - reason: one of "no_token", "api_confirmed", "api_denied",
+          "session_expired[: http NNN]", or "check_failed: <detail>".
+
+        A ``logged_in: false`` with reason "no_token" or "session_expired"
+        means: call naukri_login.
     """
     return await handle_tool_action(_get_login_status, "auth.status")

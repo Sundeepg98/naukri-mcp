@@ -43,7 +43,16 @@ class TestSearchJobs:
 
     @pytest.mark.asyncio
     async def test_search_jobs_limit_clamped(self):
-        """limit > 50 is clamped to 50 before being used."""
+        """limit > 50 is clamped to 50 before being used (browser fallback path).
+
+        ``api_client.get`` is patched with a NON-auth failure on purpose. This
+        test used to leave it unpatched and rely on the real call raising
+        NotLoggedInError (no browser context under pytest) being SWALLOWED into
+        the browser fallback. That swallow was the attribution bug: an auth
+        expiry now short-circuits with AUTH_ERROR instead of entering a
+        fallback that cannot work without a token. A transport error is the
+        honest way to reach the fallback this test is actually about.
+        """
         from naukri_server.tools.search import naukri_search_jobs
 
         # Mock the browser_provider to avoid real Playwright calls
@@ -61,7 +70,9 @@ class TestSearchJobs:
             "clusters": {},
         }
 
-        with patch("naukri_server.tools.search.browser_provider") as mock_provider:
+        with patch("naukri_server.tools.search.browser_provider") as mock_provider,                 patch("naukri_server.tools.search.api_client.get",
+                      new_callable=AsyncMock) as mock_api:
+            mock_api.side_effect = RuntimeError("connection reset by peer")
             mock_provider.acquire_page = MagicMock(return_value=mock_cm)
             mock_provider.intercept_json = AsyncMock(return_value=fake_data)
 

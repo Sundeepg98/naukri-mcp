@@ -119,6 +119,21 @@ class BrowserProvider(ABC):
     async def extract_token(self) -> Optional[str]:
         """Return the current cached auth token (None if unavailable)."""
 
+    async def cached_token(self) -> Optional[str]:
+        """Return the cached auth token WITHOUT triggering a re-extraction.
+
+        Deliberately CONCRETE, not abstract: adding an abstract method would
+        break every existing BrowserProvider fake. The default simply delegates
+        to ``extract_token()`` so behaviour is unchanged for implementations
+        that do not override it.
+
+        Providers backed by a real ``TokenManager`` MUST override this, because
+        ``TokenManager.extract()`` CLEARS the cached token when cookie
+        extraction fails: calling it from a read-only check (auth status,
+        health probe) during a browser blip would destroy a valid session.
+        """
+        return await self.extract_token()
+
 
 # ---------------------------------------------------------------------------
 # Concrete implementations that wrap existing infrastructure
@@ -212,6 +227,27 @@ class PlaywrightBrowserProvider(BrowserProvider):
             return None
         await token_mgr.extract()
         return getattr(token_mgr, "_token", None)
+
+    async def cached_token(self) -> Optional[str]:
+        """Read the ALREADY-cached token; never re-extract (non-mutating).
+
+        Overrides the ABC default (which delegates to ``extract_token``) on
+        purpose: ``TokenManager.extract()`` sets ``_token = None`` whenever
+        cookie extraction fails, so using it for a read-only status check
+        during a browser blip would DESTROY a perfectly good session.
+
+        Every failure path yields None rather than raising -- "the token could
+        not be read" is an answer the caller must be able to act on, not a
+        crash. A dead or unbound browser therefore reads as "no token".
+        """
+        try:
+            from naukri_server.browser import browser
+            token_mgr = getattr(browser, "token_manager", None)
+            if token_mgr is None:
+                return None
+            return getattr(token_mgr, "_token", None)
+        except Exception:
+            return None
 
 
 # ---------------------------------------------------------------------------

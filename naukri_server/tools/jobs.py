@@ -4,6 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
+from naukri_server.browser import AuthExpiredError, NotLoggedInError
 from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.error_handler import handle_tool_action
@@ -78,10 +79,35 @@ async def _get_job(job_id_or_url: str) -> dict:
                     result["match_score"] = match_score
                 return result
             logger.info("REST v3 returned empty title for job %s, falling back to browser", job_id)
+    except (NotLoggedInError, AuthExpiredError) as e:
+        # An expired session is NOT a browser fault, and the browser fallback
+        # below cannot succeed without a token -- entering it would only turn a
+        # clear auth error into a second-order browser error (this is exactly
+        # how a live probe mis-attributed 16 of 18 failures). Stop here.
+        logger.error(
+            "REST v3 failed for job %s: auth session expired (%s: %s). "
+            "Not falling back to browser -- re-authentication required.",
+            job_id, type(e).__name__, e,
+        )
+        return {
+            "status": "error",
+            "message": (
+                "Naukri session expired or not logged in. The browser fallback "
+                "cannot work without a valid session -- call naukri_login to "
+                "re-authenticate."
+            ),
+            "error_code": "AUTH_ERROR",
+        }
     except NaukriAPIError as e:
-        logger.info("REST v3 failed for job %s: %s — falling back to browser", job_id, e)
+        logger.warning(
+            "REST v3 failed for job %s (NaukriAPIError http %s: %s), falling back to browser",
+            job_id, e.status, e,
+        )
     except Exception as e:
-        logger.info("REST v3 error for job %s: %s — falling back to browser", job_id, e)
+        logger.warning(
+            "REST v3 error for job %s (%s: %s), falling back to browser",
+            job_id, type(e).__name__, e,
+        )
 
     # Strategy 2: Browser interception (existing fallback).
     # Page object is opaque to BrowserProvider; we use Playwright's native
@@ -106,21 +132,43 @@ async def _get_job(job_id_or_url: str) -> dict:
                     logger.debug("job response parse failed: %s", e)
 
             page.on("response", on_response_with_event)
+            # safe_goto's return value used to be DISCARDED: a failed navigation
+            # still burned the full intercept timeout and then blamed the page
+            # ("Page may not have loaded"), hiding a dead browser behind an
+            # API_ERROR. Capture it and short-circuit honestly instead.
+            navigated = False
             try:
-                await browser_provider.safe_goto(page, page_url)
-                try:
-                    await asyncio.wait_for(response_event.wait(), timeout=INTERCEPT_WAIT_TIMEOUT)
-                except asyncio.TimeoutError:
-                    logger.warning("Job details response capture timed out after %ss for job: %s", INTERCEPT_WAIT_TIMEOUT, job_id)
-                # Give a moment for match score to arrive too
-                if "score" not in captured:
-                    await asyncio.sleep(BROWSER_PAGE_SETTLE)
+                navigated = await browser_provider.safe_goto(page, page_url)
+                if navigated:
+                    try:
+                        await asyncio.wait_for(response_event.wait(), timeout=INTERCEPT_WAIT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning("Job details response capture timed out after %ss for job: %s", INTERCEPT_WAIT_TIMEOUT, job_id)
+                    # Give a moment for match score to arrive too
+                    if "score" not in captured:
+                        await asyncio.sleep(BROWSER_PAGE_SETTLE)
+                else:
+                    logger.error(
+                        "Browser navigation to the job page failed for job %s (%s) "
+                        "- skipping the intercept wait, no response can arrive.",
+                        job_id, page_url,
+                    )
             finally:
                 page.remove_listener("response", on_response_with_event)
 
+            if not navigated:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Browser navigation to {page_url} failed - the job page never "
+                        f"loaded. The browser may be dead or the URL unreachable."
+                    ),
+                    "error_code": "BROWSER_ERROR",
+                }
+
             details_data = captured.get("details")
             if not details_data:
-                return {"status": "error", "message": "Job details API response not captured. Page may not have loaded.", "error_code": "API_ERROR"}
+                return {"status": "error", "message": f"Job details API response was not captured within {INTERCEPT_WAIT_TIMEOUT}s of a successful page load.", "error_code": "API_ERROR"}
 
             return _parse_job_detail(details_data, job_id, page_url, captured.get("score"))
         except Exception as e:

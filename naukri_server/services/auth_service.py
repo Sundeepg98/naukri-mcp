@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from naukri_server.api import NaukriAPIError
+from naukri_server.browser import AuthExpiredError, NotLoggedInError
 from naukri_server.config import ACTIVITY_LEVEL_API, logger
 from naukri_server.domain import safe_get
-from naukri_server.interfaces import api_client
+from naukri_server.interfaces import api_client, browser_provider
 
 __all__ = [
     "get_login_status",
@@ -22,17 +24,113 @@ __all__ = [
 ]
 
 
-async def get_login_status() -> dict:
-    """Check whether the Naukri session is still active via the activity-level API.
+# Session-expiry exceptions: the API layer has PROVEN the session is gone.
+_EXPIRY_ERRORS = (NotLoggedInError, AuthExpiredError)
+# HTTP codes that are themselves proof of an expired/rejected session.
+_EXPIRY_STATUSES = (401, 403)
 
-    Pure orchestration: hits the API through the ``api_client`` interface and
-    extracts a single boolean via the anti-corruption layer.
+
+def _answer(logged_in: bool, verified: bool, reason: str) -> dict:
+    """Build the one and only shape this function returns.
+
+    ``status`` is ALWAYS "success": the question "am I logged in?" was answered
+    (or explicitly declared unanswerable), so it must never come back as a tool
+    error with no ``logged_in`` key -- that is what made the preflight gate
+    ``if auth_status()["logged_in"]`` raise KeyError instead of returning False.
     """
-    data = await api_client.get(ACTIVITY_LEVEL_API)
     return {
         "status": "success",
-        "logged_in": safe_get(data, "loggedInStatus", field_name="loggedInStatus", warn=False, default=False),
+        "logged_in": bool(logged_in),
+        "verified": bool(verified),
+        "reason": reason,
     }
+
+
+async def get_login_status() -> dict:
+    """Answer "is this Naukri session active?" without ever raising.
+
+    Returns ``{status, logged_in: bool, verified: bool, reason: str}``:
+
+    ==========================================  =========  ========  =================
+    condition                                   logged_in  verified  reason
+    ==========================================  =========  ========  =================
+    no cached token                             False      True      no_token
+    API confirms the session                    True       True      api_confirmed
+    API explicitly denies the session           False      True      api_denied
+    NotLoggedInError / AuthExpiredError         False      True      session_expired
+    HTTP 401 / 403                              False      True      session_expired: ...
+    anything else (network, 5xx, bug, no field) False      FALSE     check_failed: ...
+    ==========================================  =========  ========  =================
+
+    ``verified`` is the honesty bit: ``verified=False`` means "could NOT check",
+    which is NOT the same claim as "proven logged out". Callers that gate
+    destructive work on a logout should require ``verified``.
+
+    Two deliberate properties:
+
+    * The token is read via ``browser_provider.cached_token()``, a NON-MUTATING
+      read. ``extract_token()`` would call ``TokenManager.extract()``, which
+      CLEARS the cached token when cookie extraction fails -- a status check
+      during a browser blip would then destroy a perfectly good session.
+    * With no token we answer WITHOUT calling the activity-level API, because
+      that endpoint requires a token: calling it was the original bug (it
+      raised, the tool layer returned an error dict, and ``logged_in`` was
+      simply absent).
+    """
+    try:
+        token = await browser_provider.cached_token()
+    except Exception as e:
+        logger.warning(
+            "auth status: could not read the cached token (%s: %s) - reporting "
+            "unverified, NOT a proven logout", type(e).__name__, e,
+        )
+        return _answer(False, False, "check_failed: %s" % type(e).__name__)
+
+    if not token:
+        return _answer(False, True, "no_token")
+
+    try:
+        data = await api_client.get(ACTIVITY_LEVEL_API)
+    except _EXPIRY_ERRORS as e:
+        logger.error(
+            "auth status: session expired (%s: %s) - re-authentication required",
+            type(e).__name__, e,
+        )
+        return _answer(False, True, "session_expired")
+    except NaukriAPIError as e:
+        status_code = getattr(e, "status", None)
+        if status_code in _EXPIRY_STATUSES:
+            logger.error(
+                "auth status: session rejected by the API (HTTP %s) - "
+                "re-authentication required", status_code,
+            )
+            return _answer(False, True, "session_expired: http %s" % status_code)
+        logger.warning(
+            "auth status: check could not complete (NaukriAPIError HTTP %s: %s)",
+            status_code, e,
+        )
+        return _answer(False, False, "check_failed: NaukriAPIError http %s" % status_code)
+    except Exception as e:
+        logger.warning(
+            "auth status: check could not complete (%s: %s) - reporting "
+            "unverified, NOT a proven logout", type(e).__name__, e,
+        )
+        return _answer(False, False, "check_failed: %s" % type(e).__name__)
+
+    # A response that never mentions loggedInStatus has DENIED nothing -- do not
+    # let a missing field masquerade as an explicit "you are logged out".
+    if not isinstance(data, dict) or "loggedInStatus" not in data:
+        logger.warning(
+            "auth status: activity-level response carried no loggedInStatus field "
+            "(type %s) - cannot verify", type(data).__name__,
+        )
+        return _answer(False, False, "check_failed: missing loggedInStatus")
+
+    logged_in = safe_get(
+        data, "loggedInStatus", field_name="loggedInStatus", warn=False, default=False)
+    if logged_in:
+        return _answer(True, True, "api_confirmed")
+    return _answer(False, True, "api_denied")
 
 
 async def harvest_post_login_state(browser_module: Any) -> tuple[str | None, str | None]:

@@ -1,6 +1,7 @@
 from typing import Optional
 
 from naukri_server import mcp
+from naukri_server.browser import AuthExpiredError, NotLoggedInError
 from naukri_server.error_handler import api_tool, handle_tool_action
 from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import NAUKRI_BASE, RECOMMENDED_JOBS_API, SEARCH_API, SIMILAR_JOBS_API, logger
@@ -89,8 +90,30 @@ async def naukri_search_jobs(
         data = await api_client.get(SEARCH_API, params=rest_params)
         if data and isinstance(data, dict) and "jobDetails" in data:
             return build_search_result(data, keywords, location, page_no, limit, filters, "rest")
+    except (NotLoggedInError, AuthExpiredError) as e:
+        # An expired session is NOT a browser fault, and the browser fallback
+        # below cannot succeed without a token -- entering it would only turn a
+        # clear auth error into a second-order browser error (this is exactly
+        # how a live probe mis-attributed 16 of 18 failures). Stop here.
+        logger.error(
+            "REST search for '%s' failed: auth session expired (%s: %s). "
+            "Not falling back to browser -- re-authentication required.",
+            keywords, type(e).__name__, e,
+        )
+        return {
+            "status": "error",
+            "message": (
+                "Naukri session expired or not logged in. The browser fallback "
+                "cannot work without a valid session -- call naukri_login to "
+                "re-authenticate."
+            ),
+            "error_code": "AUTH_ERROR",
+        }
     except Exception as e:
-        logger.info("REST search failed (%s), falling back to browser", e)
+        logger.warning(
+            "REST search failed (%s: %s), falling back to browser",
+            type(e).__name__, e,
+        )
 
     async def _browser_search():
         async with browser_provider.acquire_page() as page:
