@@ -4,10 +4,18 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.api import NaukriAPIError
-from naukri_server.browser import AuthExpiredError, NotLoggedInError
+from naukri_server.browser import AuthExpiredError, BrowserUnavailableError, NotLoggedInError
 from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.config import BULK_JOBS_API, JOB_DETAIL_API, JOB_DETAIL_V1_API, JOB_MATCH_SCORE_API, NAUKRI_BASE, REPORT_FRAUD_API, SIMILAR_JOBS_API, LAKHS_MULTIPLIER, INTERCEPT_WAIT_TIMEOUT, BROWSER_PAGE_SETTLE, logger
 from naukri_server.error_handler import handle_tool_action
+
+# Browser-layer faults, kept distinct from API faults. Imported defensively so a
+# Playwright packaging change degrades to "unclassified", never an import error.
+try:  # pragma: no cover - import shape, not behaviour
+    from playwright._impl._errors import TargetClosedError as _TargetClosedError
+    _BROWSER_FAULTS = (BrowserUnavailableError, _TargetClosedError)
+except Exception:  # pragma: no cover
+    _BROWSER_FAULTS = (BrowserUnavailableError,)
 from naukri_server.tools.job_parsing import _parse_job_list
 from naukri_server.validation import validate_job_detail
 
@@ -171,6 +179,15 @@ async def _get_job(job_id_or_url: str) -> dict:
                 return {"status": "error", "message": f"Job details API response was not captured within {INTERCEPT_WAIT_TIMEOUT}s of a successful page load.", "error_code": "API_ERROR"}
 
             return _parse_job_detail(details_data, job_id, page_url, captured.get("score"))
+        except _BROWSER_FAULTS as e:
+            # A dead tab/context is a BROWSER fault. Labelling it API_ERROR was
+            # counterfeit: error_handler reserves that code for NaukriAPIError,
+            # which carries an http_status this response does not have.
+            return {
+                "status": "error",
+                "message": f"Browser failure while loading the job page: {type(e).__name__}: {e}",
+                "error_code": "BROWSER_ERROR",
+            }
         except Exception as e:
             return {"status": "error", "message": f"Get job failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
 

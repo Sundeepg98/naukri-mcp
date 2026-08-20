@@ -485,8 +485,14 @@ async def _sync_applications(
         return {"events_emitted": len(status_changes)}
 
     saga.add_step("merge", step_merge)
-    saga.add_step("purge", step_purge)
+    # detect_changes MUST run before purge. step_purge rebinds local_apps to a
+    # retention-filtered list, and step_detect_changes iterates local_apps, so
+    # in the old order every status change on an application older than
+    # AUTO_PURGE_DAYS (or missing applied_at entirely) was silently dropped:
+    # no ApplicationStatusChanged event, nothing in naukri_status_changes.
+    # Retention is about what we KEEP, not about what we REPORT.
     saga.add_step("detect_changes", step_detect_changes)
+    saga.add_step("purge", step_purge)
     saga.add_step("persist", step_persist)
     saga.add_step("emit_events", step_emit_events)
 
