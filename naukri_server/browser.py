@@ -17,6 +17,18 @@ from naukri_server.config import CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEME
 from naukri_server import profile_lock
 
 
+class NotLoggedInError(ValueError):
+    """No usable auth token is available and one could not be minted.
+
+    Subclasses ``ValueError`` on purpose: this is the exception the token
+    layer has always raised for "not logged in", and callers (plus the
+    existing test suite) catch ``ValueError``. Giving it a distinct type lets
+    callers CLASSIFY the failure — an expired session is not a browser fault —
+    without breaking any of those callers.
+    """
+    pass
+
+
 class AuthExpiredError(Exception):
     """Token refresh failed for an auth reason that re-trying will NOT fix:
     the session itself is gone (Naukri served a login wall / checkpoint, or the
@@ -78,7 +90,7 @@ class TokenManager:
         """Get cached JWT token. Raises if not available."""
         if self._token:
             return self._token
-        raise ValueError("Not logged in — call naukri_login first")
+        raise NotLoggedInError("Not logged in — call naukri_login first")
 
     def get_cookies(self) -> str:
         """Get cached cookie header string."""
@@ -217,7 +229,7 @@ class TokenManager:
                 except Exception as e:
                     logger.warning("Token renewal navigation failed (%s): %s", type(e).__name__, e)
         if not self._token:
-            raise ValueError("Not logged in — call naukri_login first")
+            raise NotLoggedInError("Not logged in — call naukri_login first")
         return self._token
 
 

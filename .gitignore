@@ -62,3 +62,6 @@ naukri_server/agent_config.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local backups of live data (never committed)
+_backup/
