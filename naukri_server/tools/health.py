@@ -19,6 +19,8 @@ from naukri_server.config import (
     PROFILE_API,
     RECOMMENDED_JOBS_API,
     SEARCH_API,
+    HEALTH_CHECK_TIMEOUT,
+    HEALTH_BROWSER_CHECK_TIMEOUT,
     logger,
 )
 
@@ -201,6 +203,45 @@ async def _check_browser_interface() -> dict:
         return {"name": "browser_interface", "status": "warn", "message": str(e)}
 
 
+async def _run_check(name: str, coro, budget: float) -> dict:
+    """Run one check under its own budget and ALWAYS return a row.
+
+    Why this exists: on 2026-08-20 a single check that never returned took the
+    whole tool down, and the reviewer's client sat on it for four minutes. The
+    response schema already carried a per-check {name, status, elapsed_ms}, so a
+    blown budget has a natural home - a degraded ROW - rather than a dead tool.
+    The other checks' results are still worth having; losing them because one
+    probe stalled is a strictly worse answer than reporting the stall.
+    """
+    t0 = time.monotonic()
+    try:
+        return await asyncio.wait_for(coro, timeout=budget)
+    except asyncio.TimeoutError:
+        elapsed = int((time.monotonic() - t0) * 1000)
+        logger.warning("Health check %r exceeded its %.0fs budget", name, budget)
+        return {
+            "name": name,
+            "status": "timeout",
+            "message": (
+                f"Check did not finish within its {budget:.0f}s budget - reported "
+                "as degraded so the rest of the health check could still return"
+            ),
+            "elapsed_ms": elapsed,
+        }
+    except Exception as e:
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return {"name": name, "status": "fail",
+                "message": f"{type(e).__name__}: {e}", "elapsed_ms": elapsed}
+
+
+async def _bounded(coro, budget: float, default=None):
+    """Await an optional observability extra, giving up rather than hanging."""
+    try:
+        return await asyncio.wait_for(coro, timeout=budget)
+    except Exception:
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Main health check tool
 # ---------------------------------------------------------------------------
@@ -237,19 +278,20 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
 
     t_start = time.monotonic()
 
-    # Run all 5 API checks in parallel
+    # Run all 5 API checks in parallel, each under its own budget so one stalled
+    # endpoint degrades to a "timeout" row instead of hanging the whole tool.
     api_tasks = [
-        _check_login(),
-        _check_profile_api(),
-        _check_search_api(),
-        _check_recommendations_api(),
-        _check_dashboard_api(),
+        _run_check("login", _check_login(), HEALTH_CHECK_TIMEOUT),
+        _run_check("profile_api", _check_profile_api(), HEALTH_CHECK_TIMEOUT),
+        _run_check("search_api", _check_search_api(), HEALTH_CHECK_TIMEOUT),
+        _run_check("recommendations_api", _check_recommendations_api(), HEALTH_CHECK_TIMEOUT),
+        _run_check("dashboard_api", _check_dashboard_api(), HEALTH_CHECK_TIMEOUT),
     ]
     api_results = await asyncio.gather(*api_tasks, return_exceptions=True)
 
     checks = []
     for i, result in enumerate(api_results):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             name = ["login", "profile_api", "search_api", "recommendations_api", "dashboard_api"][i]
             checks.append({"name": name, "status": "fail", "message": f"Unexpected error: {type(result).__name__}: {result}", "elapsed_ms": 0})
         else:
@@ -257,20 +299,22 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
 
     # Run browser checks sequentially (they share the page pool)
     if include_browser:
-        browser_result = await _check_browser_alive()
-        checks.append(browser_result)
-
-        ambitionbox_result = await _check_ambitionbox()
-        checks.append(ambitionbox_result)
-
-        browser_iface_result = await _check_browser_interface()
-        checks.append(browser_iface_result)
+        # Sequential on purpose (they share the page pool), each budgeted - the
+        # browser checks are the ones most able to stall, and a serial chain of
+        # unbounded awaits is how a stall becomes an outage.
+        checks.append(await _run_check(
+            "browser_alive", _check_browser_alive(), HEALTH_BROWSER_CHECK_TIMEOUT))
+        checks.append(await _run_check(
+            "ambitionbox", _check_ambitionbox(), HEALTH_BROWSER_CHECK_TIMEOUT))
+        checks.append(await _run_check(
+            "browser_interface", _check_browser_interface(), HEALTH_CHECK_TIMEOUT))
 
     total_ms = int((time.monotonic() - t_start) * 1000)
 
     ok_count = sum(1 for c in checks if c["status"] == "ok")
     warn_count = sum(1 for c in checks if c["status"] == "warn")
     fail_count = sum(1 for c in checks if c["status"] == "fail")
+    timeout_count = sum(1 for c in checks if c["status"] == "timeout")
 
     # Startup validation: Chrome profile directory
     warnings = []
@@ -286,6 +330,7 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
             "ok": ok_count,
             "warn": warn_count,
             "fail": fail_count,
+            "timeout": timeout_count,
             "total_ms": total_ms,
         },
         "checks": checks,
@@ -314,8 +359,9 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
     # Event persistence stats
     try:
         from naukri_server.database import get_event_stats, count_undelivered_notifications
-        event_stats = await get_event_stats(hours=24)
-        notif_count = await count_undelivered_notifications()
+        # Observability extras must never be the reason the tool does not return.
+        event_stats = await _bounded(get_event_stats(hours=24), 5.0)
+        notif_count = await _bounded(count_undelivered_notifications(), 5.0)
         result["event_stats_24h"] = event_stats
         result["pending_notifications"] = notif_count
     except Exception:
