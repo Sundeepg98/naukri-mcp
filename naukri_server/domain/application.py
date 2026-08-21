@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from naukri_server.config import STALE_THRESHOLD_DAYS
+
 
 @dataclass(frozen=True)
 class StalenessReport:
@@ -20,7 +22,8 @@ class StalenessReport:
     recommendation: str
 
     @classmethod
-    def compute(cls, app: dict, days_threshold: int = 14) -> "StalenessReport":
+    def compute(cls, app: dict,
+                days_threshold: int = STALE_THRESHOLD_DAYS) -> "StalenessReport":
         """Compute staleness from an application dict using the 5-signal model.
 
         Args:

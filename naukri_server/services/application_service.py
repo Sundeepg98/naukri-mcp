@@ -6,7 +6,9 @@ from typing import Optional
 
 from naukri_server.interfaces import api_client
 from naukri_server.models import paginate
-from naukri_server.config import logger, APPLICATION_STATUS_API
+from naukri_server.config import (
+    logger, APPLICATION_STATUS_API, STALE_MIN_SCORE, STALE_THRESHOLD_DAYS,
+)
 from naukri_server.validation import validate_limit, validate_page
 from naukri_server.domain.application import (
     StalenessReport,
@@ -343,8 +345,8 @@ async def recruiter_history() -> dict:
 # ---------------------------------------------------------------------------
 
 async def get_stale_applications(
-    days_threshold: int = 14,
-    min_stale_score: int = 40,
+    days_threshold: int = STALE_THRESHOLD_DAYS,
+    min_stale_score: int = STALE_MIN_SCORE,
     limit: int = 50,
     page: int = 1,
 ) -> dict:
@@ -414,8 +416,8 @@ async def get_stale_applications(
 
 
 async def application_follow_up(
-    days_threshold: int = 14,
-    min_stale_score: int = 40,
+    days_threshold: int = STALE_THRESHOLD_DAYS,
+    min_stale_score: int = STALE_MIN_SCORE,
     limit: int = 10,
 ) -> dict:
     """Cross-reference stale applications with inbox and reminders for follow-up suggestions."""

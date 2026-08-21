@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from naukri_server.config import DATA_DIR
+from naukri_server.config import DATA_DIR, STALE_THRESHOLD_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -632,7 +632,7 @@ async def get_event_stats(hours: int = 24) -> dict:
 # Stale applications query
 # ---------------------------------------------------------------------------
 
-async def get_stale_applications_raw(days_threshold: int = 14):
+async def get_stale_applications_raw(days_threshold: int = STALE_THRESHOLD_DAYS):
     """Get applications older than days_threshold with their computed days_since_applied.
 
     Returns raw rows — caller does stale scoring logic.

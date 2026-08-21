@@ -57,7 +57,9 @@ naukri.db
 
 # Agent config (local, may contain personal preferences)
 agent_config.json
-naukri_server/agent_config.json
+# naukri_server/agent_config.json was a SHADOW copy the loader never read
+# (CONFIG_PATH is DATA_DIR/agent_config.json and DATA_DIR is the repo root).
+# It disagreed with the live file about his autonomy mode. Deleted 2026-08-21.
 
 # OS
 .DS_Store

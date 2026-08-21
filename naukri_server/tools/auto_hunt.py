@@ -6,7 +6,7 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
-from naukri_server.config import logger
+from naukri_server.config import logger, DISPLAY_MIN_FIT_SCORE
 from naukri_server.domain import safe_get
 from naukri_server.domain.fit_score import FitScore
 from naukri_server.models import Job
@@ -22,7 +22,7 @@ from naukri_server.validation import validate_limit
 async def naukri_auto_hunt(
     keywords: str,
     location: Optional[str] = None,
-    min_fit_score: int = 60,
+    min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
     limit: int = 20,
     freshness: Optional[int] = 7,
     work_mode: Optional[str] = None,

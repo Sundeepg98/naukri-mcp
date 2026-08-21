@@ -18,6 +18,8 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
+from naukri_server.config import DISPLAY_MIN_FIT_SCORE
+
 
 # ---------------------------------------------------------------------------
 # Abstract interfaces
@@ -267,7 +269,7 @@ class SearchPort(ABC):
 
     @abstractmethod
     async def hunt(self, keywords: str, location: Optional[str] = None,
-                   min_fit_score: int = 60, limit: int = 20,
+                   min_fit_score: int = DISPLAY_MIN_FIT_SCORE, limit: int = 20,
                    freshness: int = 7, work_mode: Optional[str] = None) -> dict:
         """Search and score jobs against profile."""
         ...
@@ -287,7 +289,7 @@ class NaukriSearchPort(SearchPort):
     """Concrete search port wrapping naukri_auto_hunt."""
 
     async def hunt(self, keywords: str, location: Optional[str] = None,
-                   min_fit_score: int = 60, limit: int = 20,
+                   min_fit_score: int = DISPLAY_MIN_FIT_SCORE, limit: int = 20,
                    freshness: int = 7, work_mode: Optional[str] = None) -> dict:
         from naukri_server.tools.auto_hunt import naukri_auto_hunt
         return await naukri_auto_hunt(

@@ -11,7 +11,10 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
-from naukri_server.config import DAILY_APPLY_QUOTA, BULK_FETCH_CONCURRENCY
+from naukri_server.config import (
+    APPLY_MIN_FIT_SCORE, BULK_FETCH_CONCURRENCY, DAILY_APPLY_QUOTA,
+    DISPLAY_MIN_FIT_SCORE, MAX_BULK_JOBS,
+)
 from naukri_server.domain import safe_get
 from naukri_server.domain.fit_score import FitScore
 from naukri_server.error_handler import handle_tool_action
@@ -69,7 +72,7 @@ async def _bulk_saved_scoring(
 
         # Parallel: saved jobs list + profile
         saved_result, profile_result = await asyncio.gather(
-            _list_saved_jobs(limit=50, page=1),
+            _list_saved_jobs(limit=MAX_BULK_JOBS, page=1),
             get_cached_profile(),
             return_exceptions=True,
         )
@@ -172,7 +175,7 @@ async def _bulk_saved_scoring(
 
 
 async def _apply_top_fits(
-    min_fit_score: int = 60,
+    min_fit_score: int = APPLY_MIN_FIT_SCORE,
     limit: int = 10,
     set_reminder_days: Optional[int] = None,
     answers: Optional[dict] = None,
@@ -361,7 +364,7 @@ async def _apply_top_fits(
 async def naukri_assess_fit(
     job_id: str,
     apply_if_fit: bool = False,
-    min_fit_score: int = 60,
+    min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
     answers: Optional[dict] = None,
     set_reminder_days: Optional[int] = None,
 ) -> dict:
@@ -457,7 +460,7 @@ async def naukri_assess_fit(
 
 @mcp.tool()
 async def naukri_score_saved_jobs(
-    min_fit_score: int = 60,
+    min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
 ) -> dict:
@@ -487,7 +490,7 @@ async def naukri_score_saved_jobs(
 
 @mcp.tool()
 async def naukri_apply_top_fits(
-    min_fit_score: int = 70,
+    min_fit_score: int = APPLY_MIN_FIT_SCORE,
     limit: int = 10,
     set_reminder_days: Optional[int] = None,
     answers: Optional[dict] = None,

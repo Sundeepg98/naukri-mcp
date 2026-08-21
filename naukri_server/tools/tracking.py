@@ -7,6 +7,7 @@ from naukri_server.error_handler import handle_tool_action
 from naukri_server.interfaces import api_client  # noqa: F401 — re-exported for test patching
 from naukri_server.config import (
     logger, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
+    STALE_MIN_SCORE, STALE_THRESHOLD_DAYS,
 )
 
 # Import business logic from service layer
@@ -109,8 +110,8 @@ async def naukri_purge_applications(
 
 @mcp.tool()
 async def naukri_stale_applications(
-    days_threshold: int = 14,
-    min_stale_score: int = 40,
+    days_threshold: int = STALE_THRESHOLD_DAYS,
+    min_stale_score: int = STALE_MIN_SCORE,
     limit: int = 50,
     page: int = 1,
 ) -> dict:
@@ -133,8 +134,8 @@ async def naukri_stale_applications(
 
 @mcp.tool()
 async def naukri_follow_up_priority(
-    days_threshold: int = 14,
-    min_stale_score: int = 40,
+    days_threshold: int = STALE_THRESHOLD_DAYS,
+    min_stale_score: int = STALE_MIN_SCORE,
     limit: int = 10,
 ) -> dict:
     """Cross-reference stale apps with inbox and reminders for prioritized follow-up action items.
@@ -332,7 +333,9 @@ async def naukri_batch_apply(
         company_type: "startup", "mnc", "indian_mnc", "corporate"
         sort_by: "relevance" or "date"
         delay_ms: Delay in ms between submissions (default 500)
-        max_concurrent: Max parallel applications (default 3)
+        max_concurrent: DEPRECATED and IGNORED. Applies are strictly serial
+            (concurrency is an automation tell); kept only so existing callers
+            do not break
         set_reminder_days: Auto-create follow-up reminders N days after each successful application
         answers: Dict of answers for screening questions
 

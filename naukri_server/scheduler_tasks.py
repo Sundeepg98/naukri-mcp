@@ -91,8 +91,11 @@ async def _task_daily_brief() -> dict:
 )
 async def _task_stale_check() -> dict:
     """Detect stale applications needing follow-up."""
+    from naukri_server.config import STALE_THRESHOLD_DAYS, STALE_MIN_SCORE
     from naukri_server.services.application_service import get_stale_applications
-    return await get_stale_applications(days_threshold=14, min_stale_score=40)
+    return await get_stale_applications(
+        days_threshold=STALE_THRESHOLD_DAYS, min_stale_score=STALE_MIN_SCORE,
+    )
 
 
 @scheduled_task(

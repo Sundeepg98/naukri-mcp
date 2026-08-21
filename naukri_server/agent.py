@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from mcp.server.fastmcp import Context
 
-from naukri_server.config import DATA_DIR
+from naukri_server.config import APPLY_MIN_FIT_SCORE, DATA_DIR
 from naukri_server.domain.agent import (
     AgentBlocklist, QuietHours, AgentCandidate, validate_agent_config,
 )
@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     "enabled": False,  # Must be explicitly enabled
     "mode": "approval",  # dry_run | approval | auto
     "max_daily_applications": 15,
-    "min_fit_score": 70,
+    "min_fit_score": APPLY_MIN_FIT_SCORE,
     "quiet_hours": {
         "enabled": True,
         "start_hour": 20,  # 8 PM IST
@@ -46,7 +46,7 @@ DEFAULT_CONFIG = {
             "keywords": "Node.js developer",
             "location": "Bangalore",
             "freshness": 7,
-            "min_fit_score": 70,
+            "min_fit_score": APPLY_MIN_FIT_SCORE,
             "enabled": True,
         },
     ],
@@ -55,7 +55,12 @@ DEFAULT_CONFIG = {
         "title_keywords": [],
         "enabled": True,
     },
-    "reminder_days": 7,
+    # "reminder_days": 7 was DELETED (2026-08-21). It shipped in DEFAULT_CONFIG,
+    # in both agent_config.json files and in the update allowlist, and NOTHING
+    # read it -- the reminder feature is driven entirely by the caller-supplied
+    # `set_reminder_days` argument on the apply tools. A knob that validates,
+    # persists and changes nothing is worse than a missing feature, because it
+    # reads as a working one.
 }
 
 CONFIG_PATH = DATA_DIR / "agent_config.json"
@@ -148,7 +153,7 @@ async def _decide(observe_result: dict) -> dict:
     applied_ids = observe_result["applied_ids"]
     cycle_id = observe_result["cycle_id"]
     daily_remaining = observe_result["daily_remaining"]
-    min_fit = config.get("min_fit_score", 70)
+    min_fit = config.get("min_fit_score", APPLY_MIN_FIT_SCORE)
     blocklist_obj = AgentBlocklist.from_config(config)
 
     candidates: list[AgentCandidate] = []

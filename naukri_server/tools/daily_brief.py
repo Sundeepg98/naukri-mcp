@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 
 from naukri_server import mcp
-from naukri_server.config import logger
+from naukri_server.config import logger, STALE_MIN_SCORE, STALE_THRESHOLD_DAYS
 from naukri_server.scoring import compute_fit_score, parse_skills
 # Section builders live in the service — re-exported under their legacy
 # underscored aliases so any caller that imports them by name keeps working.
@@ -96,7 +96,8 @@ async def naukri_daily_brief() -> dict:
         _list_early_access_roles(limit=3),                 # 7
         _get_subscription_status(),                        # 8
         _list_reminders(include_past=True),                # 9
-        _get_stale_applications(days_threshold=14, min_stale_score=50),  # 10
+        _get_stale_applications(days_threshold=STALE_THRESHOLD_DAYS,
+                                min_stale_score=STALE_MIN_SCORE),  # 10
         _get_alerts_list(),                                # 11
         _get_profile_completeness(),                       # 12
         _list_saved_jobs(limit=1),                         # 13

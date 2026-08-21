@@ -201,7 +201,25 @@ LAKHS_MULTIPLIER = 100_000  # 1 lakh = 100,000 — used for CTC conversion acros
 # Operational limits
 DAILY_APPLY_QUOTA = 50  # Naukri's daily application limit
 BATCH_APPLY_DEFAULT_DELAY_MS = 500  # Delay between batch apply requests
-MAX_BULK_JOBS = 50  # Max jobs to score in bulk operations
+MAX_BULK_JOBS = 50  # Max jobs to score in bulk operations — read by smart_apply
+
+# Fit-score thresholds. TWO DECISIONS, deliberately two names.
+#
+# DISPLAY_MIN_FIT_SCORE gates what a tool SHOWS him: auto_hunt, score_saved_jobs,
+# apply_top_fits and the search ports. Wrong value = noise, noticed in a day.
+#
+# APPLY_MIN_FIT_SCORE gates what a tool or the AUTONOMOUS AGENT APPLIES TO --
+# agent.py's `_decide` enqueues every job at or above it with apply_status
+# "pending", and naukri_apply_top_fits applies at it directly. Wrong value =
+# real applications on his live account.
+#
+# They are 60 and 70 today and both were retyped at six sites; collapsing them
+# to one number would silently drop the agent's threshold by ten points, so the
+# apply-side one keeps its own name and its own value. jobcore's schema mirrors
+# this split exactly: `servers.naukri.display_min_score` is tier A and the leaf
+# name `min_fit_score` is tier C wherever it appears.
+DISPLAY_MIN_FIT_SCORE = 60
+APPLY_MIN_FIT_SCORE = 70
 
 # Apply throttling / anti-detection cadence.
 # DECISION: stealth > throughput. A constant/burst request cadence is itself a
@@ -261,7 +279,18 @@ HEALING_AUTOFIX_MIN_CONFIDENCE = float(
 
 # Cache TTLs (seconds)
 PROFILE_CACHE_TTL = 30  # Profile + dashboard cache TTL
+
+# Staleness policy — ONE home for what used to be eight retyped literals.
+# STALE_THRESHOLD_DAYS was defined here and read by NOTHING while `14` was
+# retyped in database.py, domain/application.py, application_service.py (x2),
+# tracking.py (x2), scheduler_tasks.py and daily_brief.py. Nobody could say
+# what his stale threshold was, because there was no single place it lived.
 STALE_THRESHOLD_DAYS = 14  # Days before an application is considered stale
+# Minimum staleness score for an application to be reported. The scheduler task
+# used 40 and the daily brief used 50, so the morning brief showed FEWER stale
+# applications than the detector had already acted on. Reconciled to 40 — the
+# value five of the six sites used and the one the acting task used.
+STALE_MIN_SCORE = 40
 
 # AmbitionBox timeouts
 AMBITIONBOX_WAIT_TIMEOUT = 10000  # Playwright timeout for __NEXT_DATA__ selector (ms)
@@ -325,7 +354,11 @@ CACHE_PURGE_DAYS = 30  # Days before cached answers are purged
 
 # Apply timeouts (seconds)
 BATCH_APPLY_PER_JOB_TIMEOUT = 30    # Per-job apply timeout
-BATCH_APPLY_TOTAL_TIMEOUT = 120     # Overall batch gather timeout
+# BATCH_APPLY_TOTAL_TIMEOUT was DELETED (2026-08-21). It described "overall
+# batch gather timeout" for a gather that no longer exists: batch apply became
+# strictly serial for anti-detection reasons, so there is only a per-job
+# timeout. Zero readers in the package and zero in the tests — a knob wired to
+# nothing, which is exactly what the decoy census now refuses to let ship.
 
 # Overall browser operation timeout (seconds) — caps total wall-clock time for any
 # single browser-based mutation (profile update, boost, alert edit/delete, file upload).
@@ -384,4 +417,6 @@ DFP_PROFILE_API = "/jobapi/v1/ads/new/dfp"
 
 # CCS (Content/Campaign Serving) — profile completion widgets (requires browser cookies, not JWT)
 CCS_PAGE_API = "/cloudgateway-ccs/inventory-management-services/v2/page/pagename"
-CCS_DASHBOARD_PAGE = "ni-desktop-dashboard-v2"
+# CCS_DASHBOARD_PAGE = "ni-desktop-dashboard-v2" was DELETED (2026-08-21):
+# the page name appeared nowhere else in the package or the tests, so nothing
+# could ever have been affected by changing it.

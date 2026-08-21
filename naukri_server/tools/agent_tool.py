@@ -7,6 +7,7 @@ import logging
 from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
+from naukri_server.config import APPLY_MIN_FIT_SCORE
 from naukri_server.error_handler import handle_tool_action
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ async def _agent_status() -> dict:
         "enabled": config.get("enabled", False),
         "mode": config.get("mode", "approval"),
         "max_daily": config.get("max_daily_applications", 15),
-        "min_fit_score": config.get("min_fit_score", 70),
+        "min_fit_score": config.get("min_fit_score", APPLY_MIN_FIT_SCORE),
         "searches": len([s for s in config.get("searches", []) if s.get("enabled")]),
         "blocklist_companies": len(config.get("blocklist", {}).get("companies", [])),
         "quiet_hours": config.get("quiet_hours", {}),
@@ -56,7 +57,8 @@ async def _agent_update_config(updates: str) -> dict:
         return {"status": "error", "message": f"Invalid JSON: {e}", "error_code": "VALIDATION_ERROR"}
 
     # Warn about unknown keys
-    known_keys = {"enabled", "mode", "max_daily_applications", "min_fit_score", "quiet_hours", "searches", "blocklist", "reminder_days"}
+    known_keys = {"enabled", "mode", "max_daily_applications", "min_fit_score",
+                  "quiet_hours", "searches", "blocklist"}
     unknown = set(patch.keys()) - known_keys
 
     config.update(patch)
