@@ -135,9 +135,13 @@ async def _task_boost_profile() -> dict:
     catch_up=True,  # pure read; emits ReminderDue events
 )
 async def _task_reminder_check() -> dict:
-    """Check for due reminders and emit events."""
+    """Check for due reminders and emit events.
+
+    The ONLY caller that opts into emission - this task exists to notify him,
+    where every other _list_reminders caller is a read. See reminder_service.
+    """
     from naukri_server.tools.reminders import _list_reminders
-    result = await _list_reminders(include_past=True)
+    result = await _list_reminders(include_past=True, emit_events=True)
     due_count = result.get("due_count", 0)
     if due_count > 0:
         logger.info("Reminder check: %d due reminders found", due_count)

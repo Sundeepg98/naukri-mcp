@@ -582,6 +582,38 @@ async def mark_notifications_delivered(ids: list, via: str = "brief") -> int:
         await db.close()
 
 
+async def has_pending_notification(event_type: str, job_id: str) -> bool:
+    """Is there already an undelivered notification of this type for this job?
+
+    The dedupe predicate for repeating events. `delivered_via IS NULL` is the
+    honest reading of "he has not been shown this yet": the daily brief is what
+    sets it (mark_notifications_delivered, which stamps read_at too), so a
+    delivered row means the notification did its job and the next due check may
+    mint a fresh one.
+
+    json_extract, not `metadata LIKE '%job_id%'`: metadata is a JSON TEXT
+    column, Naukri job_ids are numeric strings that routinely share prefixes,
+    and a LIKE would suppress a real reminder for a different job.
+    """
+    if not job_id:
+        return False
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT 1 FROM notifications
+            WHERE event_type = ?
+              AND delivered_via IS NULL
+              AND json_extract(metadata, '$.job_id') = ?
+            LIMIT 1
+            """,
+            (event_type, job_id),
+        )
+        return await cursor.fetchone() is not None
+    finally:
+        await db.close()
+
+
 async def count_undelivered_notifications() -> int:
     """Count undelivered notifications."""
     db = await get_db()

@@ -187,9 +187,35 @@ async def _on_recruiter_engaged(event: RecruiterEngaged):
 
 @subscriber(ReminderDue)
 async def _on_reminder_due(event: ReminderDue):
-    """Store notification for due reminders."""
+    """Store notification for due reminders - at most one live one per job.
+
+    A reminder stays due forever until he acts on it, and the hourly
+    reminder_check re-emits every past-due reminder on every run, so an
+    unconditional store banks a duplicate per reminder per hour. That is how
+    50 reminders became 1,084 notifications.
+
+    DEDUPE BY EXISTING UNDELIVERED ROW, not by a `last_notified_at` column on
+    `reminders` + an interval. The interval design is still unbounded for a
+    permanently-overdue reminder: it only sets the storm's RATE (50/day at 24h),
+    and every one of his 50 reminders is months past due, which is precisely
+    the case it handles worst. This predicate is bounded by construction - one
+    undelivered ReminderDue per job_id, ever - needs no schema migration, and
+    re-arms itself the moment the brief delivers the notification, so he can
+    never be shown the same reminder twice without having seen it once.
+    """
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        # Fail OPEN: the notification is the payload, the dedupe is an
+        # optimisation over it. A broken predicate degrades to the old noisy
+        # behaviour, which is recoverable; dropping his reminders is not.
+        try:
+            if event.job_id and await has_pending_notification("ReminderDue", event.job_id):
+                logger.debug("ReminderDue for %s already pending - suppressed", event.job_id)
+                return
+        except Exception as e:
+            logger.warning("ReminderDue dedupe check failed, notifying anyway: %s", e)
+
         await store_notification({
             "event_type": "ReminderDue",
             "title": f"Reminder due: {event.company or 'Follow up'}",

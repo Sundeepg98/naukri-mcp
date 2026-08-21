@@ -98,12 +98,31 @@ async def set_reminder(
     }
 
 
-async def list_reminders(include_past: bool = True, include_app_status: bool = False) -> dict:
+async def list_reminders(
+    include_past: bool = True,
+    include_app_status: bool = False,
+    emit_events: bool = False,
+) -> dict:
     """Get all follow-up reminders, highlighting due ones.
 
     Args:
         include_past: Include already-due reminders (default True).
         include_app_status: Batch-fetch live application status for each reminder (default False).
+        emit_events: Emit a ReminderDue event per past-due reminder. OFF by
+            default because this is a READ, and a read must not mutate.
+
+    Until 2026-08-21 this function emitted unconditionally, which made every
+    caller a writer: `naukri_list_reminders`, `naukri_daily_brief` and
+    `naukri_follow_up_priority` all land here, each ReminderDue banks a
+    high-priority notification, and all 50 of his reminders are months past
+    due. One brief call therefore minted ~50 notifications while delivering
+    10 - the brief poisoned its own top recommended action. Measured on his
+    live DB: 1,127 ReminderDue events in 24h and 1,075 of 1,241 undelivered
+    notifications.
+
+    Only `scheduler_tasks._task_reminder_check` (hourly) opts in - that task
+    exists to notify him, and tests/test_reminder_storm.py pins it as the sole
+    opt-in so a future read path cannot quietly re-arm this.
     """
     from naukri_server.database import list_reminders as db_list_reminders
 
@@ -132,16 +151,17 @@ async def list_reminders(include_past: bool = True, include_app_status: bool = F
 
         if is_due:
             due_count += 1
-            try:
-                from naukri_server.events import event_bus, ReminderDue
-                await event_bus.emit(ReminderDue(
-                    job_id=r.get("job_id", ""),
-                    company=r.get("company", ""),
-                    title=r.get("title", ""),
-                    note=r.get("note", ""),
-                ))
-            except Exception:
-                pass
+            if emit_events:
+                try:
+                    from naukri_server.events import event_bus, ReminderDue
+                    await event_bus.emit(ReminderDue(
+                        job_id=r.get("job_id", ""),
+                        company=r.get("company", ""),
+                        title=r.get("title", ""),
+                        note=r.get("note", ""),
+                    ))
+                except Exception:
+                    pass
 
         result_list.append({
             "job_id": r.get("job_id"),

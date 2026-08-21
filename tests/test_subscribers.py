@@ -306,17 +306,25 @@ class TestRecruiterSubscriber:
 
 
 class TestReminderDueSubscriber:
+    """The handler now consults has_pending_notification first - patched False
+    here so these keep testing the notification's SHAPE. The dedupe itself
+    lives in tests/test_reminder_storm.py."""
+
     @pytest.mark.asyncio
+    @patch("naukri_server.database.has_pending_notification",
+           new_callable=AsyncMock, return_value=False)
     @patch("naukri_server.database.store_notification", new_callable=AsyncMock)
-    async def test_stores_notification(self, mock_store):
+    async def test_stores_notification(self, mock_store, mock_has):
         from naukri_server.subscribers import _on_reminder_due
         event = ReminderDue(job_id="J1", company="Acme", note="Follow up")
         await _on_reminder_due(event)
         mock_store.assert_called_once()
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.has_pending_notification",
+           new_callable=AsyncMock, return_value=False)
     @patch("naukri_server.database.store_notification", new_callable=AsyncMock)
-    async def test_priority_is_high(self, mock_store):
+    async def test_priority_is_high(self, mock_store, mock_has):
         from naukri_server.subscribers import _on_reminder_due
         event = ReminderDue(job_id="J1", company="Acme", note="Follow up")
         await _on_reminder_due(event)
@@ -324,8 +332,10 @@ class TestReminderDueSubscriber:
         assert notif["priority"] == "high"
 
     @pytest.mark.asyncio
+    @patch("naukri_server.database.has_pending_notification",
+           new_callable=AsyncMock, return_value=False)
     @patch("naukri_server.database.store_notification", new_callable=AsyncMock)
-    async def test_body_uses_note(self, mock_store):
+    async def test_body_uses_note(self, mock_store, mock_has):
         from naukri_server.subscribers import _on_reminder_due
         event = ReminderDue(job_id="J1", company="Acme", note="Check status update")
         await _on_reminder_due(event)

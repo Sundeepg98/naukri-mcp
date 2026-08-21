@@ -340,7 +340,12 @@ class TestTaskDefinitions:
         assert result["status"] == "success"
 
     async def test_task_reminder_check_calls_service(self):
-        """_task_reminder_check should call _list_reminders with include_past=True."""
+        """_task_reminder_check should call _list_reminders with include_past=True.
+
+        emit_events=True since 2026-08-21: _list_reminders no longer emits on
+        read, and this hourly task is the one path that is meant to notify him.
+        See tests/test_reminder_storm.py.
+        """
         from naukri_server.scheduler_tasks import _task_reminder_check
 
         with patch("naukri_server.tools.reminders._list_reminders",
@@ -348,7 +353,7 @@ class TestTaskDefinitions:
                    return_value={"due_count": 2, "reminders": []}) as mock_rem:
             result = await _task_reminder_check()
 
-        mock_rem.assert_awaited_once_with(include_past=True)
+        mock_rem.assert_awaited_once_with(include_past=True, emit_events=True)
         assert result["due_count"] == 2
 
 
