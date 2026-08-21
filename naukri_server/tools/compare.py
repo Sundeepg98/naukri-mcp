@@ -140,6 +140,15 @@ async def _compare_jobs(
                         profile_expected_ctc=profile_expected_ctc,
                         experience_min=job.experience_min,
                         experience_max=job.experience_max,
+                        # RECONCILED 2026-08-21. This was the ONLY scorer in the
+                        # package that omitted the agent-eligibility bonus, so an
+                        # agent-eligible job scored 5 points LOWER here than the
+                        # same job scored by auto_hunt or assess_fit — in a tool
+                        # whose entire purpose is comparability. auto_hunt and
+                        # smart_apply were right: `Job.is_agent_eligible` comes
+                        # off the same API dict this function already parses, so
+                        # there was never a reason to drop it.
+                        is_agent_eligible=job.is_agent_eligible,
                     )
                     job_entry["fit_score"] = fit.overall_score
                     job_entry["matched_skills"] = sorted(fit.skill_match.matched)
