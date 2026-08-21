@@ -8,9 +8,8 @@ from mcp.server.fastmcp import Context
 from naukri_server import mcp
 from naukri_server.config import logger, DISPLAY_MIN_FIT_SCORE
 from naukri_server.domain import safe_get
-from naukri_server.domain.fit_score import FitScore
 from naukri_server.models import Job
-from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
+from naukri_server.scoring import parse_skills, score_job
 from naukri_server.services.auto_hunt_service import (
     parse_profile_experience_years,
     build_ranked_entry,
@@ -188,7 +187,7 @@ async def naukri_auto_hunt(
         for job_dict in jobs:
             job = Job.from_api_dict(job_dict)
             job_skills = parse_skills(job.tags or [])
-            fit = FitScore.compute(
+            fit = score_job(
                 job_skills, profile_skills,
                 safe_get(job_dict, "experience", field_name="experience", warn=False, default=""),
                 profile_exp,
@@ -200,9 +199,6 @@ async def naukri_auto_hunt(
                 experience_min=job.experience_min,
                 experience_max=job.experience_max,
                 is_agent_eligible=job.is_agent_eligible,
-                score_location_fn=_score_location,
-                score_work_mode_fn=_score_work_mode,
-                score_salary_fn=_score_salary,
             )
 
             if fit.overall_score >= min_fit_score:

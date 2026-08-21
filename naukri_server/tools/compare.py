@@ -3,9 +3,8 @@
 import asyncio
 
 from naukri_server.config import logger
-from naukri_server.domain.fit_score import FitScore
 from naukri_server.models import Job
-from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
+from naukri_server.scoring import parse_skills, score_job
 
 
 async def _compare_jobs(
@@ -131,7 +130,7 @@ async def _compare_jobs(
                 }
 
                 if profile_ok:
-                    fit = FitScore.compute(
+                    fit = score_job(
                         job_skills, profile_skills,
                         r.get("experience", ""), profile_exp,
                         job_location=job.location,
@@ -141,9 +140,6 @@ async def _compare_jobs(
                         profile_expected_ctc=profile_expected_ctc,
                         experience_min=job.experience_min,
                         experience_max=job.experience_max,
-                        score_location_fn=_score_location,
-                        score_work_mode_fn=_score_work_mode,
-                        score_salary_fn=_score_salary,
                     )
                     job_entry["fit_score"] = fit.overall_score
                     job_entry["matched_skills"] = sorted(fit.skill_match.matched)

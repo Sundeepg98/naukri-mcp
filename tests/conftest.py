@@ -7,6 +7,39 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
+# Config isolation — no test ever reads the operator's real jobhunt.json.
+#
+# Without this the suite becomes machine-dependent: a weight he edits on his
+# laptop would change assertions here, and CI (which has no such file) and this
+# box would disagree about what "the score" is. That is the single largest risk
+# in the whole config design, and it is why `locate()` has an explicit no-file
+# mode rather than only a path.
+#
+# `:none:` is an EXPLICIT disable token. An EMPTY value means "unset, keep
+# searching" — CI runners, shell scripts and MCP `env` blocks produce an empty
+# var by accident all the time, and one stray `JOBHUNT_CONFIG=` silently
+# running every server on defaults would be the worst possible failure mode for
+# a config system.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_ambient_config(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_CONFIG", ":none:")
+    monkeypatch.delenv("JOBHUNT_HOME", raising=False)
+    monkeypatch.delenv("JOBHUNT_DISABLE", raising=False)
+    try:
+        from naukri_server import policy as _policy
+    except Exception:  # pragma: no cover - jobcore missing in a bare checkout
+        yield
+        return
+    _policy.invalidate()
+    try:
+        yield
+    finally:
+        _policy.invalidate()
+
+
+# ---------------------------------------------------------------------------
 # DB isolation — point DB_PATH at a session-tmp file and create tables once.
 # Without this, any test that calls a database helper without patching it
 # (e.g. tests/test_workflows_integration.py::test_prep_step_fails_gracefully

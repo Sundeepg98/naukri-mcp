@@ -16,10 +16,9 @@ from naukri_server.config import (
     DISPLAY_MIN_FIT_SCORE, MAX_BULK_JOBS,
 )
 from naukri_server.domain import safe_get
-from naukri_server.domain.fit_score import FitScore
 from naukri_server.error_handler import handle_tool_action
 from naukri_server.models import Job
-from naukri_server.scoring import parse_skills, _score_location, _score_work_mode, _score_salary
+from naukri_server.scoring import parse_skills, score_job
 
 
 
@@ -37,7 +36,7 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
     )
     job_skills = parse_skills(job_skills_raw)
     profile_skills = parse_skills(safe_get(profile_result, "key_skills", field_name="key_skills", warn=False, default=[]))
-    fit = FitScore.compute(
+    fit = score_job(
         job_skills, profile_skills,
         safe_get(job_result, "experience", field_name="job.experience", warn=False, default=""),
         safe_get(profile_result, "total_experience", field_name="profile.total_experience", warn=False),
@@ -47,9 +46,6 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
         job_salary=safe_get(job_result, "salary", field_name="job.salary", warn=False),
         profile_expected_ctc=safe_get(profile_result, "expected_ctc", field_name="profile.expected_ctc", warn=False),
         is_agent_eligible=is_agent_eligible,
-        score_location_fn=_score_location,
-        score_work_mode_fn=_score_work_mode,
-        score_salary_fn=_score_salary,
     )
     return fit.to_dict()
 

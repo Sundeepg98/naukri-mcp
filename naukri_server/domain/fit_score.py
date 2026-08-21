@@ -11,10 +11,19 @@ Every import path that worked before still works:
 
     from naukri_server.domain.fit_score import FitScore
 
-``FitScore.compute()`` still takes injected ``score_location_fn`` /
-``score_work_mode_fn`` / ``score_salary_fn`` callables, so the call sites in
-``tools/auto_hunt.py``, ``tools/compare.py`` and ``tools/smart_apply.py`` are
-unchanged.
+The aggregate still accepts injected ``score_location_fn`` /
+``score_work_mode_fn`` / ``score_salary_fn`` callables, and it now also accepts
+``policy=`` — the numbers behind a score (the 60/40 split, the bonus cap, the
+verdict bands, the experience penalties) are values, not literals.
+
+**Production code must not construct it directly.** ``tools/auto_hunt.py``,
+``tools/compare.py`` and ``tools/smart_apply.py`` used to, and each therefore
+scored on the shipped defaults no matter what the operator had configured —
+while ``daily_brief`` alone moved. All four now go through
+``naukri_server.scoring.score_job``, which binds the base score and the three
+bonus helpers to ONE policy object. ``tests/test_one_engine.py`` grep-bans a
+direct construction outside that module and pins all four to one number under a
+non-default policy.
 """
 
 from jobcore.fit import (
