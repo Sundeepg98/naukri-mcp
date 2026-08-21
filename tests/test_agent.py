@@ -171,6 +171,33 @@ class TestHelpers:
 # =====================================================================
 
 
+@pytest.fixture
+def policy_already_seen(monkeypatch, tmp_path):
+    """Tell the agent it has already run under the CURRENT scoring policy.
+
+    Without this, `_act` downgrades an "auto" cycle to "approval" — correctly:
+    a cycle that has never observed a scoring fingerprint shows the list once
+    before acting on it. Two tests below exercise auto-mode APPLY behaviour and
+    would otherwise be testing the downgrade instead.
+
+    They passed before this fixture existed only because a previous run had left
+    `agent_policy_state.json` in the repo root carrying the current hash — which
+    is exactly the ambient-state dependence `tests/test_no_tree_writes.py` now
+    prevents.
+    """
+    import json as _json
+
+    from naukri_server import agent as _agent
+
+    state = tmp_path / "agent_policy_state.json"
+    monkeypatch.setattr(_agent, "POLICY_STATE_PATH", state)
+    state.write_text(
+        _json.dumps({"last_scoring_hash": _agent.current_scoring_hash()}),
+        encoding="utf-8",
+    )
+    return state
+
+
 class TestAgentCoreCycle:
     """Tests for the four saga steps and the main run_agent_cycle."""
 
@@ -400,7 +427,7 @@ class TestAgentCoreCycle:
         assert result["pending_approval"] == 1
         mock_notif.assert_awaited_once()
 
-    async def test_act_auto_mode(self):
+    async def test_act_auto_mode(self, policy_already_seen):
         """In auto mode, _apply_single is called for each candidate."""
         decide_result = {
             "cycle_id": "c6",
@@ -428,7 +455,7 @@ class TestAgentCoreCycle:
         assert result["mode"] == "auto"
         assert mock_apply.await_count == 2
 
-    async def test_act_auto_handles_apply_error(self):
+    async def test_act_auto_handles_apply_error(self, policy_already_seen):
         """In auto mode, _apply_single raising an exception is caught gracefully."""
         decide_result = {
             "cycle_id": "c7",

@@ -449,6 +449,53 @@ class TestScoringChangeForcesAnApprovalCycle:
         assert mode == "auto"
         assert reason is None
 
+    @pytest.mark.asyncio
+    async def test_the_FIRST_EVER_cycle_never_auto_applies(self, tmp_path, monkeypatch):
+        """A cycle that has never observed a scoring fingerprint shows the list.
+
+        `requires_approval_cycle(current, None)` is True by design, and this is
+        the case that matters most: a fresh install, or a state file lost, is
+        exactly when nobody knows what the policy currently says.
+
+        Found the hard way. Two auto-mode tests in test_agent.py were passing
+        only because an earlier run had left `agent_policy_state.json` in the
+        repo root carrying the current hash — so the downgrade never fired and
+        nothing pinned that it should.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from naukri_server import agent
+
+        monkeypatch.setattr(agent, "POLICY_STATE_PATH", tmp_path / "state.json")
+        assert not (tmp_path / "state.json").exists()
+
+        decide_result = {
+            "cycle_id": "c-first",
+            "config": {"mode": "auto", "max_daily_applications": 15},
+            "candidates": [agent.AgentCandidate(
+                job_id="J1", title="Dev", company="Acme", fit_score=95,
+                search_name="s")],
+            "applied_ids": set(), "daily_applied": 0, "daily_remaining": 10,
+        }
+
+        with patch("naukri_server.tools.apply._apply_single",
+                   new_callable=AsyncMock,
+                   return_value={"status": "applied"}) as apply_single, \
+             patch("naukri_server.database.update_agent_decision",
+                   new_callable=AsyncMock), \
+             patch("naukri_server.database.store_notification",
+                   new_callable=AsyncMock), \
+             patch("naukri_server.events.event_bus") as bus:
+            bus.emit = AsyncMock()
+            result = await agent._act(decide_result)
+
+        assert apply_single.await_count == 0, "it APPLIED on a first-ever cycle"
+        assert result["mode"] == "approval"
+        assert result["applied"] == 0
+        assert result["pending_approval"] == 1
+        assert result["mode_downgraded_from"] == "auto"
+        assert "scoring policy changed" in result["mode_downgrade_reason"]
+
     def test_dry_run_is_never_upgraded(self, tmp_path, monkeypatch):
         from naukri_server import agent
 

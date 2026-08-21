@@ -33,6 +33,12 @@ auth_state.json
 
 # Sync state
 sync_state.json
+# Runtime data files in DATA_DIR (the repo root), alongside the already
+# ignored applications.json / saved_jobs.json / questions.json.
+# reminders.json was TRACKED and carrying rows; untracked 2026-08-21.
+# tests/test_no_tree_writes.py keeps this list honest against config.py.
+reminders.json
+interview_rounds.json
 
 # Early access tracking
 early_access_tracking.json
@@ -45,6 +51,9 @@ exports/
 
 # Healer circuit-breaker state (per-machine; should not be committed)
 healing_state.json
+# Runtime state: the last scoring fingerprint the agent acted under.
+# Same class as sync_state.json / healing_state.json / kill_switch_state.json.
+agent_policy_state.json
 
 # Kill-switch state (per-machine; should not be committed)
 kill_switch_state.json

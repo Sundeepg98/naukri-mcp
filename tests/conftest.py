@@ -23,10 +23,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def _no_ambient_config(monkeypatch):
+def _no_ambient_config(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBHUNT_CONFIG", ":none:")
     monkeypatch.delenv("JOBHUNT_HOME", raising=False)
     monkeypatch.delenv("JOBHUNT_DISABLE", raising=False)
+
+    # And no test writes RUNTIME STATE into the repo. `agent.POLICY_STATE_PATH`
+    # defaults to DATA_DIR/agent_policy_state.json, and DATA_DIR is the repo
+    # root — so a test that runs an agent cycle silently dirtied the working
+    # tree, exactly as an un-isolated DB_PATH would. Caught the hard way: it
+    # got committed once. Same treatment as _isolated_test_db below.
+    try:
+        from naukri_server import agent as _agent
+
+        monkeypatch.setattr(_agent, "POLICY_STATE_PATH",
+                            tmp_path / "agent_policy_state.json")
+    except Exception:  # pragma: no cover
+        pass
+
     try:
         from naukri_server import policy as _policy
     except Exception:  # pragma: no cover - jobcore missing in a bare checkout
