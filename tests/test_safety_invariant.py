@@ -433,7 +433,7 @@ class TestScoringChangeForcesAnApprovalCycle:
         monkeypatch.setattr(agent, "POLICY_STATE_PATH", tmp_path / "state.json")
         mode, reason = agent._effective_mode({"mode": "auto"}, "c1")
         assert mode == "approval"
-        assert "scoring policy changed" in reason
+        assert "policy changed" in reason
 
     def test_an_unchanged_fingerprint_runs_in_the_configured_mode(self, tmp_path, monkeypatch):
         """CONTROL. If it downgraded unconditionally, "auto" would be dead code
@@ -443,7 +443,7 @@ class TestScoringChangeForcesAnApprovalCycle:
         state = tmp_path / "state.json"
         monkeypatch.setattr(agent, "POLICY_STATE_PATH", state)
         state.write_text(json.dumps(
-            {"last_scoring_hash": agent.current_scoring_hash()}), encoding="utf-8")
+            {"last_policy_hash": agent.current_policy_hash()}), encoding="utf-8")
 
         mode, reason = agent._effective_mode({"mode": "auto"}, "c1")
         assert mode == "auto"
@@ -494,7 +494,7 @@ class TestScoringChangeForcesAnApprovalCycle:
         assert result["applied"] == 0
         assert result["pending_approval"] == 1
         assert result["mode_downgraded_from"] == "auto"
-        assert "scoring policy changed" in result["mode_downgrade_reason"]
+        assert "policy changed" in result["mode_downgrade_reason"]
 
     def test_dry_run_is_never_upgraded(self, tmp_path, monkeypatch):
         from naukri_server import agent
@@ -511,8 +511,8 @@ class TestScoringChangeForcesAnApprovalCycle:
         state = tmp_path / "state.json"
         monkeypatch.setattr(agent, "POLICY_STATE_PATH", state)
 
-        before = agent.current_scoring_hash()
-        state.write_text(json.dumps({"last_scoring_hash": before}), encoding="utf-8")
+        before = agent.current_policy_hash()
+        state.write_text(json.dumps({"last_policy_hash": before}), encoding="utf-8")
         assert agent._effective_mode({"mode": "auto"}, "c1")[0] == "auto"
 
         _write_config(config_file, {
@@ -521,7 +521,7 @@ class TestScoringChangeForcesAnApprovalCycle:
         })
         _reload(config_file)
 
-        after = agent.current_scoring_hash()
+        after = agent.current_policy_hash()
         assert after != before
         assert agent._effective_mode({"mode": "auto"}, "c1")[0] == "approval"
 

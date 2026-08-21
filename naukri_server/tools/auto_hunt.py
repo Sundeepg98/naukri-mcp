@@ -31,6 +31,7 @@ async def naukri_auto_hunt(
     salary_max: Optional[int] = None,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
+    explain: bool = False,
 ) -> dict:
     """Automated job hunting — search, score against your profile, return ranked matches.
 
@@ -56,11 +57,16 @@ async def naukri_auto_hunt(
         salary_min: Minimum salary in lakhs (optional)
         salary_max: Maximum salary in lakhs (optional)
         timeout_seconds: Max seconds before timeout (default 120)
+        explain: attach the arithmetic behind each score -- weights, the
+            skills/experience components before bonuses, the bonus cap, the
+            verdict band, and the scoring_hash. Off by default: this tool
+            returns a whole ranking, so the block multiplies by the row count.
+            Turn it on for "why did this one rank first", not for the hunt.
 
     Returns:
         - {status: "success", jobs_found, jobs_matched, ranked_jobs: [{job_id, title,
            company, salary, location, work_mode, fit_score, matched_skills,
-           missing_skills, recommendation}]}
+           missing_skills, recommendation, explain (when explain=True)}]}
         - {status: "error", message}
     """
     limit = validate_limit(limit)
@@ -209,7 +215,8 @@ async def naukri_auto_hunt(
             )
 
             if fit.overall_score >= min_fit_score:
-                ranked.append(build_ranked_entry(job, job_dict, fit, profile_exp_years))
+                ranked.append(build_ranked_entry(job, job_dict, fit, profile_exp_years,
+                                                 explain=explain))
 
         # Sort by fit score descending
         ranked.sort(key=lambda x: x["fit_score"], reverse=True)

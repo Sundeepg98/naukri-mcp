@@ -77,6 +77,78 @@ class TestReadingWithNoFile:
         assert real is not None
 
 
+class TestDisplayPathUnderNeitherAnchor:
+    """The case that only CI could see, made visible on every box.
+
+    The test above passes on Windows for an accidental reason: a Windows temp
+    dir lives under ``C:\\Users\\Dell``, so the HOME anchor always caught it.
+    On the Linux runner ``tmp_path`` is ``/tmp/pytest-of-runner/...``, under
+    neither the checkout nor ``/home/runner`` -- both anchors missed, the old
+    code fell through to ``p.name``, and every path collapsed to the identical
+    string "jobhunt.json". Two pushes went red there and green here.
+
+    These tests force both anchors to miss regardless of platform, so the
+    collapse is reproducible on the box where the code is written.
+    """
+
+    @pytest.fixture
+    def no_anchor(self, monkeypatch, tmp_path):
+        """Force BOTH anchors to miss, the way /tmp misses them on the runner.
+
+        The repo root is deliberately DEEP. A shallow fake root sharing a
+        parent with the subject path yields a relpath of "../x/y/z" -- one
+        ".." -- which passes the <=4 gate, returns from the FIRST branch, and
+        never reaches the code under test. That mistake was caught by mutating
+        the fallback back to `p.name` and watching these tests stay green; the
+        depth below is what makes the mutation red.
+        """
+        from pathlib import Path
+
+        import naukri_server.policy as naukri_policy
+
+        elsewhere = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"
+        home = tmp_path / "not-home"
+        elsewhere.mkdir(parents=True)
+        home.mkdir()
+        monkeypatch.setattr(naukri_policy, "_REPO_ROOT", elsewhere)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        return naukri_policy.display_path
+
+    def test_it_does_not_collapse_to_a_bare_basename(self, no_anchor, tmp_path):
+        deep = tmp_path / "sub" / "pytest-of-runner" / "pytest-0" / "test_x0" / "jobhunt.json"
+        out = no_anchor(str(deep))
+        assert out != "jobhunt.json", (
+            "collapsed to a bare basename with no anchor available -- this is "
+            "the Linux-only regression; two entries of `searched` would now "
+            "print the identical string"
+        )
+        assert out.endswith("jobhunt.json")
+
+    def test_two_different_files_stay_distinguishable(self, no_anchor, tmp_path):
+        """The actual point. One string for two files is the failure."""
+        a = no_anchor(str(tmp_path / "sub" / "run-a" / "cfg" / "jobhunt.json"))
+        b = no_anchor(str(tmp_path / "sub" / "run-b" / "cfg" / "jobhunt.json"))
+        assert a != b, f"both rendered as {a!r}"
+
+    def test_it_publishes_no_drive_letter_and_no_home(self, no_anchor, tmp_path):
+        """The guarantee the anchoring exists to keep, held by the tail too."""
+        out = no_anchor(str(tmp_path / "sub" / "p" / "q" / "jobhunt.json"))
+        assert ":\\" not in out and ":/" not in out
+        assert not out.startswith("/")
+        assert str(tmp_path) not in out
+
+    def test_it_survives_the_scrubber_untouched(self, no_anchor, tmp_path):
+        """A form the scrubber eats would be no better than the basename."""
+        from naukri_server.utils import scrub_paths
+
+        out = no_anchor(str(tmp_path / "sub" / "p" / "q" / "jobhunt.json"))
+        assert scrub_paths(out) == out
+
+    def test_a_single_component_path_gets_no_elision_marker(self, no_anchor):
+        """Nothing was elided, so `.../` would be a lie."""
+        assert no_anchor("jobhunt.json") == "jobhunt.json"
+
+
 class TestProvenance:
     @pytest.mark.asyncio
     async def test_an_edited_key_is_marked_as_coming_from_the_file(self, config_file):

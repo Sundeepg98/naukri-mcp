@@ -34,4 +34,4 @@
 # module. THE RULE: any commit here that adds a `from jobcore...` import of
 # something new bumps this line in the SAME commit, and the bump is verified by
 # installing this file into a throwaway venv -- not by running the local suite.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@565e82187b42030efb18f2098336d2f24f9f2b27
+jobcore @ git+https://github.com/Sundeepg98/jobcore@16ae934bca8aeff409674f6b89153d781868360e

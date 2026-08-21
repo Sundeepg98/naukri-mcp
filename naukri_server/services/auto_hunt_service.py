@@ -45,11 +45,16 @@ def parse_profile_experience_years(profile_exp: Optional[str]) -> float:
 
 def build_ranked_entry(
     job: Job, job_dict: dict, fit: FitScore, profile_exp_years: float,
+    *, explain: bool = False,
 ) -> dict:
     """Assemble the per-job dict that auto-hunt returns.
 
     All raw-dict access goes through ``safe_get`` so any future schema drift
     in the search-result shape gets logged at the boundary.
+
+    explain=True adds the `explain` block from the typed FitScore. This path
+    never calls ``to_dict``, so the block comes straight off ``fit.explain()``.
+    When it is off no `explain` key is added at all.
     """
     bonuses: dict[str, Any] | None
     if fit._has_enrichment:
@@ -63,7 +68,7 @@ def build_ranked_entry(
     else:
         bonuses = None
 
-    return {
+    entry = {
         "job_id": job.job_id,
         "title": job.title,
         "company": job.company,
@@ -80,3 +85,6 @@ def build_ranked_entry(
         "recommendation": fit.recommendation,
         "bonuses": bonuses,
     }
+    if explain:
+        entry["explain"] = fit.explain()
+    return entry

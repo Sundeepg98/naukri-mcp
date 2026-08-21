@@ -192,7 +192,7 @@ def policy_already_seen(monkeypatch, tmp_path):
     state = tmp_path / "agent_policy_state.json"
     monkeypatch.setattr(_agent, "POLICY_STATE_PATH", state)
     state.write_text(
-        _json.dumps({"last_scoring_hash": _agent.current_scoring_hash()}),
+        _json.dumps({"last_policy_hash": _agent.current_policy_hash()}),
         encoding="utf-8",
     )
     return state

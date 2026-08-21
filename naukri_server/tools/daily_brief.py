@@ -48,7 +48,7 @@ async def _fetch_pending_notifications() -> list:
 
 
 @mcp.tool()
-async def naukri_daily_brief() -> dict:
+async def naukri_daily_brief(explain: bool = False) -> dict:
     """Get your morning job-hunting dashboard in a single call.
 
     Runs 20 checks in parallel plus a post-gather conversion funnel analysis:
@@ -59,9 +59,17 @@ async def naukri_daily_brief() -> dict:
     match quality, unified notify summary, AmbitionBox salary insights, and
     pending workflow notifications.
 
+    Args:
+        explain: attach the arithmetic behind the fit scores on the top
+            recommendations -- weights, the skills/experience components before
+            bonuses, the bonus cap, the verdict band, and the scoring_hash.
+            Off by default, and most firmly so here: this is the one call meant
+            to be read whole every morning, and the block is verbose.
+
     Returns:
         - {status: "success", unread_messages, notifications, notification_summary,
-           recommendations (with clusters, agent_eligible), recruiter_activity,
+           recommendations (with clusters, agent_eligible; each scored job also
+           carries `explain` when explain=True), recruiter_activity,
            activity_level, todays_applications, dashboard, due_reminders,
            stale_applications, job_alerts, profile_completeness, saved_jobs,
            search_impressions, assessments, match_quality,
@@ -260,8 +268,13 @@ async def naukri_daily_brief() -> dict:
                             job_skills, profile_skills,
                             job.get("experience", ""),
                             profile_data.get("total_experience"),
+                            explain=explain,
                         )
                         job["fit_score"] = fit.get("overall_score")
+                        # Absent entirely when the flag is off -- `fit` has no
+                        # such key then, so nothing is added.
+                        if "explain" in fit:
+                            job["explain"] = fit["explain"]
                     except Exception:
                         pass
         except Exception as exc:

@@ -80,12 +80,17 @@ async def naukri_config(section: Optional[str] = None) -> dict:
             Omit for everything.
 
     Returns:
-        {status, policy_rev, policy_hash, source, config_status,
+        {status, policy_rev, policy_hash, scoring_hash, source, config_status,
          candidate, scoring, server, provenance, unknown_keys,
          tier_c_refusals, warnings, config_error, external_edit,
          revision_regression, searched, not_loadable_here,
          min_agent_fit_floor, agent_authority}
 
+        - policy_hash fingerprints {scoring, candidate} -- the whole policy.
+          scoring_hash fingerprints {scoring} alone, and is the one a stored
+          score carries, so it is what tells you whether an old score is
+          still comparable to a new one. They differ for the same policy;
+          matching the wrong one against a score is a false "comparable".
         - provenance says "file" or "default" per key, so "is that my setting
           or the shipped value?" is answerable without diffing.
         - source is null when no file was found; `searched` then lists every

@@ -165,7 +165,7 @@ def bind(loaded: Optional[Loaded] = None):
     """Pin one policy snapshot for the duration of a tool call.
 
     Wrap a tool body in this and every score it produces carries one
-    ``policy_hash``. Without it the granularity is per-scoring-call, and a
+    ``scoring_hash``. Without it the granularity is per-scoring-call, and a
     concurrent write can swap the policy between two rows of one ranking.
     """
     token = _BOUND.set(loaded if loaded is not None else snapshot())
@@ -249,14 +249,30 @@ def display_min_score() -> int:
 
 
 def policy_stamp() -> dict:
-    """``{policy_rev, policy_hash}`` — what a stored score needs to stay
-    interpretable after the policy moves."""
+    """``{policy_rev, policy_hash, scoring_hash}`` -- both fingerprints, named.
+
+    They are NOT interchangeable, which is why both are here:
+
+    - ``scoring_hash`` covers ``{scoring}`` only. This is what a STORED SCORE
+      needs: two scores are comparable exactly when it matches, because it
+      fingerprints the arithmetic and nothing else.
+    - ``policy_hash`` covers ``{scoring, candidate}``. This is what a CONFIG
+      READOUT needs, and what the agent's approval gate compares -- inflating
+      ``candidate.skills`` moves every score without touching the arithmetic,
+      so only the full hash sees it.
+    """
     snap = snapshot()
-    return {"policy_rev": snap.policy_rev, "policy_hash": snap.policy_hash}
+    return {"policy_rev": snap.policy_rev, "policy_hash": snap.policy_hash,
+            "scoring_hash": snap.scoring_hash}
 
 
 #: The naukri checkout root — the anchor config paths are displayed against.
 _REPO_ROOT = _START.parent.parent
+
+#: Components kept by `display_path`'s last-resort tail form. Three is enough to
+#: tell two pytest tmp dirs apart, which is the case that exposed the old
+#: basename fallback, and short enough that it publishes no useful layout.
+_DISPLAY_TAIL_PARTS = 3
 
 
 def display_path(raw: Optional[str]) -> Optional[str]:
@@ -271,20 +287,47 @@ def display_path(raw: Optional[str]) -> Optional[str]:
     So paths are rendered relative to the checkout, or to home as ``~/…``. Both
     forms survive the scrubber (it matches drive-letter absolutes only), both
     stay distinguishable, and neither publishes the machine's layout.
+
+    THIRD FORM, and why it exists (2026-08-21, found by CI, not locally). A path
+    under NEITHER anchor used to fall through to the bare basename -- which is
+    the very collapse the paragraph above says is worse than saying nothing.
+    On this box it never fired, because a Windows temp dir lives under
+    ``C:\\Users\\Dell`` and so the home anchor always caught it. On the Linux
+    runner ``/tmp`` is under neither ``/home/runner/work/...`` nor
+    ``/home/runner``, so every path fell straight to "jobhunt.json" and
+    ``test_the_reported_path_is_not_an_absolute_local_path`` failed there and
+    only there. That test was right and the function was wrong.
+
+    The last resort is now the TAIL: the final few components with a leading
+    ``.../``. It keeps the file distinguishable, publishes no drive letter, no
+    home directory and no layout above those components, and it carries no
+    leading slash -- so the scrubber leaves it alone exactly as the other two
+    forms are left alone.
     """
     if not raw:
         return raw
     p = Path(raw)
     try:
         rel = os.path.relpath(p, _REPO_ROOT)
-        if rel.count("..") <= 4:
+        # Count PARTS equal to "..", not occurrences of the substring: a
+        # directory legitimately named "a..b" is not four levels up.
+        if sum(1 for part in rel.split(os.sep) if part == os.pardir) <= 4:
             return rel.replace(os.sep, "/")
     except (ValueError, OSError):
         pass
     try:
         return "~/" + p.relative_to(Path.home()).as_posix()
     except (ValueError, OSError):
+        pass
+    # Drop the anchor ("C:\\", "/") so no drive letter or root can survive,
+    # then keep the tail. One component means there is nothing to elide and
+    # the marker would be a lie, so it is omitted in that case.
+    parts = p.parts[1:] if p.anchor else p.parts
+    if len(parts) <= 1:
         return p.name
+    tail = parts[-_DISPLAY_TAIL_PARTS:]
+    prefix = ".../" if len(tail) < len(parts) else ""
+    return prefix + "/".join(tail)
 
 
 def report(section: Optional[str] = None) -> dict:
@@ -321,6 +364,10 @@ def report(section: Optional[str] = None) -> dict:
                 section: out.get(section, out.get("server"))} | {
                     "policy_rev": out["policy_rev"],
                     "policy_hash": out["policy_hash"],
+                    # The narrowed readout carries the same bridge field as the
+                    # full one, so a stored score's scoring_hash can be matched
+                    # against a section read without a second call.
+                    "scoring_hash": out["scoring_hash"],
                     "source": out["source"],
                 }
     return out

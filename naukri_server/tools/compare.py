@@ -10,6 +10,8 @@ from naukri_server.scoring import parse_skills, score_job
 async def _compare_jobs(
     job_ids: list[str],
     timeout_seconds: int = 120,
+    *,
+    explain: bool = False,
 ) -> dict:
     """Compare multiple jobs side-by-side with fit scores.
 
@@ -20,11 +22,14 @@ async def _compare_jobs(
     Args:
         job_ids: List of 2-5 job IDs to compare
         timeout_seconds: Max seconds before timeout (default 120)
+        explain: attach the arithmetic behind each score to each job entry.
+            Only entries that were actually scored get one -- with no profile
+            there is no score to explain.
 
     Returns:
         - {status: "success", count, jobs: [{job_id, title, company, salary,
            experience, location, work_mode, skills, fit_score, matched_skills,
-           missing_skills, recommendation, ...}],
+           missing_skills, recommendation, explain (when explain=True), ...}],
            common_skills, all_skills, best_match_job_id, average_fit_score,
            saga_steps, step_timings}
         - {status: "error", message}
@@ -161,6 +166,8 @@ async def _compare_jobs(
                         "agent_eligible": fit.bonuses.agent_eligible,
                         "total": fit.bonuses.total,
                     } if fit._has_enrichment else None
+                    if explain:
+                        job_entry["explain"] = fit.explain()
                     fit_scores.append(fit.overall_score)
 
                 jobs.append(job_entry)

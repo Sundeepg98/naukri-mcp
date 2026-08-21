@@ -23,13 +23,18 @@ from naukri_server.scoring import parse_skills, score_job
 
 
 
-def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool = False) -> dict:
+def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool = False,
+               *, explain: bool = False) -> dict:
     """Score a single job against a profile. Returns the fit assessment dict.
 
     job_result and profile_result come from naukri_get_job / get_cached_profile —
     external API responses, so all reads route through safe_get. The 'tags' and
     'skills' fall-through uses safe_get's multi-key form to capture both v3
     (skills) and v4 (tags) shapes.
+
+    With explain=True the returned dict grows an `explain` key holding the
+    arithmetic. With explain=False no such key is emitted at all -- not None,
+    not empty -- so the dict stays byte-identical to what it has always been.
     """
     job_skills_raw = safe_get(
         job_result, "tags", "skills",
@@ -48,19 +53,25 @@ def _score_job(job_result: dict, profile_result: dict, is_agent_eligible: bool =
         profile_expected_ctc=safe_get(profile_result, "expected_ctc", field_name="profile.expected_ctc", warn=False),
         is_agent_eligible=is_agent_eligible,
     )
-    return fit.to_dict()
+    return fit.to_dict(explain=explain)
 
 
 async def _bulk_saved_scoring(
     min_fit_score: int = 0,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
+    *,
+    explain: bool = False,
 ) -> dict:
     """Score all saved jobs against profile, return ranked list.
 
     Fetches saved jobs from local tracking, fetches full job details for each
     (to get skills/experience data), then scores each against the profile.
     Results are sorted by fit_score descending.
+
+    With explain=True each scored row carries an `explain` key. The block is
+    lifted OUT of fit_details and onto the row, so every row-returning tool in
+    this package puts it in the same place.
     """
     async def _do_work():
         from naukri_server.tools.jobs import naukri_get_job
@@ -135,11 +146,15 @@ async def _bulk_saved_scoring(
                 continue
 
             job = Job.from_api_dict(detail)
-            fit = _score_job(detail, profile_result, is_agent_eligible=job.is_agent_eligible)
+            fit = _score_job(detail, profile_result, is_agent_eligible=job.is_agent_eligible,
+                             explain=explain)
             fit_score = fit.get("overall_score", 0)
+            # Lift the block to row level. When explain is off `fit` has no
+            # such key, pop returns None, and no key is added anywhere.
+            explain_block = fit.pop("explain", None)
 
             if fit_score >= min_fit_score:
-                scored.append({
+                row = {
                     "job_id": saved_job.get("job_id"),
                     "title": job.title or saved_job.get("title"),
                     "company": job.company or saved_job.get("company"),
@@ -149,7 +164,10 @@ async def _bulk_saved_scoring(
                     "work_mode": job.work_mode,
                     "fit_score": fit_score,
                     "fit_details": fit,
-                })
+                }
+                if explain_block is not None:
+                    row["explain"] = explain_block
+                scored.append(row)
 
         scored.sort(key=lambda x: x["fit_score"], reverse=True)
 
@@ -178,8 +196,14 @@ async def _apply_top_fits(
     answers: Optional[dict] = None,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
+    *,
+    explain: bool = False,
 ) -> dict:
-    """Score saved jobs and apply to top fits above min_fit_score."""
+    """Score saved jobs and apply to top fits above min_fit_score.
+
+    With explain=True each result row carries the `explain` block of the score
+    that selected it, forwarded from the scoring step.
+    """
     from naukri_server.tools.apply import _apply_single
     from naukri_server.validation import validate_limit
     from naukri_server.sagas import SagaExecutor
@@ -199,6 +223,7 @@ async def _apply_top_fits(
             min_fit_score=min_fit_score,
             timeout_seconds=timeout_seconds,
             ctx=ctx,
+            explain=explain,
         )
         if scored_result.get("status") == "error":
             raise RuntimeError(scored_result.get("message", "Scoring failed"))
@@ -271,6 +296,8 @@ async def _apply_top_fits(
                     "fit_score": job.get("fit_score"),
                     "apply_status": status,
                 }
+                if "explain" in job:
+                    entry["explain"] = job["explain"]
 
                 if status == "applied":
                     applied_count += 1
@@ -296,13 +323,16 @@ async def _apply_top_fits(
                     break
             except Exception as e:
                 errors.append(f"Job {jid}: {type(e).__name__}: {e}")
-                results.append({
+                error_entry = {
                     "job_id": jid,
                     "title": job.get("title"),
                     "fit_score": job.get("fit_score"),
                     "apply_status": "error",
                     "error": str(e),
-                })
+                }
+                if "explain" in job:
+                    error_entry["explain"] = job["explain"]
+                results.append(error_entry)
 
         return {"applied": applied_count, "attempted": len(to_apply)}
 
@@ -364,6 +394,7 @@ async def naukri_assess_fit(
     min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
     answers: Optional[dict] = None,
     set_reminder_days: Optional[int] = None,
+    explain: bool = False,
 ) -> dict:
     """Assess fit for a single job — skill overlap, experience, location, salary.
 
@@ -376,10 +407,16 @@ async def naukri_assess_fit(
         min_fit_score: Minimum score to trigger auto-apply (0-100)
         answers: Screening question answers for auto-apply
         set_reminder_days: Days until follow-up reminder after applying
+        explain: attach the arithmetic behind the score -- weights, the
+            skills/experience components before bonuses, the bonus cap, the
+            verdict band, and the scoring_hash. Off by default: it is verbose,
+            and it answers "why is this number 85", which is not the usual
+            question.
 
     Returns:
         {status, job_summary, fit_assessment: {overall_score, skill_match,
-         experience_match, bonuses, recommendation}, applied, naukri_match}
+         experience_match, bonuses, recommendation, explain (when explain=True)},
+         applied, naukri_match}
     """
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
@@ -410,7 +447,9 @@ async def naukri_assess_fit(
         except Exception:
             pass
 
-        fit = _score_job(job_result, profile_result, is_agent_eligible=job_result.get("is_agent_eligible", False))
+        fit = _score_job(job_result, profile_result,
+                         is_agent_eligible=job_result.get("is_agent_eligible", False),
+                         explain=explain)
 
         result = {
             "status": "success",
@@ -460,6 +499,7 @@ async def naukri_score_saved_jobs(
     min_fit_score: Optional[int] = None,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
+    explain: bool = False,
 ) -> dict:
     """Score all saved/bookmarked jobs against your profile.
 
@@ -470,11 +510,16 @@ async def naukri_score_saved_jobs(
         min_fit_score: Only return jobs scoring at or above this (0-100).
             Defaults to servers.naukri.display_min_score, which ships as 60.
         timeout_seconds: Timeout for the bulk operation
+        explain: attach the arithmetic behind each score -- weights, the
+            skills/experience components before bonuses, the bonus cap, the
+            verdict band, and the scoring_hash. Off by default: it is one such
+            block PER ROW, so on a full saved list it costs more than the
+            ranking it explains.
 
     Returns:
         {status, total_saved, scored_count, min_fit_score,
          scored_jobs: [{job_id, title, company, salary, location,
-                        fit_score, fit_details}, ...]}
+                        fit_score, fit_details, explain (when explain=True)}, ...]}
     """
     if min_fit_score is None:
         min_fit_score = _policy.display_min_score()
@@ -485,6 +530,7 @@ async def naukri_score_saved_jobs(
         min_fit_score=min_fit_score,
         timeout_seconds=timeout_seconds,
         ctx=ctx,
+        explain=explain,
     )
 
 
@@ -496,6 +542,7 @@ async def naukri_apply_top_fits(
     answers: Optional[dict] = None,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
+    explain: bool = False,
 ) -> dict:
     """Score saved jobs and auto-apply to top matches above min_fit_score.
 
@@ -508,11 +555,16 @@ async def naukri_apply_top_fits(
         set_reminder_days: Days until follow-up reminder after applying
         answers: Screening question answers for auto-apply
         timeout_seconds: Timeout for the bulk operation
+        explain: attach the arithmetic behind each score -- weights, the
+            skills/experience components before bonuses, the bonus cap, the
+            verdict band, and the scoring_hash. Off by default: it is verbose.
+            This tool SUBMITS applications, so the block is worth its tokens
+            here only when the question is "why did that one clear the bar".
 
     Returns:
         {status, applied, attempted, total_scored, min_fit_score,
          results: [{job_id, title, company, fit_score, apply_status,
-                    reminder_set}, ...]}
+                    reminder_set, explain (when explain=True)}, ...]}
     """
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
@@ -524,4 +576,5 @@ async def naukri_apply_top_fits(
         answers=answers,
         timeout_seconds=timeout_seconds,
         ctx=ctx,
+        explain=explain,
     )

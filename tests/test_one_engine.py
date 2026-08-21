@@ -425,7 +425,13 @@ class TestThePolicyIsCarriedOnTheResult:
     def test_a_non_default_score_carries_its_hash(self, tilted_policy):
         """Two scores under different policies are not comparable, and the dict
         has to say so — otherwise `policy_rev` on a stored row invites exactly
-        the wrong conclusion."""
+        the wrong conclusion.
+
+        The key is `scoring_hash`, not `policy_hash`. A RESULT can only vouch
+        for the arithmetic; `policy_hash` also covers the candidate block,
+        which is a call argument here, so the two hashes differ for one policy
+        and stamping the full one would claim more than the result knows.
+        """
         from naukri_server.scoring import compute_fit_score, parse_skills
 
         d = compute_fit_score(
@@ -433,7 +439,8 @@ class TestThePolicyIsCarriedOnTheResult:
             JOB_EXPERIENCE, PROFILE_EXPERIENCE,
             experience_min=2, experience_max=5,
         )
-        assert d["policy_hash"]
+        assert d["scoring_hash"]
+        assert "policy_hash" not in d
 
     def test_at_default_the_result_is_byte_identical_to_today(self):
         """`to_dict()` must not grow a stamp until a policy is actually set —
@@ -445,5 +452,6 @@ class TestThePolicyIsCarriedOnTheResult:
             JOB_EXPERIENCE, PROFILE_EXPERIENCE,
             experience_min=2, experience_max=5,
         )
+        assert "scoring_hash" not in d
         assert "policy_hash" not in d
         assert "policy_rev" not in d

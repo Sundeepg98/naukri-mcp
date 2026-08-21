@@ -67,7 +67,8 @@ DEFAULT_CONFIG = {
 
 CONFIG_PATH = DATA_DIR / "agent_config.json"
 
-#: Where the last scoring fingerprint this agent acted under is remembered.
+#: Where the last FULL policy fingerprint this agent acted under is remembered
+#: -- scoring and candidate, not the scoring half alone.
 #: One line of state, and it is what turns "policy was quietly widened" into
 #: "he sees the list" — see :func:`_effective_mode`.
 POLICY_STATE_PATH = DATA_DIR / "agent_policy_state.json"
@@ -95,13 +96,15 @@ POLICY_STATE_PATH = DATA_DIR / "agent_policy_state.json"
 #      threshold, from ANY source including naukri_agent_update_config, costs
 #      display noise instead of applications.
 #
-#   2. A forced approval cycle whenever the SCORING fingerprint changed since
+#   2. A forced approval cycle whenever the FULL POLICY fingerprint changed since
 #      the last cycle. This covers the two levers that cannot be tier C because
 #      they are the feature he asked for by name: inflating `candidate.skills`
 #      (|matched|/|job_skills| -> 100 for every job in existence) and reshaping
 #      `scoring`. Neither touches the agent block at all, and either can be
 #      written FROM A SIBLING SERVER, so no amount of section-scoping catches
-#      them. One condition does.
+#      them. One condition does. That condition compares `policy_hash`, the
+#      FULL {scoring, candidate} fingerprint -- NOT `scoring_hash`, which
+#      covers `scoring` alone and would miss the candidate.skills lever.
 
 
 def _min_agent_fit_floor() -> int:
@@ -140,8 +143,16 @@ def _write_policy_state(state: dict) -> None:
                        extra={"step": "config"})
 
 
-def current_scoring_hash() -> Optional[str]:
-    """Fingerprint of everything that can move a fit score, or None."""
+def current_policy_hash() -> Optional[str]:
+    """The FULL policy fingerprint -- scoring AND candidate -- or None.
+
+    DO NOT "fix" this to `scoring_hash`. The two are different hashes:
+    `policy_hash` covers {scoring, candidate}, `scoring_hash` covers {scoring}
+    only. This gate exists to catch an inflated `candidate.skills`, which
+    changes no arithmetic and so does NOT move the scoring hash -- it moves
+    every score by widening what counts as matched. Narrowing this to the
+    scoring hash reopens that hole, silently.
+    """
     try:
         from naukri_server import policy as _policy
 
@@ -153,19 +164,24 @@ def current_scoring_hash() -> Optional[str]:
 def _effective_mode(config: dict, cycle_id: str = "") -> tuple[str, Optional[str]]:
     """The mode this cycle actually runs in, and why if it was downgraded.
 
-    "auto" is downgraded to "approval" for exactly one cycle after the scoring
-    fingerprint moves. Nothing else is affected: dry_run stays dry_run, an
-    unchanged fingerprint runs in the configured mode.
+    "auto" is downgraded to "approval" for exactly one cycle after the full
+    policy fingerprint moves. Nothing else is affected: dry_run stays dry_run,
+    an unchanged fingerprint runs in the configured mode.
     """
     mode = config.get("mode", "approval")
     if mode != "auto":
         return mode, None
 
-    current = current_scoring_hash()
+    current = current_policy_hash()
     if current is None:
         return mode, None
 
-    last_seen = _read_policy_state().get("last_scoring_hash")
+    # `last_policy_hash` was called `last_scoring_hash` until the two hashes
+    # were told apart. Fall back to the old key so an existing state file on a
+    # live box is not read as "never seen", which would burn a spurious
+    # approval cycle on the next run.
+    _state = _read_policy_state()
+    last_seen = _state.get("last_policy_hash", _state.get("last_scoring_hash"))
     try:
         from jobcore.policy import requires_approval_cycle
     except Exception:  # pragma: no cover
@@ -174,8 +190,12 @@ def _effective_mode(config: dict, cycle_id: str = "") -> tuple[str, Optional[str
     if not requires_approval_cycle(current, last_seen):
         return mode, None
 
+    # "policy", not "scoring policy": the hash compared here covers the
+    # candidate block as well, so an inflated candidate.skills fires this with
+    # no scoring key touched at all. Saying "scoring" sent the reader looking
+    # in the wrong half of the file for a change that was never there.
     reason = (
-        f"scoring policy changed since the last cycle "
+        f"policy changed since the last cycle -- scoring, candidate or both "
         f"({last_seen or 'never seen'} -> {current}); this cycle runs in "
         f"approval mode so the list is reviewed before anything is submitted"
     )
@@ -476,11 +496,11 @@ async def _act(decide_result: dict) -> dict:
     cycle_id = decide_result["cycle_id"]
 
     # An "auto" cycle is downgraded to "approval" for exactly one cycle after
-    # the scoring fingerprint moves — the guard against the two levers that
+    # the FULL policy fingerprint moves — the guard against the two levers that
     # reach this selector without touching the agent block at all, and that a
     # SIBLING SERVER can pull (candidate.skills, scoring.*).
     mode, downgrade_reason = _effective_mode(config, cycle_id)
-    scoring_hash = current_scoring_hash()
+    policy_hash = current_policy_hash()
 
     logger.info("Agent %s: act — mode=%s, %d candidates", cycle_id, mode, len(candidates),
                 extra={"cycle_id": cycle_id, "step": "act"})
@@ -614,10 +634,18 @@ async def _act(decide_result: dict) -> dict:
     # Record what this cycle actually ran under, so the NEXT cycle can tell
     # whether the policy moved. Written after acting, so a crashed cycle does
     # not consume the one approval cycle a policy change is owed.
-    if scoring_hash is not None:
-        act_result["scoring_hash"] = scoring_hash
+    if policy_hash is not None:
+        # `policy_hash`, not `scoring_hash`. This key carried the FULL
+        # {scoring, candidate} fingerprint under the name of the scoring-only
+        # one -- the same defect jobcore fixed, reproduced one layer up. It is
+        # a transient tool-result field (nothing persists it; grep
+        # database.py), so the rename costs no stored data. It is NOT
+        # double-emitted under both names for a deprecation window: two names
+        # for one value, where those names mean different things everywhere
+        # else, is the ambiguity rather than a migration away from it.
+        act_result["policy_hash"] = policy_hash
         state = _read_policy_state()
-        state["last_scoring_hash"] = scoring_hash
+        state["last_policy_hash"] = policy_hash
         state["last_seen_at"] = datetime.now(timezone.utc).isoformat()
         await asyncio.to_thread(_write_policy_state, state)
     if downgrade_reason:
@@ -703,8 +731,9 @@ async def run_agent_cycle(ctx: Context | None = None) -> dict:
     """
     # The agent runs from the scheduler, not through handle_tool_action, so it
     # binds its own snapshot. One cycle, one policy: every candidate in a cycle
-    # is scored under the same weights, and `_effective_mode` reads the same
-    # fingerprint the scoring used.
+    # is scored under the same weights, and `_effective_mode` reads the full
+    # policy fingerprint of that same snapshot -- the scoring half plus the
+    # candidate half, because both move scores.
     try:
         from naukri_server import policy as _policy
 

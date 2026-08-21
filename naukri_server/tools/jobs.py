@@ -289,9 +289,15 @@ async def _do_similar(**kw) -> dict:
 
 
 async def _do_compare(**kw) -> dict:
-    """Compare 2-5 jobs side-by-side with fit scores."""
+    """Compare 2-5 jobs side-by-side with fit scores.
+
+    This shim takes **kw and forwards a NAMED subset, so any argument added to
+    the tool above has to be added here too or it is dropped in silence.
+    """
     from naukri_server.tools.compare import _compare_jobs
-    return await _compare_jobs(job_ids=kw["job_ids"], timeout_seconds=kw.get("timeout_seconds", 120))
+    return await _compare_jobs(job_ids=kw["job_ids"],
+                               timeout_seconds=kw.get("timeout_seconds", 120),
+                               explain=kw.get("explain", False))
 
 
 # ============================================================================
@@ -332,19 +338,30 @@ async def _tool_similar_jobs(job_id: str, limit: int = 10, page: int = 1) -> dic
 
 
 @mcp.tool(name="naukri_compare_jobs")
-async def _tool_compare_jobs(job_ids: list[str], timeout_seconds: int = 120) -> dict:
+async def _tool_compare_jobs(job_ids: list[str], timeout_seconds: int = 120,
+                             explain: bool = False) -> dict:
     """Compare 2-5 jobs side-by-side with fit scores.
 
     Args:
         job_ids: List of 2-5 job IDs to compare
         timeout_seconds: Max seconds before timeout (default 120)
+        explain: attach the arithmetic behind each score -- weights, the
+            skills/experience components before bonuses, the bonus cap, the
+            verdict band, and the scoring_hash. Off by default: it is verbose.
+            This is the tool where it earns its tokens most often, because
+            "why is that one ahead" is the question a comparison raises.
 
     Returns:
-        {status, count, jobs, common_skills, all_skills, best_match_job_id, average_fit_score}
+        {status, count, jobs, common_skills, all_skills, best_match_job_id,
+         average_fit_score}; each scored job entry also carries `explain`
+        when explain=True
     """
     if not job_ids:
         return {"status": "error", "message": "job_ids is required (list of 2-5 IDs)", "error_code": "VALIDATION_ERROR"}
-    return await handle_tool_action(lambda: _do_compare(job_ids=job_ids, timeout_seconds=timeout_seconds), "jobs.compare")
+    return await handle_tool_action(
+        lambda: _do_compare(job_ids=job_ids, timeout_seconds=timeout_seconds,
+                            explain=explain),
+        "jobs.compare")
 
 
 @mcp.tool(name="naukri_report_fraud")

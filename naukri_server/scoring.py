@@ -162,6 +162,10 @@ def score_job(
     :class:`jobcore.fit.FitScore` aggregate, which carries the policy that
     produced it — so a stored score stays interpretable after the policy moves.
 
+    Call ``.explain()`` on the result for the arithmetic behind the number --
+    that is how the tools that keep the typed object (auto_hunt, compare_jobs)
+    surface their ``explain`` block without going through ``to_dict``.
+
     Use :func:`compute_fit_score` when a flat dict is what the tool result wants.
     """
     return _engine(policy).fit_score(
@@ -196,6 +200,8 @@ def compute_fit_score(
     experience_max: Optional[int] = None,
     # Agent eligibility bonus (backward compatible — defaults to None)
     is_agent_eligible=None,
+    *,
+    explain: bool = False,
 ) -> dict:
     """Compute fit score between a job and a candidate profile.
 
@@ -216,12 +222,16 @@ def compute_fit_score(
         job_work_mode: "WFH", "Hybrid", "Office", etc. (optional)
         job_salary: Salary string like "15-20 LPA" (optional)
         profile_expected_ctc: Expected CTC in LPA (optional)
+        explain: add the `explain` block -- the arithmetic behind the score,
+            not the score. Off by default because it is verbose.
 
     Returns:
         {overall_score, skill_match, experience_match, bonuses (if data provided),
          recommendation}. Under a NON-default policy the dict also carries
-        policy_hash, so two scores can be told apart when they are not
-        comparable.
+        scoring_hash, so two scores can be told apart when they are not
+        comparable. The key is scoring_hash and not policy_hash: a result can
+        only vouch for the arithmetic, and the candidate half of the policy is
+        a call argument here. With explain=True the dict also carries `explain`.
     """
     return score_job(
         job_skills, profile_skills, job_exp_str, profile_exp,
@@ -233,4 +243,4 @@ def compute_fit_score(
         experience_min=experience_min,
         experience_max=experience_max,
         is_agent_eligible=is_agent_eligible,
-    ).to_dict()
+    ).to_dict(explain=explain)
