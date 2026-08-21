@@ -29,19 +29,37 @@ from naukri_server.probes.drift_detector import detector as _drift_detector
 
 
 # The 5 critical endpoints. Each tuple is (label, path, optional params).
-# We intentionally only fetch — never POST — to avoid side effects from a probe.
+# We intentionally never send a MUTATING request from a probe. Two of these were
+# permanently failing until 2026-08-21 for call-shape reasons, not health ones:
+#   - profile needed expand_level; without it the endpoint is a hard HTTP 400.
+#   - recom-jobs is a POST-only SEARCH; GET is a hard HTTP 405. Reading it needs
+#     POST, which is still side-effect-free (see _POST_ONLY_PATHS below).
+# A probe whose call shape is wrong reports the endpoint as broken forever,
+# which is indistinguishable from a check that cannot pass.
 _CRITICAL_ENDPOINTS: list[tuple[str, str, dict[str, str] | None]] = [
-    ("profile", "PROFILE_API", None),
+    ("profile", "PROFILE_API", {"expand_level": "4"}),
     ("dashboard", "DASHBOARD_API", None),
     ("applications", "APPLIED_JOBS_API", {"pageNo": "1"}),
     ("recommendations", "RECOMMENDED_JOBS_API", {"pageNo": "1"}),  # search alternative
     ("settings", "FORMATTED_SETTINGS_API", None),
 ]
 
+# Paths that only answer to POST. The verb is decided from the path rather than
+# added to _fetch_one's signature on purpose: every existing test mocks
+# _fetch_one(path, params), so widening the signature would silently break them
+# and force the real client into unit tests.
+_POST_ONLY_PATHS = frozenset({"/jobapi/v2/search/recom-jobs"})
+
 
 async def _fetch_one(path: str, params: dict[str, str] | None) -> Any:
-    """GET helper — isolated for easy mocking in tests."""
+    """Read helper -- isolated for easy mocking in tests.
+
+    Sends GET, except for the POST-only read endpoints above, which are
+    searches: they return data and change nothing.
+    """
     from naukri_server.interfaces import api_client
+    if path in _POST_ONLY_PATHS:
+        return await api_client.post(path, body=dict(params or {}))
     if params:
         return await api_client.get(path, params=params)
     return await api_client.get(path)
