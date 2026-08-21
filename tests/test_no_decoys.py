@@ -238,16 +238,64 @@ class TestTheTwoFitThresholdsAreTwoDecisions:
             "merely to decide what to show him"
         )
 
-    def test_the_display_tools_default_to_the_display_threshold(self):
+    def test_the_display_tools_resolve_the_display_threshold_at_call_time(self):
+        """They take `None` and resolve it from the config, so an edit to the
+        file takes effect with no restart. A literal default would be frozen at
+        import — which is the exact thing this whole change exists to escape.
+
+        The resolved value is still today's literal, so behaviour is unchanged
+        until he edits the file.
+        """
         import inspect
 
+        from naukri_server import policy
         from naukri_server.config import DISPLAY_MIN_FIT_SCORE
         from naukri_server.tools.auto_hunt import naukri_auto_hunt
         from naukri_server.tools.smart_apply import naukri_score_saved_jobs
 
         for fn in (naukri_auto_hunt, naukri_score_saved_jobs):
             assert inspect.signature(
-                fn).parameters["min_fit_score"].default == DISPLAY_MIN_FIT_SCORE, fn
+                fn).parameters["min_fit_score"].default is None, fn
+        assert policy.display_min_score() == DISPLAY_MIN_FIT_SCORE == 60
+
+    def test_the_resolved_display_threshold_follows_the_file(self, tmp_path, monkeypatch):
+        """CONTROL: if it did not move, `None` would just be a slower 60."""
+        import json
+
+        from naukri_server import policy
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 1,
+            "servers": {"naukri": {"display_min_score": 42}},
+        }), encoding="utf-8")
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        policy.invalidate()
+        try:
+            assert policy.display_min_score() == 42
+        finally:
+            policy.invalidate()
+
+    def test_a_nonsense_display_threshold_falls_back_rather_than_propagating(
+            self, tmp_path, monkeypatch):
+        """A malformed value must not reach the comparison. Read is SAFE;
+        validation is loud at WRITE."""
+        import json
+
+        from naukri_server import policy
+        from naukri_server.config import DISPLAY_MIN_FIT_SCORE
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 1,
+            "servers": {"naukri": {"display_min_score": "sixty"}},
+        }), encoding="utf-8")
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        policy.invalidate()
+        try:
+            assert policy.display_min_score() == DISPLAY_MIN_FIT_SCORE
+        finally:
+            policy.invalidate()
 
     def test_the_apply_tools_default_to_the_apply_threshold(self):
         import inspect

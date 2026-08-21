@@ -91,10 +91,13 @@ async def _task_daily_brief() -> dict:
 )
 async def _task_stale_check() -> dict:
     """Detect stale applications needing follow-up."""
+    from naukri_server import policy
     from naukri_server.config import STALE_THRESHOLD_DAYS, STALE_MIN_SCORE
     from naukri_server.services.application_service import get_stale_applications
     return await get_stale_applications(
-        days_threshold=STALE_THRESHOLD_DAYS, min_stale_score=STALE_MIN_SCORE,
+        days_threshold=policy.setting("staleness.days", STALE_THRESHOLD_DAYS),
+        min_stale_score=policy.setting("staleness.min_stale_score",
+                                       STALE_MIN_SCORE),
     )
 
 
@@ -106,9 +109,22 @@ async def _task_stale_check() -> dict:
     timeout_seconds=60,
 )
 async def _task_boost_profile() -> dict:
-    """Boost profile visibility by re-saving headline."""
+    """Boost profile visibility by re-saving headline.
+
+    `randomize` defaults to False — today's literal, pinned by
+    test_scheduler.py and test_profile_deep.py. The design proposed
+    flipping it to True; a default flip is a behaviour change and ships
+    in its own commit, never inside a mechanism change. He can flip it
+    himself now, which is the point of the file.
+    """
+    from naukri_server import policy
     from naukri_server.tools.profile_update import _boost_visibility
-    return await _boost_visibility(randomize=False)
+
+    if not policy.setting("boost_profile.enabled", True):
+        return {"status": "skipped",
+                "reason": "servers.naukri.boost_profile.enabled is false"}
+    return await _boost_visibility(
+        randomize=policy.setting("boost_profile.randomize", False))
 
 
 @scheduled_task(

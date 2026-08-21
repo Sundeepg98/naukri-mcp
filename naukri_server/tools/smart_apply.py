@@ -11,6 +11,7 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
+from naukri_server import policy as _policy
 from naukri_server.config import (
     APPLY_MIN_FIT_SCORE, BULK_FETCH_CONCURRENCY, DAILY_APPLY_QUOTA,
     DISPLAY_MIN_FIT_SCORE, MAX_BULK_JOBS,
@@ -456,7 +457,7 @@ async def naukri_assess_fit(
 
 @mcp.tool()
 async def naukri_score_saved_jobs(
-    min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
+    min_fit_score: Optional[int] = None,
     timeout_seconds: int = 120,
     ctx: Context | None = None,
 ) -> dict:
@@ -466,7 +467,8 @@ async def naukri_score_saved_jobs(
     by min_fit_score.
 
     Args:
-        min_fit_score: Only return jobs scoring at or above this (0-100)
+        min_fit_score: Only return jobs scoring at or above this (0-100).
+            Defaults to servers.naukri.display_min_score, which ships as 60.
         timeout_seconds: Timeout for the bulk operation
 
     Returns:
@@ -474,6 +476,8 @@ async def naukri_score_saved_jobs(
          scored_jobs: [{job_id, title, company, salary, location,
                         fit_score, fit_details}, ...]}
     """
+    if min_fit_score is None:
+        min_fit_score = _policy.display_min_score()
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
 

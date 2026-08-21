@@ -61,6 +61,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -112,8 +113,10 @@ __all__ = [
     "bind",
     "invalidate",
     "requires_approval_cycle",
+    "display_min_score",
     "scoring_policy",
     "server_settings",
+    "setting",
     "snapshot",
 ]
 
@@ -194,6 +197,42 @@ def server_settings() -> dict:
     from :func:`naukri_server.agent.load_agent_config` and from Python.
     """
     return snapshot().policy.server(SERVER_NAME)
+
+
+def setting(path: str, default):
+    """One naukri setting by dotted path, e.g. ``"daily_brief.sections.inbox"``.
+
+    The DEFAULT is passed by the caller and is today's literal, so a missing
+    file, a malformed file or a key nobody wrote all yield exactly today's
+    behaviour. The type of the default is enforced: a string where a number
+    belongs falls back rather than propagating into arithmetic.
+
+    Deliberately NOT usable for anything the agent's apply decision depends on
+    — those keys are not loadable at all (:data:`NOT_LOADABLE`) and this
+    function reads only what the loader produced, which never contains them.
+    """
+    node = server_settings()
+    for part in path.split("."):
+        if not isinstance(node, Mapping) or part not in node:
+            return default
+        node = node[part]
+    if node is None:
+        return default
+    if isinstance(default, bool):
+        return node if isinstance(node, bool) else default
+    if isinstance(default, int) and not isinstance(node, bool):
+        try:
+            return int(node)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, float):
+        try:
+            return float(node)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, str):
+        return node if isinstance(node, str) else default
+    return node
 
 
 def display_min_score() -> int:

@@ -434,6 +434,17 @@ async def _sync_applications(
     purged = 0
     status_changes = []
 
+    # RETENTION. This DELETES his application history on every sync, so
+    # LOWERING it is the irreversible direction — jobcore makes the key tier B
+    # with "up" free for exactly that reason. Read ONCE for the whole saga:
+    # step_purge filters and step_persist deletes, and the two must never
+    # disagree about the cutoff.
+    from naukri_server import policy as _policy
+    retention_days = _policy.setting("retention.auto_purge_days", AUTO_PURGE_DAYS)
+    retention_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=retention_days)
+    ).isoformat()
+
     async def step_merge():
         nonlocal stats
         stats = _merge_applications(local_apps, remote_jobs)
@@ -441,12 +452,12 @@ async def _sync_applications(
 
     async def step_purge():
         nonlocal local_apps, purged
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+        cutoff = retention_cutoff
         before_count = len(local_apps)
         local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
         purged = before_count - len(local_apps)
         if purged:
-            logger.info("Auto-purged %d applications older than %d days", purged, AUTO_PURGE_DAYS)
+            logger.info("Auto-purged %d applications older than %d days", purged, retention_days)
         return {"purged": purged}
 
     async def step_detect_changes():
@@ -466,7 +477,7 @@ async def _sync_applications(
         return {"status_changes_count": len(status_changes)}
 
     async def step_persist():
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=AUTO_PURGE_DAYS)).isoformat()
+        cutoff = retention_cutoff
         for app in local_apps:
             await upsert_application(app)
         if purged:

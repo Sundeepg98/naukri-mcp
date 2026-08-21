@@ -6,7 +6,8 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from naukri_server import mcp
-from naukri_server.config import logger, DISPLAY_MIN_FIT_SCORE
+from naukri_server import policy as _policy
+from naukri_server.config import logger, DISPLAY_MIN_FIT_SCORE  # noqa: F401
 from naukri_server.domain import safe_get
 from naukri_server.models import Job
 from naukri_server.scoring import parse_skills, score_job
@@ -21,7 +22,7 @@ from naukri_server.validation import validate_limit
 async def naukri_auto_hunt(
     keywords: str,
     location: Optional[str] = None,
-    min_fit_score: int = DISPLAY_MIN_FIT_SCORE,
+    min_fit_score: Optional[int] = None,
     limit: int = 20,
     freshness: Optional[int] = 7,
     work_mode: Optional[str] = None,
@@ -43,7 +44,11 @@ async def naukri_auto_hunt(
     Args:
         keywords: Job search keywords (e.g., "Python developer", "data engineer")
         location: City or region filter (optional)
-        min_fit_score: Minimum fit score 0-100 to include in results (default 60)
+        min_fit_score: Minimum fit score 0-100 to include in results.
+            Defaults to servers.naukri.display_min_score from the config
+            file, which ships as 60. This is a DISPLAY filter; what the
+            autonomous agent applies to is a different, higher threshold
+            that no config file can lower past its Python floor.
         limit: Max jobs to search and score (default 20)
         freshness: Only jobs posted in last N days (default 7)
         work_mode: "wfh" (remote), "hybrid", "wfo" (office) — optional
@@ -59,6 +64,8 @@ async def naukri_auto_hunt(
         - {status: "error", message}
     """
     limit = validate_limit(limit)
+    if min_fit_score is None:
+        min_fit_score = _policy.display_min_score()
     if not 0 <= min_fit_score <= 100:
         return {"status": "error", "message": "min_fit_score must be between 0 and 100", "error_code": "VALIDATION_ERROR"}
 

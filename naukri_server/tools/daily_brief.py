@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 
 from naukri_server import mcp
+from naukri_server import policy as _policy
 from naukri_server.config import logger, STALE_MIN_SCORE, STALE_THRESHOLD_DAYS
 from naukri_server.scoring import compute_fit_score, parse_skills
 # Section builders live in the service — re-exported under their legacy
@@ -85,22 +86,35 @@ async def naukri_daily_brief() -> dict:
     today = datetime.now(IST).strftime("%Y-%m-%d")
     errors = []
 
+    # Section sizes and the staleness thresholds come from the config
+    # file when he has set them; every default here is today's literal,
+    # so no file and a malformed file both behave exactly as before.
+    section = _policy.setting
+
     results = await asyncio.gather(
-        _fetch_inbox(limit=5, unread_only=True),          # 0
-        _fetch_notifications(limit=5),                     # 1
-        naukri_get_recommendations(limit=5),               # 2
-        _get_recruiter_activity(size=5),                   # 3
+        _fetch_inbox(limit=section("daily_brief.sections.inbox", 5),
+                     unread_only=True),                    # 0
+        _fetch_notifications(
+            limit=section("daily_brief.sections.notifications", 5)),  # 1
+        naukri_get_recommendations(
+            limit=section("daily_brief.sections.recommendations", 5)),  # 2
+        _get_recruiter_activity(
+            size=section("daily_brief.sections.recruiter", 5)),      # 3
         _get_activity_level(),                             # 4
         _list_applications(date_from=today),               # 5
         get_cached_dashboard(),                             # 6
-        _list_early_access_roles(limit=3),                 # 7
+        _list_early_access_roles(
+            limit=section("daily_brief.sections.early_access", 3)),   # 7
         _get_subscription_status(),                        # 8
         _list_reminders(include_past=True),                # 9
-        _get_stale_applications(days_threshold=STALE_THRESHOLD_DAYS,
-                                min_stale_score=STALE_MIN_SCORE),  # 10
+        _get_stale_applications(
+            days_threshold=section("staleness.days", STALE_THRESHOLD_DAYS),
+            min_stale_score=section("staleness.min_stale_score",
+                                    STALE_MIN_SCORE)),     # 10
         _get_alerts_list(),                                # 11
         _get_profile_completeness(),                       # 12
-        _list_saved_jobs(limit=1),                         # 13
+        _list_saved_jobs(
+            limit=section("daily_brief.sections.saved", 1)),          # 13
         _get_search_impressions(days=7),                   # 14
         _list_assessments(),                               # 15
         _match_quality(days=7),                              # 16
