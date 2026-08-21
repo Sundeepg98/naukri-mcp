@@ -63,6 +63,11 @@ kill_switch_state.json
 
 # Local SQLite database (per-machine state)
 naukri.db
+# ...and its WAL sidecars. get_db() sets journal_mode=WAL, so a running server
+# leaves naukri.db-wal / -shm beside it; naukri.db alone did not cover them and
+# they showed up untracked, one `git add -A` away from committing live DB state.
+naukri.db-wal
+naukri.db-shm
 
 # Agent config (local, may contain personal preferences)
 agent_config.json
