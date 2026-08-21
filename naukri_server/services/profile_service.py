@@ -195,11 +195,38 @@ async def _audit_profile() -> dict:
         # --- Pure computation (domain object) ---
         report = CompletionReport.from_profile(profile_result, completeness_pct)
 
-        # --- Emit ProfileScoreChanged if we have a completeness score ---
+        # --- Emit ProfileScoreChanged only when the score ACTUALLY changed ---
+        #
+        # Until 2026-08-21 this emitted on EVERY audit with old_score hardcoded
+        # to 0, so the event lied twice: it claimed a change that had not
+        # happened, and it claimed the score had risen from zero. Reading the
+        # profile is a read; `naukri_audit_profile` is its only caller and it
+        # banked a notification per call.
+        #
+        # The other three read-path emitters fixed in this pass took an
+        # `emit_events` opt-in, because each had a scheduled task whose JOB is
+        # to notify him. This one has no scheduled caller, so an opt-in flag
+        # would leave a parameter nothing ever sets - a decoy. Change detection
+        # is the fix that fits the event's own name: an audit that finds the
+        # same score emits nothing, and a real move emits exactly once, with a
+        # true old_score.
         try:
             from naukri_server.events import event_bus, ProfileScoreChanged
+            from naukri_server.database import last_event_value
+
             if report.completeness_pct is not None:
-                await event_bus.emit(ProfileScoreChanged(old_score=0, new_score=report.completeness_pct))
+                new_score = int(report.completeness_pct)
+                raw_previous = await last_event_value("ProfileScoreChanged", "new_score")
+                try:
+                    # None = never logged, or pruned by the retention sweep.
+                    # Treated as "no prior value": report once, from 0. Bounded
+                    # to one event per DB lifetime per retention window.
+                    old_score = 0 if raw_previous is None else int(float(raw_previous))
+                except (TypeError, ValueError):
+                    old_score = 0
+                if new_score != old_score:
+                    await event_bus.emit(ProfileScoreChanged(
+                        old_score=old_score, new_score=new_score))
         except Exception:
             pass
 

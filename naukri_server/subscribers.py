@@ -89,9 +89,34 @@ async def _on_status_change(event: ApplicationStatusChanged):
 
 @subscriber(ApplicationStale)
 async def _on_application_stale(event: ApplicationStale):
-    """Store notification + trigger follow-up workflow for high-priority stale apps."""
+    """Store notification + trigger follow-up workflow - at most one live one per job.
+
+    An application stays stale until he acts on it, and the 6-hourly stale_check
+    re-emits every stale application on every run, so an unconditional store
+    banks a duplicate per application per run. That is how 17 applications
+    became 85 notifications.
+
+    The early return also suppresses the stale_follow_up_workflow below, which
+    is deliberate: re-drafting the same follow-up and banking a second
+    StaleFollowUp notification is the same duplication one layer down.
+
+    Same predicate and same reasoning as _on_reminder_due - see its docstring
+    for why an existing-undelivered-row check beats a last_notified_at column
+    plus an interval for a condition that never clears on its own.
+    """
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        # Fail OPEN: the notification is the payload, the dedupe is an
+        # optimisation over it. A broken predicate degrades to the old noisy
+        # behaviour, which is recoverable; dropping his follow-ups is not.
+        try:
+            if event.job_id and await has_pending_notification("ApplicationStale", event.job_id):
+                logger.debug("ApplicationStale for %s already pending - suppressed", event.job_id)
+                return
+        except Exception as e:
+            logger.warning("ApplicationStale dedupe check failed, notifying anyway: %s", e)
+
         await store_notification({
             "event_type": "ApplicationStale",
             "title": f"Stale: {event.company or 'Company'} - needs follow-up",
@@ -246,9 +271,23 @@ async def _on_profile_score_changed(event: ProfileScoreChanged):
 
 @subscriber(SavedJobExpiring)
 async def _on_saved_job_expiring(event: SavedJobExpiring):
-    """Store high-priority notification when a saved job is about to expire."""
+    """Store high-priority notification when a saved job is about to expire.
+
+    Deduped like _on_reminder_due and _on_application_stale: a saved job stays
+    past 27 days until he applies to it or removes it, so every producer run
+    re-emits it and an unconditional store banks a duplicate each time.
+    """
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        # Fail OPEN - see _on_reminder_due.
+        try:
+            if event.job_id and await has_pending_notification("SavedJobExpiring", event.job_id):
+                logger.debug("SavedJobExpiring for %s already pending - suppressed", event.job_id)
+                return
+        except Exception as e:
+            logger.warning("SavedJobExpiring dedupe check failed, notifying anyway: %s", e)
+
         await store_notification({
             "event_type": "SavedJobExpiring",
             "title": f"Saved job expiring: {event.title or 'job'} at {event.company or 'company'}",

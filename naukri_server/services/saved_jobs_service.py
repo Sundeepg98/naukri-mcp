@@ -24,8 +24,21 @@ __all__ = [
 ]
 
 
-async def list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
-    """List saved/bookmarked jobs from local tracking."""
+async def list_saved_jobs(limit: int = 50, page: int = 1, emit_events: bool = False) -> dict:
+    """List saved/bookmarked jobs from local tracking.
+
+    Args:
+        emit_events: Emit a SavedJobExpiring event per saved job 27+ days old.
+            OFF by default because this is a READ, and a read must not mutate.
+
+    Until 2026-08-21 this emitted unconditionally, so `naukri_list_saved_jobs`
+    and `naukri_daily_brief` both minted high-priority notifications just by
+    listing. Only `scheduler_tasks._task_sync_saved_jobs` opts in.
+
+    The emission walks the CURRENT PAGE, not the whole table, so the opt-in
+    caller must ask for a page large enough to cover the saved set (the daily
+    brief asks for 1, which is why its bursts were shorter than the scheduler's).
+    """
     from naukri_server.database import list_saved_jobs as db_list_saved
 
     limit = validate_limit(limit)
@@ -34,23 +47,24 @@ async def list_saved_jobs(limit: int = 50, page: int = 1) -> dict:
 
     saved, total = await db_list_saved(limit=limit, offset=offset)
 
-    # Emit SavedJobExpiring for jobs saved 27+ days ago
-    from naukri_server.events import event_bus, SavedJobExpiring
-    for sj in saved:
-        saved_at = safe_get(sj, "saved_at", default="")
-        if saved_at:
-            try:
-                saved_dt = datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
-                days_old = (datetime.now(timezone.utc) - saved_dt).days
-                if days_old >= 27:
-                    await event_bus.emit(SavedJobExpiring(
-                        job_id=safe_get(sj, "job_id", default=""),
-                        title=safe_get(sj, "title", default=""),
-                        company=safe_get(sj, "company", default=""),
-                        expires_in_days=max(0, 30 - days_old),
-                    ))
-            except Exception:
-                pass
+    # Emit SavedJobExpiring for jobs saved 27+ days ago - opt-in only
+    if emit_events:
+        from naukri_server.events import event_bus, SavedJobExpiring
+        for sj in saved:
+            saved_at = safe_get(sj, "saved_at", default="")
+            if saved_at:
+                try:
+                    saved_dt = datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
+                    days_old = (datetime.now(timezone.utc) - saved_dt).days
+                    if days_old >= 27:
+                        await event_bus.emit(SavedJobExpiring(
+                            job_id=safe_get(sj, "job_id", default=""),
+                            title=safe_get(sj, "title", default=""),
+                            company=safe_get(sj, "company", default=""),
+                            expires_in_days=max(0, 30 - days_old),
+                        ))
+                except Exception:
+                    pass
 
     return {
         "status": "success",

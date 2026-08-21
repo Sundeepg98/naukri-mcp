@@ -204,8 +204,15 @@ async def get_recruiter_activity(
                 act, "companyName", "company", default="",
                 field_name="company", warn=True, context="recruiter_activity",
             ),
+            # "activity" FIRST: that is the key the API actually returns
+            # (probing/analytics-report.md L406, sampled response). Neither
+            # "activityType" nor "action" exists on the payload, so until
+            # 2026-08-21 this field was permanently "" on every activity of
+            # every response - the tool reported a blank action for all 95 of
+            # his recorded recruiter actions, including 76 CONTACTED and 4
+            # DOWNLOADED. The old keys are kept as trailing fallbacks.
             "action": safe_get(
-                act, "activityType", "action", default="",
+                act, "activity", "activityType", "action", default="",
                 field_name="activity_type", warn=True, context="recruiter_activity",
             ),
             "date": safe_get(
@@ -235,19 +242,25 @@ async def get_recruiter_activity(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-    # Emit RecruiterEngaged for CONTACTED or DOWNLOADED actions (once per batch)
-    try:
-        from naukri_server.events import event_bus, RecruiterEngaged
-        for act in activities:
-            if act.get("action") in ("CONTACTED", "DOWNLOADED"):
-                await event_bus.emit(RecruiterEngaged(
-                    job_id=act.get("meta_job_id", ""),
-                    company=act.get("company", ""),
-                    title="",
-                ))
-                break  # Emit once per batch, not per activity
-    except Exception:
-        pass
+    # NO EVENT IS EMITTED HERE. This is a read - `naukri_recruiter_activity`
+    # and `naukri_daily_brief` are its only callers - and until 2026-08-21 it
+    # emitted a RecruiterEngaged per call, which banks a high-priority
+    # notification. It was doubly wrong:
+    #
+    #   1. read-path emission, the defect class fixed across this pass;
+    #   2. structurally unreachable - it tested act["action"], which was parsed
+    #      from keys the API does not return (see the "activity" fix above), so
+    #      it was ALWAYS "" and the CONTACTED/DOWNLOADED branch could never be
+    #      taken. Zero RecruiterEngaged rows exist in event_log despite 76
+    #      CONTACTED and 4 DOWNLOADED activities on the account. Fixing the key
+    #      without removing this would have LIT UP a storm, not stopped one.
+    #
+    # It also emitted at most once per batch (`break` on the first match), so
+    # even when reachable it named one arbitrary recruiter and dropped the rest.
+    # RecruiterEngaged still has a producer: tools/inbox.py::_mark_interested,
+    # which is a genuine write (it POSTs to the mark-interested endpoint).
+    # A faithful "a recruiter contacted you" notifier belongs in a scheduled
+    # task alongside stale_check; that is a feature, and it was not built here.
 
     total = success.get("count", len(activities))
     has_more = (page * size) < total

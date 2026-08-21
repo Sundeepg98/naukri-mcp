@@ -349,8 +349,28 @@ async def get_stale_applications(
     min_stale_score: int = STALE_MIN_SCORE,
     limit: int = 50,
     page: int = 1,
+    emit_events: bool = False,
 ) -> dict:
-    """Detect stale job applications that need follow-up or should be abandoned."""
+    """Detect stale job applications that need follow-up or should be abandoned.
+
+    Args:
+        emit_events: Emit an ApplicationStale event per high-priority stale
+            application. OFF by default because this is a READ, and a read must
+            not mutate.
+
+    Until 2026-08-21 this function emitted unconditionally, which made every
+    caller a writer. Four of the five callers are reads -
+    ``naukri_stale_applications``, ``naukri_daily_brief``,
+    ``application_follow_up`` (naukri_follow_up_priority) and the HTTP
+    dashboard's /api/stale - and each ApplicationStale banks a notification.
+    Measured on his live DB: 85 notifications over 17 distinct applications,
+    in five identical bursts of 17. Four of those bursts sat on the 6h
+    stale_check cadence; the fifth (2026-08-21T15:07) did not, which is a read
+    caught in the act.
+
+    Only ``scheduler_tasks._task_stale_check`` opts in - that task exists to
+    notify him, and tests/test_read_path_purity.py pins it as the sole opt-in.
+    """
     from naukri_server.database import get_stale_applications_raw, list_applications as db_list
 
     apps = await get_stale_applications_raw(days_threshold)
@@ -386,24 +406,34 @@ async def get_stale_applications(
 
     stale_apps.sort(key=lambda x: x["follow_up_priority"], reverse=True)
 
-    # Emit events for high-priority stale applications
-    from naukri_server.events import event_bus, ApplicationStale
-    for sa in stale_apps:
-        if sa.get("follow_up_priority", 0) >= 60:
-            # Compute days_since_applied from the applied_date string (YYYY-MM-DD)
-            _days = 0
-            try:
-                _applied = sa.get("applied_date", "")
-                if _applied:
-                    _days = (datetime.now(timezone.utc) - datetime.fromisoformat(_applied)).days
-            except (ValueError, TypeError):
-                pass
-            await event_bus.emit(ApplicationStale(
-                job_id=sa.get("job_id", ""),
-                company=sa.get("company", ""),
-                days_since_applied=_days,
-                follow_up_priority=sa.get("follow_up_priority", 0),
-            ))
+    # Emit events for high-priority stale applications - opt-in only, see docstring
+    if emit_events:
+        from naukri_server.events import event_bus, ApplicationStale
+        for sa in stale_apps:
+            if sa.get("follow_up_priority", 0) >= 60:
+                # Compute days_since_applied from the applied_date string
+                # (YYYY-MM-DD). tzinfo MUST be attached: applied_date is a bare
+                # date, fromisoformat returns a NAIVE datetime, and subtracting
+                # that from an aware utcnow raises TypeError - which the except
+                # below swallowed, so this field was 0 on every event ever
+                # emitted. All 85 ApplicationStale rows in his event_log carry
+                # "days_since_applied": "0" for applications months old.
+                _days = 0
+                try:
+                    _applied = sa.get("applied_date", "")
+                    if _applied:
+                        _applied_dt = datetime.fromisoformat(_applied)
+                        if _applied_dt.tzinfo is None:
+                            _applied_dt = _applied_dt.replace(tzinfo=timezone.utc)
+                        _days = (datetime.now(timezone.utc) - _applied_dt).days
+                except (ValueError, TypeError):
+                    pass
+                await event_bus.emit(ApplicationStale(
+                    job_id=sa.get("job_id", ""),
+                    company=sa.get("company", ""),
+                    days_since_applied=_days,
+                    follow_up_priority=sa.get("follow_up_priority", 0),
+                ))
 
     pagination, page_items = paginate(stale_apps, page, limit)
 

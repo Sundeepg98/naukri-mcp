@@ -103,18 +103,21 @@ def test_subscriber_count_unchanged_36():
 
 
 def test_scheduled_task_count_unchanged_9():
-    """After importing scheduler_tasks.py, registry should have 10 production scheduled tasks.
+    """After importing scheduler_tasks.py, registry should have 11 production scheduled tasks.
 
     Count was 9; bumped to 10 when the self-healing pipeline was wired and the
     `t2_verify_pending` task was added — it drives the T2 snapshot+revert
-    verification (without it a bad T2 fix would sit pending forever).
+    verification (without it a bad T2 fix would sit pending forever); bumped to
+    11 on 2026-08-21 when `retention_sweep` was added — database.
+    cleanup_old_records() had been written and then called from nowhere, so the
+    90-day retention on event_log / scheduled_runs / agent history never ran.
     """
     import naukri_server.scheduler_tasks  # triggers decorators
     from naukri_server.framework.registry import registry
     # Filter to tasks defined in scheduler_tasks (test fixtures may register elsewhere).
     prod_tasks = [it for it in registry.by_kind("scheduled_task")
                   if it.fn.__module__ == "naukri_server.scheduler_tasks"]
-    assert len(prod_tasks) == 10
+    assert len(prod_tasks) == 11
 
 
 def test_no_consolidated_dispatchers_use_registry():

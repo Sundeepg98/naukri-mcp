@@ -643,6 +643,44 @@ async def log_event(event_type: str, timestamp: str, data: Optional[str] = None,
         await db.close()
 
 
+async def last_event_value(event_type: str, key: str) -> Optional[str]:
+    """The `key` field of the most recently logged event of `event_type`, else None.
+
+    Used by change-detecting emitters: an event named `...Changed` must not fire
+    when nothing changed, and the only durable record of what it last reported
+    is the row EventBus.emit wrote to event_log. Values come back as STRINGS -
+    emit() serialises with ``{k: str(v) for ...}`` - so the caller parses.
+
+    Ordered by `id`, not `timestamp`: id is the autoincrement insert order and
+    is immune to clock skew and to two events sharing a timestamp string.
+
+    Returns None when the type has never been logged, when the row has no such
+    key, or when `data` will not parse. All three mean "no prior value" and the
+    caller should treat them alike. Note that `cleanup_old_records` prunes
+    event_log at the retention horizon, so a long-idle detector re-reports once
+    after the prune - bounded, and self-correcting on the next call.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT data FROM event_log WHERE event_type = ? ORDER BY id DESC LIMIT 1",
+            (event_type,),
+        )
+        row = await cursor.fetchone()
+        if not row or not row["data"]:
+            return None
+        try:
+            payload = json.loads(row["data"])
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get(key)
+        return None if value is None else str(value)
+    finally:
+        await db.close()
+
+
 async def get_event_stats(hours: int = 24) -> dict:
     """Get event counts by type for the last N hours."""
     db = await get_db()
@@ -1198,7 +1236,20 @@ class AgentRepository:
 # ---------------------------------------------------------------------------
 
 async def cleanup_old_records(days: int = 90) -> dict:
-    """Delete old event_log, scheduled_runs, and agent data beyond retention period."""
+    """Delete rows past the retention horizon from the four append-only tables.
+
+    Covers event_log, scheduled_runs, agent_runs AND agent_decisions - the
+    last was in the code but not in this docstring. Called by
+    `scheduler_tasks._task_retention_sweep` (daily); before 2026-08-21 it had
+    no caller at all.
+
+    The cutoff compares an ISO8601-with-offset column against sqlite's
+    `datetime('now', ?)`, which renders `YYYY-MM-DD HH:MM:SS`. The two agree on
+    the date part, so the comparison is correct to the day; within the boundary
+    day itself 'T' sorts above ' ', so a row from earlier on the cutoff day
+    survives one extra day. That errs toward KEEPING forensic rows, which is
+    the safe direction, and is why it is documented rather than patched.
+    """
     db = await get_db()
     try:
         cutoff = f"-{days} days"

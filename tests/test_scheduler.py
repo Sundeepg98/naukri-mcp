@@ -258,19 +258,22 @@ class TestTaskDefinitions:
     """Tests for scheduler_tasks.py — task registration and definitions."""
 
     def test_register_all_registers_9_tasks(self):
-        """register_all puts 10 tasks into the scheduler.
+        """register_all puts 11 tasks into the scheduler.
 
         History: 8 original + agent_cycle = 9, then + t2_verify_pending = 10
         when the self-healing pipeline was wired (the verify task drives the
-        T2 snapshot+revert safety net).
+        T2 snapshot+revert safety net), then + retention_sweep = 11 on
+        2026-08-21 (cleanup_old_records existed but had no caller, so the
+        retention horizon was never applied to any table).
         """
         from naukri_server.scheduler_tasks import register_all
 
         sched = TaskScheduler()
         register_all(sched)
 
-        assert len(sched._tasks) == 10
+        assert len(sched._tasks) == 11
         assert "t2_verify_pending" in sched._tasks
+        assert "retention_sweep" in sched._tasks
 
     def test_task_definitions_have_valid_intervals(self):
         """All task definitions should have interval_seconds > 0."""
@@ -324,7 +327,12 @@ class TestTaskDefinitions:
                    return_value={"stale_count": 3}) as mock_stale:
             result = await _task_stale_check()
 
-        mock_stale.assert_awaited_once_with(days_threshold=14, min_stale_score=40)
+        # emit_events=True since 2026-08-21: this scheduled task is the ONLY
+        # caller allowed to mint ApplicationStale notifications. The four read
+        # callers (the MCP tool, the daily brief, follow-up priority, the HTTP
+        # dashboard) all leave it False. See tests/test_read_path_purity.py.
+        mock_stale.assert_awaited_once_with(days_threshold=14, min_stale_score=40,
+                                            emit_events=True)
         assert result == {"stale_count": 3}
 
     async def test_task_boost_profile_calls_service(self):

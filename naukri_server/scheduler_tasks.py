@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 #   api_discovery     - probes many endpoints; pacing matters with 7 captcha
 #                       blocks on the account record
 #   daily_brief       - hour-gated (08:00 IST), not interval-gated
+#   retention_sweep   - calls cleanup_old_records(), which DELETES rows past
+#                       the retention horizon from event_log / scheduled_runs /
+#                       agent_runs / agent_decisions
 
 # Interval constants (seconds)
 INTERVAL_1H = 3600
@@ -64,9 +67,31 @@ async def _task_sync_applications() -> dict:
     catch_up=True,  # read + upsert only; no purge/delete step
 )
 async def _task_sync_saved_jobs() -> dict:
-    """Sync saved jobs from Naukri API."""
+    """Sync saved jobs from Naukri API, then sweep for near-expiry ones.
+
+    The expiry sweep is the ONLY caller that opts into SavedJobExpiring
+    emission; naukri_list_saved_jobs and the daily brief are reads. It lives
+    here rather than in its own task because a saved job's age is only worth
+    re-checking after the set has been refreshed from Naukri.
+
+    The sweep reads ONE page, so it covers at most `validate_limit`'s ceiling
+    of 50 saved jobs (he has 2). A larger saved set would need pagination here.
+    Failure is non-fatal: the sync result is the task's real payload.
+    """
     from naukri_server.tools.sync import _sync_saved_jobs
-    return await _sync_saved_jobs()
+    result = await _sync_saved_jobs()
+
+    if not isinstance(result, dict):
+        return result
+    try:
+        from naukri_server.services.saved_jobs_service import list_saved_jobs
+        swept = await list_saved_jobs(limit=50, emit_events=True)
+        result["expiry_checked"] = swept.get("count", 0)
+    except Exception as e:
+        logger.warning("Saved-job expiry sweep failed (non-fatal): %s", e)
+        result["expiry_checked"] = 0
+
+    return result
 
 
 @scheduled_task(
@@ -90,7 +115,13 @@ async def _task_daily_brief() -> dict:
     catch_up=True,  # pure read over the local DB
 )
 async def _task_stale_check() -> dict:
-    """Detect stale applications needing follow-up."""
+    """Detect stale applications needing follow-up.
+
+    The ONLY caller that opts into ApplicationStale emission - this task exists
+    to notify him, where naukri_stale_applications, the daily brief,
+    naukri_follow_up_priority and the HTTP dashboard are all reads. See
+    application_service.get_stale_applications.
+    """
     from naukri_server import policy
     from naukri_server.config import STALE_THRESHOLD_DAYS, STALE_MIN_SCORE
     from naukri_server.services.application_service import get_stale_applications
@@ -98,6 +129,7 @@ async def _task_stale_check() -> dict:
         days_threshold=policy.setting("staleness.days", STALE_THRESHOLD_DAYS),
         min_stale_score=policy.setting("staleness.min_stale_score",
                                        STALE_MIN_SCORE),
+        emit_events=True,
     )
 
 
@@ -159,6 +191,43 @@ async def _task_notification_digest() -> dict:
     """Fetch notification summary for digest."""
     from naukri_server.tools.notifications import _get_unified_notify
     return await _get_unified_notify()
+
+
+@scheduled_task(
+    name="retention_sweep",
+    interval_seconds=INTERVAL_DAILY,
+    description="Prune event_log, scheduled_runs and agent history past retention",
+    timeout_seconds=120,
+    # catch_up deliberately NOT granted: this task DELETES local rows, which
+    # the policy above reserves for tasks that do not. It runs on the daily
+    # interval like any other write task.
+)
+async def _task_retention_sweep() -> dict:
+    """Apply the retention horizon to the append-only local tables.
+
+    `database.cleanup_old_records` was written, tested and then never called
+    from anywhere - a retention policy that never runs, which is worse than
+    none because it reads as protection that does not exist. This task is the
+    caller.
+
+    It is wired rather than deleted because the growth is measured, not
+    hypothetical: event_log held 1,789 rows across ~34 hours of uptime
+    (2026-08-20T06:56 to 2026-08-21T16:07), and the hourly reminder check alone
+    contributes ~1,200 rows/day even after the read-path fixes, because those
+    fixes stopped the NOTIFICATION storm, not the event record. Left unpruned
+    that is roughly 450k rows/year in a database that is 1.3 MB today.
+
+    event_log is the forensic record, so the horizon is generous and comes from
+    the config file: `retention.event_log_days`, default 90.
+    """
+    from naukri_server import policy
+    from naukri_server.database import cleanup_old_records
+    days = policy.setting("retention.event_log_days", 90)
+    deleted = await cleanup_old_records(days=days)
+    total = sum(v for v in deleted.values() if isinstance(v, int))
+    if total:
+        logger.info("Retention sweep (%dd): deleted %d rows %s", days, total, deleted)
+    return {"status": "completed", "retention_days": days, "deleted": deleted}
 
 
 @scheduled_task(
