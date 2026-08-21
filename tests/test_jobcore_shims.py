@@ -9,9 +9,25 @@ changing what this server scores. They fail if:
 All PURE: no network, no browser, no file I/O.
 """
 
+import ast
 import importlib
 
 import pytest
+
+
+def _imported_names(node) -> list[str]:
+    """Every module-ish name an AST node imports.
+
+    ``ast.Import`` and ``ast.ImportFrom`` carry ``names`` as ``ast.alias``
+    objects with a ``.name``. **``ast.Global`` and ``ast.Nonlocal`` also carry
+    ``names``, and theirs are plain strings** — so the obvious
+    ``[a.name for a in getattr(node, "names", [])]`` raises
+    ``AttributeError: 'str' object has no attribute 'name'`` the moment any
+    scanned module contains a ``global`` statement. The guard below exists to
+    prove jobcore never imports naukri; a guard that crashes on an unrelated
+    keyword cannot check anything at all.
+    """
+    return [a.name for a in getattr(node, "names", []) if isinstance(a, ast.alias)]
 
 
 # ---------------------------------------------------------------------------
@@ -89,13 +105,40 @@ class TestActuallyWiredToJobcore:
         import jobcore
 
         src = __import__("pathlib").Path(jobcore.__file__).parent
+        scanned = 0
         for path in src.glob("*.py"):
-            tree = __import__("ast").parse(path.read_text(encoding="utf-8"))
-            for node in __import__("ast").walk(tree):
+            scanned += 1
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
                 mod = getattr(node, "module", None) or ""
-                names = [a.name for a in getattr(node, "names", [])]
+                names = _imported_names(node)
                 assert not mod.startswith("naukri"), f"{path.name}: {mod}"
                 assert not any(n.startswith("naukri") for n in names), path.name
+        assert scanned >= 5, f"scanned only {scanned} jobcore modules — did the glob break?"
+
+    def test_the_guard_survives_a_global_statement(self):
+        """CONTROL for the line above. Shown failing before it was trusted.
+
+        ``[a.name for a in node.names]`` crashes on ``ast.Global``/``Nonlocal``
+        (plain strings, not aliases). jobcore's config loader gained a
+        ``global`` on 2026-08-21 and turned the import guard red with an
+        ``AttributeError`` — a guard one keyword away from being unable to
+        check the thing it exists to check.
+        """
+        for source in ("global _x", "def f():\n    x = 1\n    def g():\n        nonlocal x\n"):
+            for node in ast.walk(ast.parse(source)):
+                assert _imported_names(node) == []
+
+    def test_the_guard_still_sees_a_real_import(self):
+        """And the fix must not make the guard blind. Both directions pinned."""
+        tree = ast.parse("import naukri_server.config\nfrom naukri_server import mcp")
+        found = [n for node in ast.walk(tree) for n in _imported_names(node)]
+        found += [
+            getattr(node, "module", "") or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        ]
+        assert any(n.startswith("naukri") for n in found)
 
 
 # ---------------------------------------------------------------------------
