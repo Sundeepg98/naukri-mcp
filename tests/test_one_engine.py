@@ -307,6 +307,106 @@ class TestNoToolConstructsFitScoreDirectly:
         assert re.search(r"\bFitScore\.compute\s*\(", "    fit = FitScore.compute(")
 
 
+class TestOneCallOnePolicy:
+    """H4. "The snapshot is taken once per tool call" was asserted by the design
+    and not provided by it: the read sat inside `_engine()`, which the bonus
+    helpers call PER JOB. So the real granularity was per-scoring-call, and on
+    this server — one process running HTTP + stdio + nine scheduled tasks on one
+    event loop — every `await` inside a ranking loop is a point where a
+    concurrent write can swap the weights between two rows of one result.
+    """
+
+    def test_a_change_landing_mid_call_is_not_seen_by_that_call(
+            self, tmp_path, monkeypatch):
+        import json
+
+        import naukri_server.policy as naukri_policy
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 1,
+            "scoring": {"weights": {"skills": 0.7, "experience": 0.3}},
+        }), encoding="utf-8")
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        naukri_policy.invalidate()
+
+        with naukri_policy.bind():
+            before = naukri_policy.scoring_policy().weights.skills
+            cfg.write_text(json.dumps({
+                "config_version": 1, "revision": 2,
+                "scoring": {"weights": {"skills": 0.2, "experience": 0.8}},
+            }), encoding="utf-8")
+            naukri_policy.invalidate()          # even an explicit reload
+            during = naukri_policy.scoring_policy().weights.skills
+
+        after = naukri_policy.scoring_policy().weights.skills
+        naukri_policy.invalidate()
+
+        assert before == during == 0.7, (before, during)
+        assert after == 0.2, "the NEXT call must see the change"
+
+    @pytest.mark.asyncio
+    async def test_every_tool_binds_because_handle_tool_action_does(
+            self, tmp_path, monkeypatch):
+        """Bound at the one seam every tool passes through, rather than per tool
+        — a decorator someone must remember to add is a guard with a hole."""
+        import json
+
+        import naukri_server.policy as naukri_policy
+        from naukri_server.error_handler import handle_tool_action
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 1,
+            "scoring": {"weights": {"skills": 0.7, "experience": 0.3}},
+        }), encoding="utf-8")
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        naukri_policy.invalidate()
+
+        seen = []
+
+        async def handler():
+            seen.append(naukri_policy.scoring_policy().weights.skills)
+            cfg.write_text(json.dumps({
+                "config_version": 1, "revision": 2,
+                "scoring": {"weights": {"skills": 0.2, "experience": 0.8}},
+            }), encoding="utf-8")
+            naukri_policy.invalidate()
+            seen.append(naukri_policy.scoring_policy().weights.skills)
+            return {"status": "success"}
+
+        await handle_tool_action(handler, "test.bind")
+        naukri_policy.invalidate()
+
+        assert seen == [0.7, 0.7], seen
+
+    def test_the_binding_check_CAN_fail(self, tmp_path, monkeypatch):
+        """CONTROL. Unbound, the same sequence DOES see the change — which is
+        the bug, and which proves the two tests above measure the binding."""
+        import json
+
+        import naukri_server.policy as naukri_policy
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 1,
+            "scoring": {"weights": {"skills": 0.7, "experience": 0.3}},
+        }), encoding="utf-8")
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        naukri_policy.invalidate()
+
+        before = naukri_policy.scoring_policy().weights.skills
+        cfg.write_text(json.dumps({
+            "config_version": 1, "revision": 2,
+            "scoring": {"weights": {"skills": 0.2, "experience": 0.8}},
+        }), encoding="utf-8")
+        naukri_policy.invalidate()
+        after = naukri_policy.scoring_policy().weights.skills
+        naukri_policy.invalidate()
+
+        assert before == 0.7 and after == 0.2
+
+
 class TestThePolicyIsCarriedOnTheResult:
     """A score whose policy you cannot recover is not explainable."""
 

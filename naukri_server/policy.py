@@ -26,11 +26,12 @@ every canonical skill into ``candidate.skills`` drives ``|matched|/|job_skills|`
 to 100 for every job in existence, which drives this server's agent.
 
 So those keys are **tier C: not loadable**, and this module never asks for them.
-:func:`agent_settings` reads ``agent_config.json`` and Python, and deliberately
-does not consult the config file at all — the file may DISPLAY what the agent is
-set to (:func:`report` shows it), it may not decide it. jobcore refuses them on
-its side too; two independent refusals, because the file is the surface a text
-editor reaches and a write-path guard alone is not a guard.
+``naukri_server.agent.load_agent_config`` reads ``agent_config.json`` and Python
+and deliberately does not consult the config file at all — the file may DISPLAY
+what the agent is set to (:func:`report` shows it), it may not decide it.
+jobcore refuses them on its side too; two independent refusals, because the file
+is the surface a text editor reaches and a write-path guard alone is not a
+guard.
 
 The two levers that CANNOT be tier C — ``candidate.skills`` and ``scoring``,
 which are the feature he asked for by name — are bounded instead: jobcore caps
@@ -59,16 +60,16 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from jobcore import config as _jobcore_config
 from jobcore.config import Loaded, MIN_AGENT_FIT_FLOOR
 from jobcore.policy import (
     DEFAULT_POLICY,
     CandidatePolicy,
-    Policy,
     ScoringPolicy,
     requires_approval_cycle,
 )
@@ -80,6 +81,14 @@ SERVER_NAME = "naukri"
 #: Sections `naukri_set_config` may write. `servers.uplers` and friends are
 #: refused by name — no server widens a sibling's section.
 WRITABLE_SECTIONS = ("candidate", "scoring", f"servers.{SERVER_NAME}")
+
+#: The document's own envelope. jobcore's `default_document()` writes all four,
+#: and its unknown-key census then reports them as "keys nothing reads" — so
+#: EVERY legitimate file, including the one jobcore generates itself, carries a
+#: spurious decoy warning. Filtered here rather than surfaced, because a warning
+#: that fires on correct input trains people to ignore warnings. The real fix is
+#: one line upstream in jobcore; reported, not reached into from this repo.
+ENVELOPE_KEYS = frozenset({"config_version", "revision", "updated_at", "updated_by"})
 
 #: Keys under this server's section that the FILE does not decide, whatever it
 #: contains. Listed here as well as in jobcore's schema so a reader of this
@@ -207,6 +216,38 @@ def policy_stamp() -> dict:
     return {"policy_rev": snap.policy_rev, "policy_hash": snap.policy_hash}
 
 
+#: The naukri checkout root — the anchor config paths are displayed against.
+_REPO_ROOT = _START.parent.parent
+
+
+def display_path(raw: Optional[str]) -> Optional[str]:
+    """A path a human can act on, that is not an absolute local path.
+
+    `utils.scrub_result` runs over every tool result and reduces anything still
+    absolute to its BASENAME — deliberately, after a census found this machine's
+    layout inside tool output. That guarantee must not be weakened, but it turns
+    every entry of `searched` into the identical string "jobhunt.json", which is
+    worse than saying nothing.
+
+    So paths are rendered relative to the checkout, or to home as ``~/…``. Both
+    forms survive the scrubber (it matches drive-letter absolutes only), both
+    stay distinguishable, and neither publishes the machine's layout.
+    """
+    if not raw:
+        return raw
+    p = Path(raw)
+    try:
+        rel = os.path.relpath(p, _REPO_ROOT)
+        if rel.count("..") <= 4:
+            return rel.replace(os.sep, "/")
+    except (ValueError, OSError):
+        pass
+    try:
+        return "~/" + p.relative_to(Path.home()).as_posix()
+    except (ValueError, OSError):
+        return p.name
+
+
 def report(section: Optional[str] = None) -> dict:
     """The payload ``naukri_config()`` returns: effective values + provenance.
 
@@ -215,6 +256,17 @@ def report(section: Optional[str] = None) -> dict:
     """
     snap = snapshot()
     out = snap.report(SERVER_NAME)
+    out["unknown_keys"] = [k for k in out.get("unknown_keys", ())
+                           if k not in ENVELOPE_KEYS]
+    out["source"] = display_path(out.get("source"))
+    out["searched"] = [display_path(s) for s in out.get("searched", ())]
+    if out.get("source") is None:
+        out["config_status"] = (
+            "no file found; built-in defaults in use. searched: "
+            + (", ".join(out["searched"]) if out["searched"] else "(nothing)")
+        )
+    else:
+        out["config_status"] = f"loaded from {out['source']}"
     out["server_name"] = SERVER_NAME
     out["writable_sections"] = list(WRITABLE_SECTIONS)
     out["not_loadable_here"] = [f"servers.{SERVER_NAME}.{k}" for k in NOT_LOADABLE]

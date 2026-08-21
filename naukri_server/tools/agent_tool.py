@@ -13,6 +13,29 @@ from naukri_server.error_handler import handle_tool_action
 logger = logging.getLogger(__name__)
 
 
+def _deep_merge(base: dict, patch: dict) -> dict:
+    """Dicts MERGE, everything else REPLACES.
+
+    jobcore's loader uses the identical rule for the config file; this is the
+    same decision applied to agent_config.json, which is a separate file on
+    purpose — the autonomous-apply block is not loadable from the shared config
+    at any tier, so it needs its own merge rather than borrowing jobcore's.
+    """
+    out = dict(base)
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _min_agent_fit_floor() -> int:
+    from naukri_server.agent import _min_agent_fit_floor as floor
+
+    return floor()
+
+
 async def _agent_status() -> dict:
     """Get agent configuration and recent run summary."""
     from naukri_server.agent import load_agent_config
@@ -56,12 +79,22 @@ async def _agent_update_config(updates: str) -> dict:
     except json.JSONDecodeError as e:
         return {"status": "error", "message": f"Invalid JSON: {e}", "error_code": "VALIDATION_ERROR"}
 
+    if not isinstance(patch, dict):
+        return {"status": "error", "message": "Patch must be a JSON object",
+                "error_code": "VALIDATION_ERROR"}
+
     # Warn about unknown keys
     known_keys = {"enabled", "mode", "max_daily_applications", "min_fit_score",
                   "quiet_hours", "searches", "blocklist"}
     unknown = set(patch.keys()) - known_keys
 
-    config.update(patch)
+    # DEEP merge, not dict.update. `config.update(patch)` REPLACED whole nested
+    # blocks: patching {"quiet_hours": {"start_hour": 22}} silently reset
+    # end_hour to 8 and re-derived `enabled` from a dict that no longer had it,
+    # so a partial patch was a partial RESET of the quiet window that bounds
+    # autonomous applying. Dicts merge; lists (searches, blocklist entries)
+    # replace, because a list patch is a restatement, not an append.
+    config = _deep_merge(config, patch)
     errors = validate_agent_config(config)
     if errors:
         return {"status": "error", "message": "Validation failed", "errors": errors, "error_code": "VALIDATION_ERROR"}
@@ -70,6 +103,15 @@ async def _agent_update_config(updates: str) -> dict:
     result = {"status": "success", "message": "Config updated", "config": config}
     if unknown:
         result["warnings"] = [f"Unknown config key: {k}" for k in unknown]
+
+    floor = _min_agent_fit_floor()
+    if int(config.get("min_fit_score", floor)) < floor:
+        result.setdefault("warnings", []).append(
+            f"min_fit_score {config['min_fit_score']} is below the Python floor "
+            f"{floor}; the agent will still refuse to enqueue anything under "
+            f"{floor}. Lowering it here changes what is DISPLAYED, not what is "
+            f"applied to."
+        )
     return result
 
 

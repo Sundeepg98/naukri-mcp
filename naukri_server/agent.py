@@ -14,7 +14,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from uuid import uuid4
 
 from mcp.server.fastmcp import Context
@@ -64,6 +66,122 @@ DEFAULT_CONFIG = {
 }
 
 CONFIG_PATH = DATA_DIR / "agent_config.json"
+
+#: Where the last scoring fingerprint this agent acted under is remembered.
+#: One line of state, and it is what turns "policy was quietly widened" into
+#: "he sees the list" — see :func:`_effective_mode`.
+POLICY_STATE_PATH = DATA_DIR / "agent_policy_state.json"
+
+
+# ---------------------------------------------------------------------------
+# The two guards the config file cannot reach
+# ---------------------------------------------------------------------------
+#
+# THE INVARIANT: no sequence of config writes, from any server, may grant
+# autonomous apply authority.
+#
+# The traced escalation ran through this module. `min_fit_score` is not a
+# display filter here — `_decide` enqueues every job at or above it with
+# apply_status "pending", and `_act` in "auto" mode then submits them. Five
+# writes (enabled -> auto -> min_fit_score 0 -> blocklist off -> arbitrary
+# searches) took the system from "disabled, dry_run, threshold 70" to fifteen
+# real applications a day at no threshold on his live account.
+#
+# jobcore refuses those keys from the config file (tier C: not loadable, not
+# merely refused on write). These two guards are the SECOND, independent layer,
+# because a guard on one path is a guard on one path:
+#
+#   1. MIN_AGENT_FIT_FLOOR — a Python constant the file cannot reach. A bad
+#      threshold, from ANY source including naukri_agent_update_config, costs
+#      display noise instead of applications.
+#
+#   2. A forced approval cycle whenever the SCORING fingerprint changed since
+#      the last cycle. This covers the two levers that cannot be tier C because
+#      they are the feature he asked for by name: inflating `candidate.skills`
+#      (|matched|/|job_skills| -> 100 for every job in existence) and reshaping
+#      `scoring`. Neither touches the agent block at all, and either can be
+#      written FROM A SIBLING SERVER, so no amount of section-scoping catches
+#      them. One condition does.
+
+
+def _min_agent_fit_floor() -> int:
+    """The floor below which no candidate is ever enqueued.
+
+    Read through a function so the import cannot make this module depend on
+    jobcore at import time; falls back to the same literal, because a safety
+    floor that disappears when an import fails is not a floor.
+    """
+    try:
+        from jobcore.config import MIN_AGENT_FIT_FLOOR
+
+        return int(MIN_AGENT_FIT_FLOOR)
+    except Exception:  # pragma: no cover - jobcore is a hard dependency today
+        return 60
+
+
+def _read_policy_state() -> dict:
+    try:
+        with open(POLICY_STATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_policy_state(state: dict) -> None:
+    try:
+        POLICY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = POLICY_STATE_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+        os.replace(tmp, POLICY_STATE_PATH)
+    except OSError as exc:
+        logger.warning("could not persist agent policy state: %s", exc,
+                       extra={"step": "config"})
+
+
+def current_scoring_hash() -> Optional[str]:
+    """Fingerprint of everything that can move a fit score, or None."""
+    try:
+        from naukri_server import policy as _policy
+
+        return _policy.snapshot().policy_hash
+    except Exception:  # pragma: no cover - the loader already swallows
+        return None
+
+
+def _effective_mode(config: dict, cycle_id: str = "") -> tuple[str, Optional[str]]:
+    """The mode this cycle actually runs in, and why if it was downgraded.
+
+    "auto" is downgraded to "approval" for exactly one cycle after the scoring
+    fingerprint moves. Nothing else is affected: dry_run stays dry_run, an
+    unchanged fingerprint runs in the configured mode.
+    """
+    mode = config.get("mode", "approval")
+    if mode != "auto":
+        return mode, None
+
+    current = current_scoring_hash()
+    if current is None:
+        return mode, None
+
+    last_seen = _read_policy_state().get("last_scoring_hash")
+    try:
+        from jobcore.policy import requires_approval_cycle
+    except Exception:  # pragma: no cover
+        return mode, None
+
+    if not requires_approval_cycle(current, last_seen):
+        return mode, None
+
+    reason = (
+        f"scoring policy changed since the last cycle "
+        f"({last_seen or 'never seen'} -> {current}); this cycle runs in "
+        f"approval mode so the list is reviewed before anything is submitted"
+    )
+    logger.warning("Agent %s: auto -> approval — %s", cycle_id, reason,
+                   extra={"cycle_id": cycle_id, "step": "act"})
+    return "approval", reason
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +271,22 @@ async def _decide(observe_result: dict) -> dict:
     applied_ids = observe_result["applied_ids"]
     cycle_id = observe_result["cycle_id"]
     daily_remaining = observe_result["daily_remaining"]
-    min_fit = config.get("min_fit_score", APPLY_MIN_FIT_SCORE)
+    # The floor the config file cannot reach. `max()`, not `or`: tightening the
+    # threshold is always honoured, loosening it past the floor never is.
+    floor = _min_agent_fit_floor()
+    configured_min_fit = config.get("min_fit_score", APPLY_MIN_FIT_SCORE)
+    try:
+        configured_min_fit = int(configured_min_fit)
+    except (TypeError, ValueError):
+        configured_min_fit = APPLY_MIN_FIT_SCORE
+    min_fit = max(configured_min_fit, floor)
+    if min_fit != configured_min_fit:
+        logger.warning(
+            "Agent %s: min_fit_score %s raised to the Python floor %d — a "
+            "config value below the floor costs display noise, never applications",
+            cycle_id, configured_min_fit, floor,
+            extra={"cycle_id": cycle_id, "step": "decide"},
+        )
     blocklist_obj = AgentBlocklist.from_config(config)
 
     candidates: list[AgentCandidate] = []
@@ -166,10 +299,18 @@ async def _decide(observe_result: dict) -> dict:
             continue
         searches_run += 1
 
+        # The per-search override is the selector again one level down, so the
+        # floor applies to it too — otherwise `searches[0].min_fit_score: 0`
+        # walks straight past the guard above.
+        try:
+            search_min_fit = max(int(search.get("min_fit_score", min_fit)), floor)
+        except (TypeError, ValueError):
+            search_min_fit = min_fit
+
         result = await naukri_auto_hunt(
             keywords=search["keywords"],
             location=search.get("location"),
-            min_fit_score=search.get("min_fit_score", min_fit),
+            min_fit_score=search_min_fit,
             limit=20,
             freshness=search.get("freshness", 7),
             work_mode=search.get("work_mode"),
@@ -256,6 +397,37 @@ async def _decide(observe_result: dict) -> dict:
                                    extra={"cycle_id": cycle_id, "step": "decide"})
                 continue
 
+            # THE FLOOR, enforced where the enqueue actually happens.
+            # Filtering at the search call is the fast path; this is the one
+            # that holds when the search returns something below it anyway —
+            # a stale cache, a scorer change, a future refactor of auto_hunt.
+            # A guard that only runs on the happy path is not a guard.
+            job_fit = job.get("fit_score", 0) or 0
+            if job_fit < floor:
+                await insert_agent_decision(
+                    cycle_id, job_id, "skip",
+                    company=job.get("company", ""), title=job.get("title", ""),
+                    search_query=search["name"], fit_score=job_fit,
+                    skip_reason="below_min_agent_fit_floor",
+                )
+                logger.warning(
+                    "Agent %s: skip %s at %s — below the Python fit floor "
+                    "(fit: %s < %d)",
+                    cycle_id, job_id, job.get("company", ""), job_fit, floor,
+                    extra={"cycle_id": cycle_id, "step": "decide",
+                           "search": search["name"]},
+                )
+                try:
+                    await event_bus.emit(AgentJobSkipped(
+                        cycle_id=cycle_id, job_id=job_id,
+                        company=job.get("company", ""),
+                        reason="below_min_agent_fit_floor", fit_score=job_fit,
+                    ))
+                except Exception as e:
+                    logger.warning("Failed to emit AgentJobSkipped: %s", e,
+                                   extra={"cycle_id": cycle_id, "step": "decide"})
+                continue
+
             # Accept candidate
             candidate = AgentCandidate.from_hunt_result(job, search["name"])
             logger.info("Agent %s: candidate %s at %s (fit: %d)",
@@ -302,7 +474,13 @@ async def _act(decide_result: dict) -> dict:
     config = decide_result["config"]
     candidates: list[AgentCandidate] = decide_result["candidates"]
     cycle_id = decide_result["cycle_id"]
-    mode = config.get("mode", "approval")
+
+    # An "auto" cycle is downgraded to "approval" for exactly one cycle after
+    # the scoring fingerprint moves — the guard against the two levers that
+    # reach this selector without touching the agent block at all, and that a
+    # SIBLING SERVER can pull (candidate.skills, scoring.*).
+    mode, downgrade_reason = _effective_mode(config, cycle_id)
+    scoring_hash = current_scoring_hash()
 
     logger.info("Agent %s: act — mode=%s, %d candidates", cycle_id, mode, len(candidates),
                 extra={"cycle_id": cycle_id, "step": "act"})
@@ -433,6 +611,19 @@ async def _act(decide_result: dict) -> dict:
             act_result["halted"] = True
             act_result["note"] = "Auto-apply halted by kill-switch (block detected)"
 
+    # Record what this cycle actually ran under, so the NEXT cycle can tell
+    # whether the policy moved. Written after acting, so a crashed cycle does
+    # not consume the one approval cycle a policy change is owed.
+    if scoring_hash is not None:
+        act_result["scoring_hash"] = scoring_hash
+        state = _read_policy_state()
+        state["last_scoring_hash"] = scoring_hash
+        state["last_seen_at"] = datetime.now(timezone.utc).isoformat()
+        await asyncio.to_thread(_write_policy_state, state)
+    if downgrade_reason:
+        act_result["mode_downgraded_from"] = config.get("mode")
+        act_result["mode_downgrade_reason"] = downgrade_reason
+
     try:
         from naukri_server.events import AgentActCompleted
         await event_bus.emit(AgentActCompleted(
@@ -510,6 +701,24 @@ async def run_agent_cycle(ctx: Context | None = None) -> dict:
 
     Called by the scheduler task or manually via naukri_agent(action="run_now").
     """
+    # The agent runs from the scheduler, not through handle_tool_action, so it
+    # binds its own snapshot. One cycle, one policy: every candidate in a cycle
+    # is scored under the same weights, and `_effective_mode` reads the same
+    # fingerprint the scoring used.
+    try:
+        from naukri_server import policy as _policy
+
+        binder = _policy.bind()
+    except Exception:  # pragma: no cover
+        from contextlib import nullcontext
+
+        binder = nullcontext()
+
+    with binder:
+        return await _run_agent_cycle_bound(ctx)
+
+
+async def _run_agent_cycle_bound(ctx: Context | None = None) -> dict:
     from naukri_server.database import insert_agent_run, update_agent_run
     from naukri_server.events import event_bus, AgentCycleStarted
     from naukri_server.sagas import SagaExecutor

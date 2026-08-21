@@ -46,8 +46,21 @@ async def handle_tool_action(handler_fn, action_name: str) -> dict:
         dead or circuit open), INTERNAL_ERROR (genuinely unexpected).
     """
     try:
-        result = await handler_fn()
-        return result
+        # ONE CALL, ONE POLICY. Bind the config snapshot here, at the single
+        # seam every tool passes through, and hold it for the whole call. Bound
+        # per-scoring-call instead, a concurrent write could swap the weights
+        # between two rows of one ranking — naukri is one process running HTTP
+        # + stdio + nine scheduled tasks on one event loop, so every `await`
+        # inside a ranking loop is a yield point where that can happen.
+        # Failure to bind must never break a tool: run unbound and let
+        # `snapshot()` fall back to the shipped defaults.
+        try:
+            from naukri_server import policy as _policy
+
+            with _policy.bind():
+                return await handler_fn()
+        except ImportError:
+            return await handler_fn()
     except NaukriAPIError as e:
         return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
     except _AUTH_ERRORS as e:
