@@ -103,6 +103,87 @@ class TestTheRequestAndResponseAgree:
         assert WORK_MODE_MAP["hybrid"] == "3"
 
 
+class TestListEndpointsHaveNoModeField:
+    """LIST payloads carry the mode only inside the location label.
+
+    Measured against the live recommendations endpoint 2026-08-22: a list item
+    has 42 keys and NEITHER `wfhType` NOR `workMode` is among them. Its `mode`
+    key is the LISTING SOURCE, not the work arrangement -- across 53 jobs it
+    read jp 43 / airex 8 / crawled 2. So the decode fixed above was live only on
+    job-detail, the one surface nobody scores in bulk: `auto_hunt`,
+    `score_saved_jobs` and every recommendations path still saw null.
+
+    Fetching detail per row to recover it would be an N+1 against a
+    captcha-prone API. It is not needed -- the label carries it.
+    """
+
+    # Verbatim from the live payload: all 7 distinct labels that carried a mode.
+    LIVE_LABELS_WITH_MODE = [
+        ("Hybrid - Bengaluru", "hybrid"),
+        ("Hybrid - Bengaluru(Whitefield)", "hybrid"),
+        ("Hybrid - Bengaluru, Gurugram, Pune", "hybrid"),
+        ("Hybrid - Bengaluru, Hyderabad", "hybrid"),
+        ("Hybrid - Bengaluru, Pune, Hyderabad", "hybrid"),
+        ("Hybrid - Gurugram", "hybrid"),
+        ("Remote", "remote"),
+    ]
+    # ...and real labels that carried none.
+    LIVE_LABELS_WITHOUT = [
+        "Bengaluru", "Bengaluru(Electronic City Phase 2)",
+        "Bengaluru, Chennai, Hyderabad", "Bengaluru, Mumbai (All Areas)",
+        "Chennai(Guindy)", "Gurugram",
+    ]
+
+    def test_every_live_label_with_a_mode_is_read(self):
+        from naukri_server.domain.job import work_mode_from_location
+        for label, expected in self.LIVE_LABELS_WITH_MODE:
+            assert work_mode_from_location(label) == expected, label
+
+    def test_a_label_with_no_mode_is_None_NOT_office(self):
+        """THE discipline. Naukri prints the prefix only for remote/hybrid, so a
+        missing prefix is no information. Defaulting it to "office" is the bug
+        this whole line of work exists to fix, wearing a different hat: it would
+        silently deny a genuinely remote job its +5."""
+        from naukri_server.domain.job import work_mode_from_location
+        for label in self.LIVE_LABELS_WITHOUT:
+            assert work_mode_from_location(label) is None, label
+        assert work_mode_from_location("") is None
+        assert work_mode_from_location(None) is None
+
+    def test_the_head_is_matched_exactly_not_searched_for(self):
+        """A substring search would misread a city, area or company name."""
+        from naukri_server.domain.job import work_mode_from_location
+        assert work_mode_from_location("Remotely Placed Town") is None
+        assert work_mode_from_location("Bengaluru - Hybrid Park") is None
+        assert work_mode_from_location("Hybrid Systems Pvt Ltd") is None
+
+    def test_the_list_parser_recovers_the_bonus_end_to_end(self):
+        from naukri_server.tools.job_parsing import _parse_job_list
+
+        rows = _parse_job_list([
+            {"jobId": "1", "title": "A",
+             "placeholders": [{"type": "location", "label": "Remote"}]},
+            {"jobId": "2", "title": "B",
+             "placeholders": [{"type": "location", "label": "Hybrid - Bengaluru"}]},
+            {"jobId": "3", "title": "C",
+             "placeholders": [{"type": "location", "label": "Bengaluru"}]},
+        ], 10)
+        assert [r["work_mode"] for r in rows] == ["remote", "hybrid", None]
+
+        engine = pytest.importorskip("jobcore.scoring").ScoringEngine()
+        assert [engine.score_work_mode(r["work_mode"]) for r in rows] == [5, 3, 0]
+
+    def test_an_explicit_field_still_wins_over_the_label(self):
+        """Detail payloads DO carry wfhType; it must not be overridden."""
+        from naukri_server.tools.job_parsing import _parse_job_list
+
+        rows = _parse_job_list([
+            {"jobId": "1", "wfhType": "2",
+             "placeholders": [{"type": "location", "label": "Bengaluru"}]},
+        ], 10)
+        assert rows[0]["work_mode"] == "remote", "the real field must win"
+
+
 class TestBothParsePathsDecode:
     """The map existed and was applied in one of three places. Pin all three."""
 

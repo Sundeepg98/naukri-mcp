@@ -3,7 +3,9 @@
 import logging
 
 from naukri_server.config import NAUKRI_BASE
-from naukri_server.domain.job import ParsedSalary, normalize_work_mode
+from naukri_server.domain.job import (
+    ParsedSalary, normalize_work_mode, work_mode_from_location,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +49,12 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "apply_count": job.get("applyCount"),          # populated in detail only
             "function_area": job.get("functionArea"),       # populated in detail only
             "group_id": job.get("groupId"),
+            # LIST payloads carry neither workMode nor wfhType (measured:
+            # 42 keys, neither present), so fall back to the mode Naukri
+            # prints at the head of the location label. None when absent.
             "work_mode": normalize_work_mode(
-                job.get("workMode") or job.get("wfhType")),
+                job.get("workMode") or job.get("wfhType")
+            ) or work_mode_from_location(loc_label),
             "is_saved": job.get("isSaved"),
             "company_rating": (job.get("ambitionBoxData") or {}).get("Rating") or (job.get("ambitionBoxData") or {}).get("AggregateRating"),
             "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),

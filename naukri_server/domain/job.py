@@ -22,6 +22,45 @@ logger = logging.getLogger(__name__)
 WORK_MODE_CODES = {"0": "office", "2": "remote", "3": "hybrid"}
 
 
+# Work-mode words as Naukri prints them at the head of a location label.
+# Mapped to the words the scoring engine categorises.
+_LOCATION_MODE_PREFIXES = {
+    "remote": "remote",
+    "work from home": "remote",
+    "wfh": "remote",
+    "hybrid": "hybrid",
+    "work from office": "office",
+}
+
+
+def work_mode_from_location(label):
+    """Work mode read out of a location label, or None.
+
+    LIST endpoints do not carry the mode as a field. Measured against the live
+    recommendations payload 2026-08-22: a list item has 42 keys and NEITHER
+    `wfhType` NOR `workMode` is among them. Its `mode` key is the listing
+    source, not the work arrangement -- across 53 jobs it read jp 43 / airex 8
+    / crawled 2. Only the job-detail endpoint carries `wfhType`.
+
+    The mode IS in the list payload, embedded in the location placeholder:
+    "Hybrid - Bengaluru, Gurugram, Pune", "Remote". Across all 21 distinct
+    labels in that sample the word is ALWAYS the head -- standing alone, or
+    ahead of " - " -- so this reads the head and matches it exactly rather than
+    searching the string. No Indian city is named "Remote" or "Hybrid", and a
+    substring search would misread e.g. a company or area name.
+
+    ABSENT MEANS None, NEVER "office". Naukri prints the prefix only for remote
+    and hybrid roles (16 of 53 here, 30%), so a missing prefix is genuinely no
+    information -- and defaulting it to office is precisely the bug this whole
+    line of work exists to fix, in a different costume. An honest None scores no
+    bonus; a guessed "office" would silently deny a remote job its +5.
+    """
+    if not label:
+        return None
+    head = str(label).split(" - ")[0].strip().lower()
+    return _LOCATION_MODE_PREFIXES.get(head)
+
+
 def normalize_work_mode(value):
     """Naukri work mode as a WORD the scoring engine understands.
 

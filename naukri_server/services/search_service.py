@@ -10,7 +10,7 @@ from typing import Optional
 from naukri_server.config import LAKHS_MULTIPLIER
 from naukri_server.domain import safe_get
 from naukri_server.domain.job import (
-    ParsedSalary, WORK_MODE_CODES, normalize_work_mode,
+    ParsedSalary, WORK_MODE_CODES, normalize_work_mode, work_mode_from_location,
 )
 
 __all__ = [
@@ -392,7 +392,9 @@ def parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "benefits": job.get("benefits"),
         "group_id": company_data["group_id"],
         "work_mode": normalize_work_mode(
-            safe_get(job, "workMode", "wfhType", field_name="work_mode", warn=False)),
+            safe_get(job, "workMode", "wfhType", field_name="work_mode", warn=False)
+        ) or work_mode_from_location(
+            extract_placeholder(job.get("placeholders", []), "location")),
         "posted_date": safe_get(job, "createdDate", field_name="posted_date", warn=False),
         "industry": safe_get(
             job, "industryType",
