@@ -9,6 +9,35 @@ from naukri_server.config import LAKHS_MULTIPLIER
 logger = logging.getLogger(__name__)
 
 
+# Naukri's `wfhType` codes. The scoring engine understands the WORDS
+# ("remote"/"hybrid"/"office") and classifies anything it does not recognise as
+# office, so a raw code costs the job its work-mode bonus silently: measured
+# 2026-08-22, his InApp "MCP Developer (Remote)" arrived as wfhType "2" and
+# scored work_mode 0 instead of 5 (fit 80 where it should read 85). Remote jobs
+# -- the ones he most wants -- were the ones losing the bonus.
+#
+# The map existed but was applied in only ONE of the three parse paths
+# (parse_job_detail_v1). Everything reaching assess_fit / compare_jobs /
+# auto_hunt went through the other two, unmapped.
+WORK_MODE_CODES = {"0": "office", "2": "remote", "3": "hybrid"}
+
+
+def normalize_work_mode(value):
+    """Naukri work mode as a WORD the scoring engine understands.
+
+    Numeric `wfhType` codes are decoded; text values (`workMode` is already
+    "Hybrid" on some endpoints) pass through unchanged; empty stays None. An
+    unknown code is returned as-is rather than guessed at -- it will not score,
+    but it also will not silently claim to be an office job.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return WORK_MODE_CODES.get(text, text)
+
+
 @dataclass
 class ParsedSalary:
     """Value object for parsed salary with logging for missing data."""

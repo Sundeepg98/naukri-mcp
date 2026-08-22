@@ -9,7 +9,9 @@ from typing import Optional
 
 from naukri_server.config import LAKHS_MULTIPLIER
 from naukri_server.domain import safe_get
-from naukri_server.domain.job import ParsedSalary
+from naukri_server.domain.job import (
+    ParsedSalary, WORK_MODE_CODES, normalize_work_mode,
+)
 
 __all__ = [
     "extract_job_id",
@@ -46,7 +48,21 @@ JOB_TYPE_MAP = {
     "internship": "4", "temporary": "5",
 }
 
-WORK_MODE_MAP = {"wfh": "1", "hybrid": "3", "office": "2"}
+# wfhType codes, settled against the LIVE API 2026-08-22 rather than guessed.
+# Two of the three entries used to be wrong, and the request map disagreed with
+# the response map (WORK_MODE_CODES) about what "2" meant:
+#
+#   work_mode="office" sent wfhType=2 and the first result was a job located
+#   "Remote". Asking for office work returned remote work.
+#   work_mode="wfh"    sent wfhType=1 and returned 2 results ("Temp. WFH -
+#   Ahmedabad") where the real remote code returns a full page.
+#   work_mode="hybrid" sent wfhType=3 and returned "Hybrid - Bengaluru" -- the
+#   only entry that was already right.
+#
+# Corroborated from the other direction: a job recommendations labelled
+# "Hybrid - Chennai" carries wfhType 3, and one the inbox called "(Remote)"
+# carries 2. Request and response now agree.
+WORK_MODE_MAP = {"wfh": "2", "remote": "2", "hybrid": "3", "office": "0"}
 
 COMPANY_TYPE_MAP = {
     "startup": "startup", "mnc": "mnc",
@@ -375,7 +391,8 @@ def parse_job_detail(details_data: dict, job_id: str, page_url: str,
         "notice_period": job.get("noticePeriod"),
         "benefits": job.get("benefits"),
         "group_id": company_data["group_id"],
-        "work_mode": safe_get(job, "workMode", "wfhType", field_name="work_mode", warn=False),
+        "work_mode": normalize_work_mode(
+            safe_get(job, "workMode", "wfhType", field_name="work_mode", warn=False)),
         "posted_date": safe_get(job, "createdDate", field_name="posted_date", warn=False),
         "industry": safe_get(
             job, "industryType",
@@ -526,7 +543,7 @@ def build_similar_jobs_result(
 # V1 job-detail parser — separated from I/O so it's purely testable.
 # ---------------------------------------------------------------------------
 
-_V1_WORK_MODE_MAP = {"0": "office", "2": "remote", "3": "hybrid"}
+_V1_WORK_MODE_MAP = WORK_MODE_CODES
 
 
 def parse_job_detail_v1(data: dict) -> dict:

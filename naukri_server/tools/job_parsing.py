@@ -3,7 +3,7 @@
 import logging
 
 from naukri_server.config import NAUKRI_BASE
-from naukri_server.domain.job import ParsedSalary
+from naukri_server.domain.job import ParsedSalary, normalize_work_mode
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,8 @@ def _parse_job_list(job_details: list, limit: int) -> list:
             "apply_count": job.get("applyCount"),          # populated in detail only
             "function_area": job.get("functionArea"),       # populated in detail only
             "group_id": job.get("groupId"),
-            "work_mode": job.get("workMode") or job.get("wfhType"),
+            "work_mode": normalize_work_mode(
+                job.get("workMode") or job.get("wfhType")),
             "is_saved": job.get("isSaved"),
             "company_rating": (job.get("ambitionBoxData") or {}).get("Rating") or (job.get("ambitionBoxData") or {}).get("AggregateRating"),
             "company_reviews_count": (job.get("ambitionBoxData") or {}).get("ReviewsCount"),
