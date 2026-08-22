@@ -37,18 +37,72 @@ async def _fetch_ab_applied_insights() -> dict:
                 "error_code": "API_ERROR"}
 
 
-async def _fetch_pending_notifications() -> list:
-    """Fetch undelivered notifications for the daily brief."""
+#: How many undelivered notifications ONE brief delivers. It is a cap on
+#: DELIVERY, not a measurement of what is pending, and it used to be a bare
+#: `10` at the call site -- which is precisely how the two got confused.
+#:
+#: Measured 2026-08-21: the brief returned ten rows while
+#: `count_undelivered_notifications()` said 156 at the same moment. `len()` of
+#: the returned list read as the total, and a reviewer concluded a prune had
+#: over-deleted. Same defect family as `recruiter_history` publishing its SQL
+#: `LIMIT 20` as `total_companies`.
+PENDING_NOTIFICATION_DELIVERY_CAP = 10
+
+
+def _pending_notifications_envelope(rows, total, error=None) -> dict:
+    """Wrap a delivered slice in the numbers needed to read it correctly.
+
+    The slice alone cannot answer "how many are pending", so it is published
+    beside the real total and an explicit ``capped`` flag rather than leaving
+    the caller to infer either from a list length.
+
+    On a failed fetch every count is ``None``, never ``0``: a hard zero here is
+    indistinguishable from a real measurement of nothing, which is the same
+    defect the ``_section`` helper below exists to avoid.
+    """
+    delivered = list(rows or [])
+    counted = total is not None
+    return {
+        "delivered": delivered,
+        "delivered_count": len(delivered),
+        "delivery_cap": PENDING_NOTIFICATION_DELIVERY_CAP,
+        "capped": (total > PENDING_NOTIFICATION_DELIVERY_CAP) if counted else None,
+        "total_undelivered": total,
+        # Derived, not measured -- it is the total minus what this run just
+        # took, which is what remains for the NEXT run.
+        "still_undelivered": (total - len(delivered)) if counted else None,
+        **({"error": error} if error else {}),
+    }
+
+
+async def _fetch_pending_notifications() -> dict:
+    """Deliver up to the cap, and report how many were actually pending.
+
+    Returns the envelope described by :func:`_pending_notifications_envelope`,
+    NOT a bare list. The list was the bug: it published the cap as a count.
+    """
     try:
-        from naukri_server.database import list_undelivered_notifications, mark_notifications_delivered
-        notifs = await list_undelivered_notifications(limit=10)
+        from naukri_server.database import (
+            list_undelivered_notifications,
+            mark_notifications_delivered,
+            count_undelivered_notifications,
+        )
+        # COUNT FIRST, AND THE ORDER IS THE FIX. `mark_notifications_delivered`
+        # below sets `delivered_via`, which is the exact predicate
+        # `count_undelivered_notifications` filters on -- so a count taken
+        # afterwards reports (total - cap) and calls it the total, a number that
+        # is neither the total nor the slice and that shrinks on every run.
+        total = await count_undelivered_notifications()
+        notifs = await list_undelivered_notifications(
+            limit=PENDING_NOTIFICATION_DELIVERY_CAP)
         if notifs:
             ids = [n["id"] for n in notifs]
             await mark_notifications_delivered(ids, via="brief")
-        return notifs
+        return _pending_notifications_envelope(notifs, total)
     except Exception as e:
         logger.warning("Failed to fetch notifications: %s", e)
-        return []
+        return _pending_notifications_envelope(
+            [], None, error="%s: %s" % (type(e).__name__, e))
 
 
 
@@ -83,6 +137,14 @@ async def naukri_daily_brief(explain: bool = False) -> dict:
            average_applicants, top_competitive),
            conversion_funnel (total_applied, conversion_rate, dead_zones),
            pending_notifications, recommended_actions, errors}
+
+        `pending_notifications` is an ENVELOPE, not a list:
+        {delivered: [...rows this run just marked delivered...],
+         delivered_count, delivery_cap, capped, total_undelivered,
+         still_undelivered}. `delivered_count` is bounded by `delivery_cap` and
+         is NOT how many are pending -- read `total_undelivered` for that, and
+         `capped` for whether the two differ. Counts are null (never 0) if the
+         fetch failed, in which case `error` is also present.
     """
     from naukri_server.tools.inbox import _fetch_inbox
     from naukri_server.tools.notifications import _fetch_notifications, _get_unified_notify
@@ -168,11 +230,19 @@ async def naukri_daily_brief(explain: bool = False) -> dict:
     notify_summary = _extract(17, "Unified notify")
     ab_insights = _extract(18, "AB applied insights")
     pending_notifs_raw = results[19]
+    # The isinstance guard tracks the ENVELOPE now, not a list. It used to read
+    # `isinstance(..., list)`, which would silently coerce the new dict back to
+    # `[]` and leave the whole cap-vs-count fix inert at this level.
     if isinstance(pending_notifs_raw, Exception):
         errors.append(f"Pending notifications: {type(pending_notifs_raw).__name__}: {pending_notifs_raw}")
-        pending_notifs = []
+        pending_notifs = _pending_notifications_envelope(
+            [], None,
+            error=f"{type(pending_notifs_raw).__name__}: {pending_notifs_raw}")
+    elif isinstance(pending_notifs_raw, dict):
+        pending_notifs = pending_notifs_raw
     else:
-        pending_notifs = pending_notifs_raw if isinstance(pending_notifs_raw, list) else []
+        pending_notifs = _pending_notifications_envelope(
+            [], None, error="fetch returned %s" % type(pending_notifs_raw).__name__)
 
     # Count pending assessments (those without a completed status)
     pending_count = 0

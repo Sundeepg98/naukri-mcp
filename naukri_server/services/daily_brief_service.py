@@ -125,9 +125,26 @@ def build_recommended_actions(brief: dict) -> list:
     """
     actions: list[dict] = []
 
-    # High priority: pending workflow notifications
-    pending_notifs = (brief.get("pending_notifications") or [])
-    high_priority_notifs = [n for n in pending_notifs if n.get("priority") == "high"]
+    # High priority: pending workflow notifications.
+    #
+    # `pending_notifications` is an ENVELOPE -- {delivered, delivered_count,
+    # delivery_cap, capped, total_undelivered, still_undelivered} -- because the
+    # bare list published its LIMIT as if it were a count. The ROWS live under
+    # `delivered`. Iterating the envelope itself would walk its KEYS, which are
+    # str, and `str.get` does not exist: the whole brief would die here.
+    #
+    # A plain list is still accepted (a stored brief, or a caller mid-upgrade),
+    # and any other shape degrades to no rows rather than raising, because a
+    # recommendation section must not be able to take the brief down.
+    pending_raw = brief.get("pending_notifications")
+    if isinstance(pending_raw, dict):
+        pending_notifs = pending_raw.get("delivered") or []
+    elif isinstance(pending_raw, list):
+        pending_notifs = pending_raw
+    else:
+        pending_notifs = []
+    high_priority_notifs = [n for n in pending_notifs
+                            if isinstance(n, dict) and n.get("priority") == "high"]
     if high_priority_notifs:
         actions.append({
             "priority": "high",

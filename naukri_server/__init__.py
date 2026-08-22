@@ -245,6 +245,89 @@ def _watchdogged_tool(*t_args, **t_kwargs):
 
 mcp.tool = _watchdogged_tool
 
+# --- The same scrub guarantee for RESOURCES and PROMPTS ---------------------
+# WHY THE TOOL-ONLY VERSION WAS INCOMPLETE. The wrapper above applies
+# `utils.scrub_result` to every tool result, and the path-leak census
+# (tests/test_path_leaks.py) certified the property from it. But it patched
+# `mcp.tool` and nothing else, so the guarantee stopped exactly where the
+# `@mcp.tool()` decorator did.
+#
+# MEASURED 2026-08-21: 120 of 120 tools scrubbed, 5 resources and 7 prompts NOT.
+# That is a live hole of the very class the census named, not a hypothetical
+# one: `resources/handlers.py` formats every failure as
+# `f"Failed to load profile: {exc}"`, and OSError and Playwright errors embed
+# the absolute filename they failed on. No new code was needed for a leak to
+# appear -- only a disk error.
+#
+# TWO DIFFERENCES FROM THE TOOL WRAPPER, both deliberate:
+#
+# 1. NO WATCHDOG. A resource read has no browser session or apply path behind
+#    it and a prompt handler is pure, so there is no "never returns" to bound.
+#    Scrubbing is the whole job here.
+# 2. SYNC HANDLERS TOO. `_watchdogged_tool` wraps only coroutines, because a
+#    watchdog needs something to await. All 7 prompt handlers are SYNC, so
+#    reusing that check would leave every prompt unscrubbed while reporting
+#    itself as applied. Both branches are wrapped below.
+#
+# It is the SAME `utils.scrub_result`, not a second scrubber -- one boundary
+# rule, one implementation, so a fix to the rule reaches every surface.
+#
+# TYPED RETURNS SURVIVE UNTOUCHED. `scrub_result` handles str/dict/list/tuple
+# and passes everything else through unchanged, so a FastMCP `Message` object
+# comes back as itself and every prompt's declared return type keeps
+# validating. Confirmed by running the full suite, not by reading the code.
+#
+# `functools.wraps` keeps `__name__`/`__doc__`/`__wrapped__`, which is what
+# FastMCP's signature introspection reads -- so a prompt's argument schema and
+# a resource's URI-parameter validation are both unchanged.
+import functools as _functools  # noqa: E402
+
+from naukri_server.utils import scrub_result as _scrub_result  # noqa: E402
+
+
+def _scrubbed_handler(fn):
+    """Route a resource/prompt handler's result through `scrub_result`."""
+    if _inspect.iscoroutinefunction(fn):
+        @_functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            return _scrub_result(await fn(*args, **kwargs))
+    else:
+        @_functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return _scrub_result(fn(*args, **kwargs))
+
+    # The census in tests/test_resource_prompt_scrubbing.py walks the live
+    # registries looking for this marker, so a handler added later cannot opt
+    # out silently.
+    wrapper.__scrubbed_result__ = True
+    return wrapper
+
+
+_undecorated_resource = mcp.resource
+_undecorated_prompt = mcp.prompt
+
+
+def _scrubbed_resource(*r_args, **r_kwargs):
+    register = _undecorated_resource(*r_args, **r_kwargs)
+
+    def apply(fn):
+        return register(_scrubbed_handler(fn))
+
+    return apply
+
+
+def _scrubbed_prompt(*p_args, **p_kwargs):
+    register = _undecorated_prompt(*p_args, **p_kwargs)
+
+    def apply(fn):
+        return register(_scrubbed_handler(fn))
+
+    return apply
+
+
+mcp.resource = _scrubbed_resource
+mcp.prompt = _scrubbed_prompt
+
 # Register OAuth consent UI route only when OAuth is enabled and not in
 # auto-approve mode (otherwise the consent endpoint is unreachable).
 if _oauth_enabled and _oauth_provider is not None and not _oauth_provider._auto_approve:
@@ -252,7 +335,7 @@ if _oauth_enabled and _oauth_provider is not None and not _oauth_provider._auto_
     _consent_route.register(mcp, _oauth_provider)
 
 # Import tool modules to register @mcp.tool() decorators
-from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders, scheduler_tool, agent_tool, kill_switch_tool, config_tool  # noqa: E402, F401
+from naukri_server.tools import auth, search, jobs, apply, profile, profile_update, profile_targeting, debug, tracking, saved_jobs, analytics, sync, inbox, notifications, settings, alerts, companies, performance, assessments, subscription, mock_interview, resume_photo, early_access, resume_builder, ambitionbox, ambitionbox_rest, health, insights, research, daily_brief, smart_apply, compare, auto_hunt, skill_gap, export, resume_tailor, reminders, scheduler_tool, agent_tool, kill_switch_tool, config_tool, server_info  # noqa: E402, F401
 from naukri_server import subscribers  # noqa: F401 — registers event handlers
 from naukri_server import resources  # noqa: F401 — registers @mcp.resource() handlers
 from naukri_server import prompts  # noqa: F401 — registers @mcp.prompt() handlers

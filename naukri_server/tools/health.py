@@ -368,7 +368,12 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
         event_stats = await _bounded(get_event_stats(hours=24), 5.0)
         notif_count = await _bounded(count_undelivered_notifications(), 5.0)
         result["event_stats_24h"] = event_stats
-        result["pending_notifications"] = notif_count
+        # ONE NAME, ONE MEANING. This was `pending_notifications` -- a SCALAR
+        # count under the same key `naukri_daily_brief` uses for an ENVELOPE of
+        # delivered rows. Two tools, one name, two meanings, which is how the
+        # brief's 10 and this tool's 156 were compared on 2026-08-21 and read as
+        # a prune having over-deleted. The name now says which number it is.
+        result["pending_notifications_total"] = notif_count
     except Exception:
         pass
 

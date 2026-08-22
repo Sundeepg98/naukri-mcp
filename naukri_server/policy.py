@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import contextvars
 import logging
-import os
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -68,6 +67,7 @@ from typing import Optional
 
 from jobcore import config as _jobcore_config
 from jobcore.config import Loaded, MIN_AGENT_FIT_FLOOR
+from jobcore.paths import display_path as _jobcore_display_path
 from jobcore.policy import (
     DEFAULT_POLICY,
     CandidatePolicy,
@@ -267,67 +267,39 @@ def policy_stamp() -> dict:
 
 
 #: The naukri checkout root — the anchor config paths are displayed against.
+#: Read at CALL time by `display_path`, not captured at import: the
+#: `TestDisplayPathUnderNeitherAnchor` fixture monkeypatches this name to force
+#: both anchors to miss, and a captured value would make that fixture inert.
 _REPO_ROOT = _START.parent.parent
-
-#: Components kept by `display_path`'s last-resort tail form. Three is enough to
-#: tell two pytest tmp dirs apart, which is the case that exposed the old
-#: basename fallback, and short enough that it publishes no useful layout.
-_DISPLAY_TAIL_PARTS = 3
 
 
 def display_path(raw: Optional[str]) -> Optional[str]:
     """A path a human can act on, that is not an absolute local path.
 
-    `utils.scrub_result` runs over every tool result and reduces anything still
-    absolute to its BASENAME — deliberately, after a census found this machine's
-    layout inside tool output. That guarantee must not be weakened, but it turns
+    CANONICAL IMPLEMENTATION: :func:`jobcore.paths.display_path`. This is a
+    delegation, not a copy -- the same rendering now serves naukri, uplers and
+    every other jobcore consumer, so a fix lands once. All this wrapper supplies
+    is the ANCHOR, which jobcore cannot know: a path rendered relative to the
+    *library* would be meaningless to a reader of naukri's output.
+
+    WHY IT EXISTS AT ALL (the naukri-specific rationale, kept because it is the
+    reason the field is relativised rather than deleted). `utils.scrub_result`
+    runs over every tool result and reduces anything still absolute to its
+    BASENAME -- deliberately, after a census found this machine's layout inside
+    tool output. That guarantee must not be weakened, but on its own it turns
     every entry of `searched` into the identical string "jobhunt.json", which is
-    worse than saying nothing.
+    worse than saying nothing. So paths are rendered relative to the checkout,
+    or to home as ``~/...``, or as a ``.../a/b/c`` tail. All three survive the
+    scrubber (it matches drive-letter absolutes only), all three stay
+    distinguishable, and none publishes the machine's layout.
 
-    So paths are rendered relative to the checkout, or to home as ``~/…``. Both
-    forms survive the scrubber (it matches drive-letter absolutes only), both
-    stay distinguishable, and neither publishes the machine's layout.
-
-    THIRD FORM, and why it exists (2026-08-21, found by CI, not locally). A path
-    under NEITHER anchor used to fall through to the bare basename -- which is
-    the very collapse the paragraph above says is worse than saying nothing.
-    On this box it never fired, because a Windows temp dir lives under
-    ``C:\\Users\\Dell`` and so the home anchor always caught it. On the Linux
-    runner ``/tmp`` is under neither ``/home/runner/work/...`` nor
-    ``/home/runner``, so every path fell straight to "jobhunt.json" and
-    ``test_the_reported_path_is_not_an_absolute_local_path`` failed there and
-    only there. That test was right and the function was wrong.
-
-    The last resort is now the TAIL: the final few components with a leading
-    ``.../``. It keeps the file distinguishable, publishes no drive letter, no
-    home directory and no layout above those components, and it carries no
-    leading slash -- so the scrubber leaves it alone exactly as the other two
-    forms are left alone.
+    The tail form is the one CI found missing (2026-08-21, red on the Linux
+    runner and green on every Windows box, because a Windows temp dir lives
+    under ``C:\\Users\\Dell`` and so the home anchor always caught it). jobcore
+    carries that fix and its ``DISPLAY_TAIL_PARTS`` / ``MAX_PARENT_HOPS``
+    constants; see ``jobcore/paths.py`` for the full account.
     """
-    if not raw:
-        return raw
-    p = Path(raw)
-    try:
-        rel = os.path.relpath(p, _REPO_ROOT)
-        # Count PARTS equal to "..", not occurrences of the substring: a
-        # directory legitimately named "a..b" is not four levels up.
-        if sum(1 for part in rel.split(os.sep) if part == os.pardir) <= 4:
-            return rel.replace(os.sep, "/")
-    except (ValueError, OSError):
-        pass
-    try:
-        return "~/" + p.relative_to(Path.home()).as_posix()
-    except (ValueError, OSError):
-        pass
-    # Drop the anchor ("C:\\", "/") so no drive letter or root can survive,
-    # then keep the tail. One component means there is nothing to elide and
-    # the marker would be a lie, so it is omitted in that case.
-    parts = p.parts[1:] if p.anchor else p.parts
-    if len(parts) <= 1:
-        return p.name
-    tail = parts[-_DISPLAY_TAIL_PARTS:]
-    prefix = ".../" if len(tail) < len(parts) else ""
-    return prefix + "/".join(tail)
+    return _jobcore_display_path(raw, anchor=_REPO_ROOT)
 
 
 def report(section: Optional[str] = None) -> dict:
