@@ -30,6 +30,10 @@ class BrowserWatchdog:
         self._restart_count = 0
         self._crash_count = 0
         self._consecutive_failures = 0
+        # True once the "restart budget exhausted" notification has been sent
+        # for the CURRENT outage. Cleared on recovery and on budget restore, so
+        # the next real outage is announced again.
+        self._announced_exhausted = False
         self._task: Optional[asyncio.Task] = None
         self._last_healthy: float = time.monotonic()
         self._last_restart: float = 0.0
@@ -106,9 +110,10 @@ class BrowserWatchdog:
             self._RESTART_BUDGET_RESET_SECONDS, self._restart_count, self._max_restarts,
         )
         self._restart_count = 0
+        self._announced_exhausted = False
 
     async def _handle_failure(self):
-        """Emit crash event, attempt restart if under limit."""
+        """Emit crash event (bounded per outage), attempt restart if under limit."""
         from naukri_server.events import event_bus, BrowserCrashed
 
         # crash_count used to be `self._restart_count`, which is 0 until a
@@ -116,11 +121,41 @@ class BrowserWatchdog:
         # circuit breaker keyed on it could never trip. Count crashes.
         self._crash_count += 1
 
-        await event_bus.emit(BrowserCrashed(
-            reason=f"Health probe failed ({self._consecutive_failures} consecutive)",
-            crash_count=self._crash_count,
-            consecutive_failures=self._consecutive_failures,
-        ))
+        budget_exhausted = self._restart_count >= self._max_restarts
+
+        # EMIT ONLY WHEN THE EVENT CARRIES NEW INFORMATION.
+        #
+        # This emitted on EVERY probe cycle, unconditionally, above the budget
+        # check -- so exhausting the restart budget stopped the restarts and
+        # nothing else. Measured on his account 2026-08-20..22: one expired
+        # session produced 2342 BrowserCrashed notifications over two days, at
+        # ~4/min while live, with restart_budget_remaining pinned at 0 and only
+        # 4 actual restarts. That was 93% of his entire notification table, and
+        # his daily brief's top recommended action had become "Review 10
+        # high-priority notification(s): Browser crashed".
+        #
+        # The event is worth sending when the browser FIRST goes down, and once
+        # more when we give up on it. After that the state is unchanged and
+        # repeating it is noise -- the same reasoning that made _on_reminder_due
+        # change-detected. Bounded at TWO per outage instead of unbounded. The
+        # counters stay exact either way (crash_count still increments every
+        # cycle) and naukri_health_check reports the live state on demand, so
+        # nothing observable is lost -- only the repetition.
+        first_failure = self._consecutive_failures <= 1
+        giving_up_now = budget_exhausted and not self._announced_exhausted
+
+        if first_failure or giving_up_now:
+            await event_bus.emit(BrowserCrashed(
+                reason=(
+                    f"Health probe failed ({self._consecutive_failures} consecutive)"
+                    + ("; restart budget exhausted, no further automatic restarts"
+                       if giving_up_now else "")
+                ),
+                crash_count=self._crash_count,
+                consecutive_failures=self._consecutive_failures,
+            ))
+            if giving_up_now:
+                self._announced_exhausted = True
 
         if self._consecutive_failures >= 2:
             if self._restart_count < self._max_restarts:
@@ -166,6 +201,7 @@ class BrowserWatchdog:
             self._restart_count += 1
             self._last_restart = time.monotonic()
             self._consecutive_failures = 0
+            self._announced_exhausted = False
             downtime = time.monotonic() - t0
 
             # Reset circuit breaker after successful restart

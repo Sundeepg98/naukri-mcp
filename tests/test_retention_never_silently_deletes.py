@@ -154,6 +154,43 @@ async def test_a_later_upsert_without_extra_does_not_erase_the_apply_date(tmp_pa
     assert row["status"] == "viewed_by_recruiter"
 
 
+def test_dates_are_NORMALISED_before_any_string_comparison():
+    """Retention compares ISO strings, so mixed formats would silently misorder.
+
+    The trap, met for real on 2026-08-22 in a sibling query: SQLite string-
+    compares `2026-08-22T03:03` against `2026-08-22 03:20`, and "T" (0x54) sorts
+    ABOVE a space (0x20), so every T-format row looks NEWER than any
+    space-format row regardless of the actual time. A query written that way
+    returned 726 rows and meant nothing.
+
+    The defence is not to avoid string comparison but to guarantee one format
+    reaches it. Naukri sends both shapes -- the history API uses a space
+    ("2026-08-21 15:04:58"), other routes use ISO with T -- so this matters.
+    """
+    def d(raw):
+        return database.real_applied_date({"extra": json.dumps({"applied_date": raw})})
+
+    space = d("2026-08-21 15:04:58")
+    tee = d("2026-08-21T15:04:58")
+    offset = d("2026-08-21T15:04:58+00:00")
+    naked = d("2026-08-21")
+
+    assert space == tee == offset, "the same instant must produce the same string"
+    assert naked == "2026-08-21T00:00:00+00:00"
+    for v in (space, tee, offset, naked):
+        assert "T" in v and v.endswith("+00:00"), v
+
+    # The ordering the raw strings get WRONG. Pick the case where format and
+    # time disagree: the LATER instant written with a space, the EARLIER one
+    # with a T. Space (0x20) sorts below T (0x54), so the raw comparison calls
+    # the later timestamp smaller.
+    later_raw, earlier_raw = "2026-08-21 03:20:00", "2026-08-21T03:03:00"
+    assert later_raw < earlier_raw, (
+        "the trap: raw string order puts the LATER space-format instant first. "
+        "If this ever fails the trap is gone and this test can go with it.")
+    assert d(later_raw) > d(earlier_raw), "normalisation must restore true order"
+
+
 def test_real_applied_date_returns_none_rather_than_guessing():
     """Every unparseable shape must fail CLOSED (None => never delete)."""
     assert database.real_applied_date({"extra": None}) is None
