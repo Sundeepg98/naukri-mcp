@@ -40,6 +40,8 @@ All tests are PURE -- temp files only, no network, no browser.
 """
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -313,3 +315,148 @@ class TestThereIsOnlyOnePlaceAPathIsRendered:
             "config_status is still being overwritten by hand, which is what "
             "discarded config_error"
         )
+
+
+# =====================================================================
+# The needle has two spellings
+# =====================================================================
+
+
+def _doubled(path: str) -> str:
+    """The repr() spelling of a path, which is what lands inside an error.
+
+    `OSError.__str__` renders its filename through `repr()`, so on Windows the
+    path arrives with DOUBLED separators:
+
+        str(OSError(13, "Permission denied", r"D:\a\b.json"))
+        -> "[Errno 13] Permission denied: 'D:\\a\\b.json'"
+
+    On POSIX the two spellings are identical and this is a no-op.
+    """
+    return path.replace("\\", "\\\\")
+
+
+class TestAPathSpelledByReprIsStillThatPath:
+    """One sentence, two halves, two opposite verdicts.
+
+    Found live by the uplers slice 2026-08-22 and fixed in jobcore 6acc7e6.
+    `jobcore.config` composes `f"cannot read {path}: {exc}"` -- the `{path}`
+    half with single separators, the `{exc}` half through `OSError.__str__`,
+    which uses repr() and therefore doubles them. `relativise_known` searched
+    only for the single spelling, so it relativised the first half and passed
+    the second half through with the machine's full layout intact.
+
+    WHY IT HID, and this is the part worth keeping: this file made exact
+    substring matching the PRIMARY detector precisely because a drive-letter
+    regex cannot fire on Linux -- and the exact detector was itself blind to the
+    repr spelling on Windows. Between the two there was a window in which
+    nothing was looking on either platform. Two detectors, each covering the
+    other's blind spot, both blind to the same thing.
+
+    naukri inherits the fix through `snap.report(SERVER_NAME, display=...)`;
+    these tests assert it at naukri's own boundaries rather than trusting it.
+
+    GREEN ON ARRIVAL, AND SAYING SO PLAINLY. These tests were green the moment
+    they were written here and never went red on this box. That is not a weak
+    test -- it is the local/CI asymmetry running the other way. naukri's venv
+    has jobcore installed EDITABLE from ../jobcore, so it is already running
+    6acc7e6 with the repr fix no matter what requirements-ci.txt says, while CI
+    installs the PINNED commit and would not have it. The defect is real on the
+    runner and unreachable here. Exactly inverted from the stale-pin break of
+    the same day, and the same root cause.
+
+    The red-first receipt for the fix itself is jobcore's, not naukri's:
+    `jobcore/tests/test_report_display.py::TestAPathSpelledByReprIsTheSamePath
+    ::test_both_spellings_are_relativised`, run red against jobcore at 6a5d68e.
+    What THIS class buys is the property pinned at naukri's boundaries, so a
+    future pin that loses the fix is caught here rather than in a shared
+    transcript.
+    """
+
+    @pytest.fixture
+    def unreadable_config(self, tmp_path, monkeypatch):
+        """A config file that EXISTS but cannot be read.
+
+        The OSError is CONSTRUCTED rather than provoked, because provoking a
+        real permission failure is not portable -- but it uses the real
+        3-argument form, so `str()` of it is byte-identical to what a genuinely
+        failed open produces. Mirrors jobcore's own fixture deliberately: same
+        scenario, asserted at naukri's layers.
+        """
+        import naukri_server.policy as naukri_policy
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text("{}", encoding="utf-8")
+
+        real = Path.read_bytes
+
+        def boom(self):
+            if self == cfg:
+                raise OSError(13, "Permission denied", str(cfg))
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        naukri_policy.invalidate()
+        try:
+            yield cfg
+        finally:
+            naukri_policy.invalidate()
+
+    def test_the_repr_spelling_is_the_one_that_actually_appears(
+            self, unreadable_config):
+        """THE CONTROL. Pins that the scenario really does produce both
+        spellings, so the absence assertions below are known falsifiable."""
+        from naukri_server import policy
+
+        err = policy.snapshot().config_error or ""
+        assert "cannot read" in err, err
+        assert "Permission denied" in err
+
+        if os.sep == "\\":
+            assert str(unreadable_config) in err, (
+                "the {path} half should use single separators")
+            assert _doubled(str(unreadable_config)) in err, (
+                "the {exc} half should use repr() separators -- THIS is the "
+                "half a single-spelling detector cannot see")
+
+    def test_policy_report_carries_neither_spelling(self, unreadable_config):
+        """THE LAYER THAT WAS ACTUALLY WRONG.
+
+        `policy.report()` is unscrubbed -- no tool wrapper below it -- so this
+        is where the doubled spelling would survive intact.
+        """
+        from naukri_server import policy
+
+        out = policy.report()
+        cfg = str(unreadable_config)
+
+        assert_path_absent(out, cfg, "policy.report() [single]")
+        assert_path_absent(out, _doubled(cfg), "policy.report() [repr]")
+        assert_no_absolute_path(out, "policy.report()")
+
+    async def test_the_tool_payload_carries_neither_spelling(
+            self, unreadable_config):
+        r"""The tool boundary. Expected to survive already, because
+        `utils._DRIVE_PATH_RE` matches `D:\` regardless of what follows and
+        reduces it to a basename -- but that is DEGRADED-not-leaking, not a
+        pass, so it is asserted rather than assumed."""
+        from naukri_server.tools.config_tool import naukri_config
+
+        result = await naukri_config()
+        cfg = str(unreadable_config)
+
+        assert_path_absent(result, cfg, "naukri_config() [single]")
+        assert_path_absent(result, _doubled(cfg), "naukri_config() [repr]")
+        assert_no_absolute_path(result, "naukri_config()")
+
+    def test_the_error_is_still_an_answer(self, unreadable_config):
+        """Leak-free is half the requirement; it must still be readable."""
+        from naukri_server import policy
+
+        err = policy.report()["config_error"] or ""
+        assert "jobhunt.json" in err, "which file failed was scrubbed away"
+        assert "Permission denied" in err, "why it failed was scrubbed away"
+        assert "/" in err, (
+            "collapsed to a bare basename (%r) -- the reader cannot tell which "
+            "jobhunt.json" % err)

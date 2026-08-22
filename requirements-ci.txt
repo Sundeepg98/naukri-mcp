@@ -74,4 +74,21 @@
 # 998baf1 is jobcore master, CI-verified green, a descendant of d1720c3, and
 # carries `self_stamp`, the `version` field on BuildStamp, and
 # `source: "git" | "package" | "unknown"`.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@998baf12aa1095fae8cc8cdb7de4b44fe469019f
+# FOURTH ENTRY, and it is the THIRD RULE running in reverse. jobcore 6acc7e6
+# fixes a leak this repo inherits: OSError.__str__ renders its filename through
+# repr(), so on Windows a path reaches an error message with DOUBLED
+# separators, and relativise_known searched only the single spelling. One
+# sentence got two opposite verdicts -- f"cannot read {path}: {exc}" writes
+# {path} single and {exc} doubled, so the first half was relativised and the
+# second half published the layout.
+#
+# Nothing in naukri CHANGES for this; only this line does. And the local suite
+# cannot see the difference either way, because the venv has jobcore editable
+# from ../jobcore and is already running the fix. CI installs THIS commit and
+# is the only place the pin is load-bearing -- the same asymmetry as the stale
+# pin above, pointing the other way: there a local green hid a broken CI, here
+# a local green hides a fix CI does not have.
+#
+# 6acc7e6 is CI-green and a descendant of 998baf1; it touches only paths.py and
+# adds no public name, so the pin check passes across the bump unchanged.
+jobcore @ git+https://github.com/Sundeepg98/jobcore@6acc7e6c6949676863a4e22e68bcfeae479f5026
