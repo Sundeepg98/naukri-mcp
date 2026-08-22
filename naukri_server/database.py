@@ -300,6 +300,66 @@ def _application_extra(app: dict) -> Optional[str]:
     return json.dumps(merged) if merged else None
 
 
+_UPSERT_APPLICATION_SQL = """
+            INSERT INTO applications (job_id, title, company, status, applied_at, source,
+                                      ars_score, star_rating, job_activity, company_rating,
+                                      is_open, view_count, follow_up_priority, last_synced,
+                                      extra)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                title=excluded.title, company=excluded.company, status=excluded.status,
+                ars_score=excluded.ars_score, star_rating=excluded.star_rating,
+                job_activity=excluded.job_activity, company_rating=excluded.company_rating,
+                is_open=excluded.is_open, view_count=excluded.view_count,
+                follow_up_priority=excluded.follow_up_priority, last_synced=excluded.last_synced,
+                -- Never blank an existing blob with a NULL: a caller that passes
+                -- only the column fields must not erase a real applied_date we
+                -- already captured on an earlier sync.
+                extra=COALESCE(excluded.extra, applications.extra)
+"""
+
+
+def _application_row(app: dict) -> tuple:
+    """Bind one application dict to the upsert parameter tuple."""
+    rating = app.get("company_rating")
+    return (
+        app.get("job_id"), app.get("title"), app.get("company"),
+        app.get("status", "applied"), app.get("applied_at"),
+        app.get("source", "manual"), app.get("ars_score"),
+        app.get("star_rating"), app.get("job_activity"),
+        json.dumps(rating) if isinstance(rating, dict) else rating,
+        app.get("is_open"), app.get("view_count"),
+        app.get("follow_up_priority", 50), app.get("last_synced"),
+        _application_extra(app),
+    )
+
+
+async def upsert_applications(apps: list) -> int:
+    """Upsert many applications over ONE connection. Returns the row count.
+
+    ``upsert_application`` opens a fresh aiosqlite connection per call --
+    connect, PRAGMA x3, write, commit, close. A sync persists every application
+    it knows about, so on his 162 rows that was 162 connections against a file
+    the scheduler, the watchdog and any live tool are also using. It timed out a
+    real sync at the `persist` saga step after 30s on 2026-08-22.
+
+    Measured, and worth stating precisely: the per-row cost is NOT the `extra`
+    column added by the retention fix (162 rows benchmarked at 1.79s WITH extra
+    vs 1.98s without -- free). It is the connection churn. One connection and
+    one executemany removes it.
+    """
+    if not apps:
+        return 0
+    db = await get_db()
+    try:
+        await db.executemany(_UPSERT_APPLICATION_SQL,
+                             [_application_row(a) for a in apps])
+        await db.commit()
+        return len(apps)
+    finally:
+        await db.close()
+
+
 async def upsert_application(app: dict):
     """Insert or update an application."""
     db = await get_db()

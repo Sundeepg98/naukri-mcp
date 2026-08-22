@@ -420,7 +420,9 @@ async def _sync_applications(
         else:
             job["status"] = "applied"
 
-    from naukri_server.database import list_all_applications, upsert_application
+    from naukri_server.database import (
+        list_all_applications, upsert_application, upsert_applications,
+    )
     from naukri_server.sagas import SagaExecutor
 
     local_apps = await list_all_applications()
@@ -476,8 +478,11 @@ async def _sync_applications(
         return {"status_changes_count": len(status_changes)}
 
     async def step_persist():
-        for app in local_apps:
-            await upsert_application(app)
+        # ONE connection for the whole batch. Row-at-a-time opened a fresh
+        # aiosqlite connection per application -- 162 of them on his account,
+        # against a file the scheduler and watchdog are also using -- and timed
+        # this step out at 30s on 2026-08-22.
+        await upsert_applications(local_apps)
         return {"persisted": len(local_apps)}
 
     async def step_emit_events():
