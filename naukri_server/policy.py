@@ -331,27 +331,63 @@ def relativise_known_paths(text, loaded: Loaded):
     )
 
 
+def _relativise_node(node, loaded: Loaded):
+    """One node of :func:`relativise_mapping`'s walk.
+
+    Split out so `relativise_mapping` can keep its "a mapping, or nothing"
+    contract at the top while the walk below it is uniform. Container TYPES are
+    rebuilt as themselves because callers compare this dict against the one
+    they passed in, and jobcore's payload is JSON-shaped -- dict, list, str,
+    number, None -- so the recursion is finite: a JSON document cannot express
+    a cycle.
+    """
+    if isinstance(node, dict):
+        return {key: _relativise_node(value, loaded)
+                for key, value in node.items()}
+    if isinstance(node, list):
+        return [_relativise_node(item, loaded) for item in node]
+    if isinstance(node, tuple):
+        return tuple(_relativise_node(item, loaded) for item in node)
+    return relativise_known_paths(node, loaded)
+
+
 def relativise_mapping(payload, loaded: Loaded):
-    """:func:`relativise_known_paths` over every string value of a flat dict.
+    """:func:`relativise_known_paths` over EVERY string in a payload, at any depth.
 
     For jobcore's `apply_patch` return, which this server hands back verbatim
-    and which carries a path in three places: `path` on SUCCESS,
-    `ledger_error`, and `detail` on a lock conflict. Passing that dict through
-    untouched is how a leak survived a sweep that had already cleaned every
-    path FIELD on the report beside it -- error paths are where everyone looks,
-    and this one is on the success payload.
+    and which carries a path in FOUR places: `path` on SUCCESS, `ledger_error`,
+    `detail` on a lock conflict, and `searched` on `no_config_file` -- which is
+    a LIST. Passing that dict through untouched is how a leak survived a sweep
+    that had already cleaned every path FIELD on the report beside it -- error
+    paths are where everyone looks, and the first of these is on the success
+    payload.
 
-    Non-string values pass through, because the upstream returns anything that
-    is not a string unchanged. Deliberately identical to
-    `uplers_server.policy.relativise_mapping`: the two servers hand back the
-    same jobcore dict, and two renderers that disagree is the drift `report()`
-    already had to be rescued from.
+    THE WALK IS FULL RECURSION -- dicts, lists and tuples at any depth, every
+    string leaf rendered -- and NOT the "non-strings pass through" rule this
+    used to carry. That rule was MEASURED leaking on 2026-08-22: `detail` and
+    `searched` are composed from the SAME path on the `no_config_file` branch,
+    the string was rendered and the list beside it was not, so one payload had
+    one field right and its neighbour wrong. Full depth rather than one level
+    because `changed` is `{key: [old, new]}` over arbitrary config values and a
+    path can therefore sit two containers down; a depth limit would be an
+    arbitrary line, and this leak is what crossing one looks like.
+
+    DEPTH IS FREE BECAUSE THE SUBSTITUTION IS EXACT. `relativise_known`
+    replaces only strings the snapshot ALREADY KNOWS are paths, never
+    path-shaped text, so walking into a list cannot begin eating a Naukri API
+    route or a `https://www.naukri.com/...` job URL: it can only replace a
+    string equal to a known path, which is the correct rendering wherever that
+    string appears. Dict KEYS are deliberately left alone -- a key here is a
+    config key name, never a path, and rendering keys could only ever collide
+    two of them into one.
+
+    Deliberately identical to `uplers_server.policy.relativise_mapping`: the
+    two servers hand back the same jobcore dict, and two renderers that
+    disagree is the drift `report()` already had to be rescued from.
     """
     if not isinstance(payload, dict):
         return payload
-    return {
-        key: relativise_known_paths(value, loaded) for key, value in payload.items()
-    }
+    return _relativise_node(payload, loaded)
 
 
 def report(section: Optional[str] = None) -> dict:

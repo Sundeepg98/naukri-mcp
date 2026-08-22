@@ -387,6 +387,12 @@ class TestTheSubstitutionStaysExact:
 
         Pinned because the fix runs over jobcore's whole return, which carries
         `revision`, `changed` and `holder_pid` beside the three path fields.
+
+        SCOPE, since the walk grew depth on 2026-08-22 and this name did not:
+        what is asserted here is that a payload holding NO known path comes back
+        equal to itself, types and all -- a scalar is not rendered and a
+        container is not retyped. Strings nested inside containers ARE now
+        visited; `TestTheWalkGoesAllTheWayDown` below is where that is pinned.
         """
         import naukri_server.policy as naukri_policy
 
@@ -395,3 +401,286 @@ class TestTheSubstitutionStaysExact:
                    "changed": {"candidate.years_experience": [None, 5]}}
         assert naukri_policy.relativise_mapping(payload, snap) == payload
         assert naukri_policy.relativise_mapping("not a dict", snap) == "not a dict"
+
+
+# =====================================================================
+# 4. The FOURTH branch, where the path is not a string but a LIST
+# =====================================================================
+# `no_config_file` returns `searched` as a list of absolute paths beside a
+# `detail` string built from the same path. The string half was already
+# rendered; the list half was not, because the walk stopped at a flat dict's
+# string values. One payload with one field right and its neighbour wrong.
+#
+# `searched` is the field whose entire job is answering "why is my config file
+# not being read", which makes the naukri rendering of it especially bad:
+# `utils.scrub_result` collapses every entry to the identical string
+# `jobhunt.json`, so a reader comparing two candidate locations sees one.
+#
+# MEASURED at layer 2 on 2026-08-22, this box, before any edit::
+#
+#     "detail":   "JOBHUNT_CONFIG=~/AppData/.../does-not-exist/jobhunt.json
+#                  points at no file"                       <- rendered
+#     "searched": ["C:\\Users\\Dell\\AppData\\...\\jobhunt.json"]  <- raw
+#     scrub_result(...)["searched"] == ["jobhunt.json"]     <- leak-free, useless
+#
+# The identical measurement was taken on the uplers server, which has no
+# boundary scrubber at all and so ships the raw path on every platform. The fix
+# is one shape in both repos; see `uplers_server/policy.py`.
+
+
+def _one_level_only(payload, loaded):
+    """THE REJECTED ALTERNATIVE, kept executable so the choice is a measurement.
+
+    "Walk one level" means: render a string value, and render the string
+    ELEMENTS of a value that is a list. It fixes `searched` and it does not
+    reach `changed`, whose values are `{key: [old, new]}` one level further
+    down. Full recursion was chosen instead; this exists so that choice is
+    pinned by a test that FAILS on the shallower rule rather than by a comment.
+    """
+    import naukri_server.policy as naukri_policy
+
+    out = {}
+    for key, value in payload.items():
+        if isinstance(value, list):
+            out[key] = [naukri_policy.relativise_known_paths(item, loaded)
+                        for item in value]
+        else:
+            out[key] = naukri_policy.relativise_known_paths(value, loaded)
+    return out
+
+
+def _bind_missing_config(monkeypatch, where: Path) -> Path:
+    """Bind a config path that DOES NOT EXIST, and prove nothing resolves.
+
+    The safety gate is stronger here than in `_bind_config` and for a different
+    reason: on this branch `apply_patch` returns before it opens anything, so
+    the proof required is that no REAL config file resolves at all. If one did,
+    the call would stop taking the branch under test and would start writing
+    the file every server in this family shares.
+    """
+    import naukri_server.policy as naukri_policy
+
+    where.mkdir(parents=True, exist_ok=True)
+    cfg = where / "jobhunt.json"
+    assert not cfg.exists(), cfg
+    monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+    naukri_policy.invalidate()
+
+    located = jobcore_config.locate(naukri_policy._START)
+    assert not located.found, (
+        "REFUSING TO CONTINUE: a real config file resolved at %r"
+        % (getattr(located, "path", None),)
+    )
+    assert located.searched, "locate() searched nothing; the branch is not armed"
+    for entry in located.searched:
+        assert str(where) in str(entry), (
+            "REFUSING TO CONTINUE: locate() names %r, outside the temp dir %r"
+            % (entry, where)
+        )
+    return cfg
+
+
+@pytest.fixture
+def missing_config(tmp_path, monkeypatch):
+    """`JOBHUNT_CONFIG` pointing at a file that is not there."""
+    import naukri_server.policy as naukri_policy
+
+    cfg = _bind_missing_config(monkeypatch, tmp_path / "gone")
+    try:
+        yield cfg
+    finally:
+        naukri_policy.invalidate()
+
+
+class TestTheseListAssertionsCanFail:
+    """Controls. Every assertion in the next class says a path is ABSENT."""
+
+    def test_raw_jobcore_really_does_return_the_searched_list_absolute(
+            self, missing_config, tmp_path):
+        """CONTROL for the branch, and it runs on every OS.
+
+        If jobcore ever rendered `searched` itself, the leak test below would
+        pass while proving nothing about this server.
+        """
+        located = jobcore_config.locate(missing_config.parent)
+        assert not located.found, located
+        raw = jobcore_config.apply_patch(
+            PATCH, start=missing_config.parent, actor="test",
+            allowed_sections=("candidate",))
+
+        assert raw["status"] == "no_config_file", raw
+        assert raw["searched"], "the branch returned no searched list at all"
+        assert any(str(tmp_path) in entry for entry in raw["searched"]), (
+            "jobcore no longer bakes the absolute path into `searched`; the "
+            "absence assertions below prove nothing"
+        )
+
+    def test_the_primary_detector_sees_a_path_inside_a_list(self, tmp_path):
+        """CONTROL for the instrument on the SHAPE this slice is about.
+
+        `assert_path_absent` was only ever shown firing on a path in a string
+        FIELD. A detector that walks dicts but not lists would report CLEAN on
+        exactly the payload below and certify the leak as fixed.
+        """
+        leaking = {"status": "no_config_file",
+                   "searched": [str(tmp_path / "gone" / "jobhunt.json")]}
+        assert contains_path(leaking, str(tmp_path))
+        with pytest.raises(AssertionError):
+            assert_path_absent(leaking, str(tmp_path))
+
+    def test_a_one_level_walk_leaves_the_changed_payload_absolute(
+            self, config_file, tmp_path):
+        """CONTROL that turns the depth choice into a measurement.
+
+        This is the shallower rule this slice rejected, run against the payload
+        that separates the two. It renders `searched` and it does NOT render the
+        path sitting inside `changed`, which is where jobcore puts `{key: [old,
+        new]}` pairs of arbitrary config values. If this ever stops failing to
+        render, one level became sufficient and the recursion can be narrowed.
+        """
+        import naukri_server.policy as naukri_policy
+
+        snap = naukri_policy.snapshot()
+        payload = {"searched": [str(config_file)],
+                   "changed": {"servers.naukri.export_dir": [str(config_file),
+                                                             None]}}
+        shallow = _one_level_only(payload, snap)
+
+        assert not contains_path(shallow["searched"], str(tmp_path)), (
+            "the one-level rule cannot even render `searched`; this control is "
+            "measuring something other than depth"
+        )
+        assert contains_path(shallow["changed"], str(tmp_path)), (
+            "the one-level rule now reaches `changed` too, so the recursion "
+            "chosen here is wider than it needs to be"
+        )
+
+
+class TestTheSearchedListIsRendered:
+
+    def test_the_no_config_file_branch_does_not_leak_the_searched_list(
+            self, missing_config, tmp_path):
+        """THE LEAK. A list of absolute paths, beside a string that was fine."""
+        import naukri_server.policy as naukri_policy
+
+        result = naukri_policy.apply_patch(PATCH, actor="test")
+
+        assert result["status"] == "no_config_file", result
+        assert result["searched"], result
+        assert_path_absent(result, str(tmp_path), "apply_patch no_config_file")
+        assert_path_absent(result, _doubled(str(tmp_path)),
+                           "apply_patch no_config_file")
+        assert_no_absolute_path(result, "apply_patch no_config_file")
+
+    def test_two_missing_candidates_do_not_render_alike(
+            self, tmp_path, monkeypatch):
+        """STILL AN ANSWER, on the field whose whole job is being one.
+
+        `utils.scrub_result` renders every entry of this list as the bare
+        basename `jobhunt.json` today, under which two candidate locations read
+        identically -- out of the one field a reader consults to find out which
+        location was tried. A fix that reproduces that collapse must fail here.
+        """
+        import naukri_server.policy as naukri_policy
+
+        alpha = _bind_missing_config(monkeypatch, tmp_path / "alpha")
+        one = naukri_policy.apply_patch(PATCH, actor="test")
+        assert one["status"] == "no_config_file", one
+
+        beta = _bind_missing_config(monkeypatch, tmp_path / "beta")
+        two = naukri_policy.apply_patch(PATCH, actor="test")
+        assert two["status"] == "no_config_file", two
+
+        # CONTROL: the two candidates really are indistinguishable by basename.
+        assert alpha.name == beta.name == "jobhunt.json"
+        assert one["searched"] and two["searched"], (one, two)
+        assert one["searched"] != two["searched"], (
+            "two different candidate paths render identically as %r"
+            % (one["searched"],)
+        )
+        for entry in one["searched"]:
+            assert entry.endswith("alpha/jobhunt.json"), entry
+        for entry in two["searched"]:
+            assert entry.endswith("beta/jobhunt.json"), entry
+
+
+class TestTheWalkGoesAllTheWayDown:
+    """FULL RECURSION, chosen over one level, pinned here rather than described.
+
+    `changed` on the SUCCESS payload is `{key: [old, new]}` over arbitrary
+    config values, so a path can sit two containers below the top. Depth costs
+    nothing in safety because `relativise_known` only ever replaces a string
+    the snapshot ALREADY KNOWS is a path -- the exactness, not the depth, is
+    what keeps a URL or an API route out of reach. A depth limit would be an
+    arbitrary line that the next jobcore field crosses, and this leak is what
+    that line looks like when it is crossed.
+    """
+
+    def test_a_known_path_nested_two_containers_deep_is_rendered(
+            self, config_file, tmp_path):
+        import naukri_server.policy as naukri_policy
+
+        snap = naukri_policy.snapshot()
+        payload = {"status": "ok",
+                   "changed": {"servers.naukri.export_dir":
+                               [str(config_file), None]}}
+
+        rendered = naukri_policy.relativise_mapping(payload, snap)
+
+        assert_path_absent(rendered, str(tmp_path), "relativise_mapping deep")
+        # STILL AN ANSWER, and still the same shape.
+        old, new = rendered["changed"]["servers.naukri.export_dir"]
+        assert new is None
+        assert old.endswith("config/jobhunt.json"), old
+
+    def test_a_tuple_stays_a_tuple_and_a_list_stays_a_list(
+            self, config_file):
+        """Types survive the walk, because a caller compares them.
+
+        `Loaded.searched` is a tuple and jobcore's payload lists are lists;
+        rebuilding either as the other would break equality for every consumer
+        that round-trips this dict, including the mixed-payload test above.
+        """
+        import naukri_server.policy as naukri_policy
+
+        snap = naukri_policy.snapshot()
+        out = naukri_policy.relativise_mapping(
+            {"a": [1, 2], "b": (1, 2), "c": {"d": [3]}}, snap)
+
+        assert isinstance(out["a"], list) and out["a"] == [1, 2]
+        assert isinstance(out["b"], tuple) and out["b"] == (1, 2)
+        assert out["c"] == {"d": [3]}
+
+    def test_a_url_and_an_api_route_inside_a_list_survive(self, config_file):
+        """The exactness that makes walking into a list safe at all.
+
+        A loose "looks like a path" rule flagged two CORRECT platform URLs in a
+        real payload on 2026-08-22. Walking deeper multiplies the number of
+        strings a heuristic would get to be wrong about, which is exactly why
+        the substitution must stay exact -- and why this control lives next to
+        the depth increase rather than somewhere else.
+        """
+        import naukri_server.policy as naukri_policy
+
+        snap = naukri_policy.snapshot()
+        payload = {"searched": [
+            "https://www.naukri.com/job-listings-node-developer-abc-123",
+            "GET /jobapi/v3/search returned 500",
+            "http://localhost:8765/preview",
+        ]}
+        assert naukri_policy.relativise_mapping(payload, snap) == payload
+
+    def test_but_a_known_path_in_that_same_list_is_replaced(
+            self, config_file, tmp_path):
+        """CONTROL for the test above: the deep walk is not simply inert."""
+        import naukri_server.policy as naukri_policy
+
+        snap = naukri_policy.snapshot()
+        payload = {"searched": ["https://www.naukri.com/x", str(config_file)]}
+
+        rendered = naukri_policy.relativise_mapping(payload, snap)
+
+        assert rendered != payload, "nothing was substituted at all"
+        assert rendered["searched"][0] == "https://www.naukri.com/x"
+        assert_path_absent(rendered, str(tmp_path), "relativise_mapping list")
+        assert "jobhunt.json" in rendered["searched"][1], rendered
