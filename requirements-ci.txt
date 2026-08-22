@@ -34,4 +34,29 @@
 # module. THE RULE: any commit here that adds a `from jobcore...` import of
 # something new bumps this line in the SAME commit, and the bump is verified by
 # installing this file into a throwaway venv -- not by running the local suite.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@16ae934bca8aeff409674f6b89153d781868360e
+#
+# AND IT HAPPENED AGAIN, 2026-08-22, with the rule already written above.
+# Commit 8a8f596 added `naukri_server/buildinfo.py` (imports `jobcore.buildinfo`)
+# and made `policy.display_path` delegate to `jobcore.paths` -- two modules that
+# do not exist at 16ae934. `git ls-tree --name-only 16ae934 src/jobcore/` lists
+# seven files and neither of those is among them, so CI would have installed the
+# pin and died at COLLECTION with `ModuleNotFoundError: No module named
+# 'jobcore.buildinfo'`, with every local run staying green for exactly the
+# reason the paragraph above gives. The follow-up commit then also needed
+# `Loaded.report(display=...)`, `Loaded.status_for`, `Loaded.known_paths` and
+# `jobcore.paths.relativise_known`, all of which arrived in 0f557eb.
+#
+# So this is not "the rule was unclear" -- the rule was written down and the
+# bump was still forgotten, because nothing MECHANICAL checked it.
+# tests/test_jobcore_pin.py is that check: it reads this line and asserts every
+# `jobcore.<module>` the package imports exists in the pinned tree. It runs off
+# the local ../jobcore clone and skips when that clone is absent, so it catches
+# the mistake before a push rather than after a CI round trip.
+#
+# SECOND RULE, same day: PIN A COMMIT WHOSE OWN CI IS GREEN. 0f557eb carries
+# everything named above and was the obvious target, but its jobcore CI run was
+# RED. Pinning a red commit makes a green naukri CI mean nothing -- naukri would
+# be certifying itself against a dependency nobody had certified. d1720c3 is
+# jobcore master, is CI-verified green, and is a descendant of 0f557eb, so it
+# contains every module and API listed above.
+jobcore @ git+https://github.com/Sundeepg98/jobcore@d1720c3b5709adf082ff5be26d23c76d8647d599

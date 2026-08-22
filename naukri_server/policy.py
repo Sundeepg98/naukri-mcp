@@ -309,18 +309,31 @@ def report(section: Optional[str] = None) -> dict:
     edit do nothing?" is answerable without reading source.
     """
     snap = snapshot()
-    out = snap.report(SERVER_NAME)
+    # ONE PLACE RENDERS A PATH, and it is jobcore's, driven by our anchor.
+    #
+    # This used to call `snap.report(SERVER_NAME)` and then post-process
+    # `source` and `searched` by hand. Two defects came out of that on
+    # 2026-08-22:
+    #
+    # 1. THE PROSE WAS NEVER RENDERED. jobcore composes its failure messages as
+    #    f-strings with the path already baked in -- `f"{path} is not valid
+    #    JSON: {exc}"` -- and stores them in `config_error`. Post-processing the
+    #    path FIELDS left that string absolute. `utils.scrub_result` caught it
+    #    at the tool boundary, but only by collapsing the path to its bare
+    #    basename, which is the exact degradation `display_path` exists to
+    #    prevent; and any caller of this function that is not a tool got the
+    #    raw absolute path.
+    # 2. `config_status` WAS OVERWRITTEN WITH A LIE. The hand-rolled version was
+    #    composed from `source` alone and discarded `config_error` entirely, so
+    #    an UNPARSEABLE file reported "loaded from <file>". It had not loaded.
+    #    jobcore's own property says "error: ..." and is simply correct.
+    #
+    # Passing `display` down fixes both, and deleting the post-processing is
+    # the load-bearing half: two renderers would drift apart, and the second
+    # one is what discarded the error.
+    out = snap.report(SERVER_NAME, display=display_path)
     out["unknown_keys"] = [k for k in out.get("unknown_keys", ())
                            if k not in ENVELOPE_KEYS]
-    out["source"] = display_path(out.get("source"))
-    out["searched"] = [display_path(s) for s in out.get("searched", ())]
-    if out.get("source") is None:
-        out["config_status"] = (
-            "no file found; built-in defaults in use. searched: "
-            + (", ".join(out["searched"]) if out["searched"] else "(nothing)")
-        )
-    else:
-        out["config_status"] = f"loaded from {out['source']}"
     out["server_name"] = SERVER_NAME
     out["writable_sections"] = list(WRITABLE_SECTIONS)
     out["not_loadable_here"] = [f"servers.{SERVER_NAME}.{k}" for k in NOT_LOADABLE]
