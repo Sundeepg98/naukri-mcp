@@ -26,6 +26,13 @@ DISAGREEING opinions about what the numbers meant.
 
 import pytest
 
+# Imported directly, NOT via pytest.importorskip. jobcore is a HARD dependency
+# -- naukri_server.scoring imports ScoringEngine unconditionally -- so skipping
+# on its absence would report a broken environment as a green run. Four
+# importorskip calls sat here until 2026-08-22; see tests/test_suite_integrity.py,
+# which bans them and explains the two measured ways a suite shrinks silently.
+from jobcore.scoring import ScoringEngine
+
 from naukri_server.domain.job import WORK_MODE_CODES, normalize_work_mode
 from naukri_server.services.search_service import WORK_MODE_MAP
 
@@ -58,7 +65,7 @@ class TestTheScoringConsequence:
     """THE regression, at the level that actually cost him points."""
 
     def test_a_remote_job_scores_the_remote_bonus_not_zero(self):
-        engine = pytest.importorskip("jobcore.scoring").ScoringEngine()
+        engine = ScoringEngine()
 
         raw_code_score = engine.score_work_mode("2")          # what used to arrive
         decoded_score = engine.score_work_mode(normalize_work_mode("2"))
@@ -70,12 +77,12 @@ class TestTheScoringConsequence:
         assert decoded_score == 5, "a remote job must earn the remote bonus"
 
     def test_a_hybrid_job_scores_the_hybrid_bonus(self):
-        engine = pytest.importorskip("jobcore.scoring").ScoringEngine()
+        engine = ScoringEngine()
         assert engine.score_work_mode(normalize_work_mode("3")) == 3
 
     def test_every_response_code_maps_to_something_the_scorer_knows(self):
         """CONTROL: a decode the scorer cannot categorise is not a decode."""
-        engine = pytest.importorskip("jobcore.scoring").ScoringEngine()
+        engine = ScoringEngine()
         for code in WORK_MODE_CODES:
             word = normalize_work_mode(code)
             assert engine.work_mode_category(word) is not None, (code, word)
@@ -170,7 +177,7 @@ class TestListEndpointsHaveNoModeField:
         ], 10)
         assert [r["work_mode"] for r in rows] == ["remote", "hybrid", None]
 
-        engine = pytest.importorskip("jobcore.scoring").ScoringEngine()
+        engine = ScoringEngine()
         assert [engine.score_work_mode(r["work_mode"]) for r in rows] == [5, 3, 0]
 
     def test_an_explicit_field_still_wins_over_the_label(self):

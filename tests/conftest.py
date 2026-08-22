@@ -1,9 +1,108 @@
 """Shared test fixtures for Naukri MCP tests."""
 
 import asyncio
+import importlib
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+
+# ---------------------------------------------------------------------------
+# HARD-DEPENDENCY PREFLIGHT - runs BEFORE collection, so a broken environment
+# reports one actionable line instead of a wall of import errors.
+#
+# MEASURED 2026-08-22, both mechanisms, on this repo:
+#
+#   1. With `jobcore` unimportable, `pytest tests/` produces "Interrupted: 50
+#      errors during collection" and exits 2. That is loud on its own - but
+#      `pytest ... | tail -5` reports the PIPELINE's exit code, which is
+#      tail's 0. A caller that trusts the exit code sees a broken run as a
+#      passing one, and the 50 ERROR lines say nothing about what to do.
+#   2. `pytest.importorskip("jobcore.scoring")` converted the same missing
+#      dependency into SKIPS at four sites, and a skip reads as green. See
+#      tests/test_suite_integrity.py, which now bans that on a hard dep.
+#
+# This preflight answers (1): it aborts at sessionstart, so its message is the
+# LAST thing printed and survives a `| tail`. It names the remediation, which
+# a collection traceback does not.
+#
+# The check is a plain function so it can be pointed at synthetic input and
+# shown both detecting and staying silent - a guard that has never been run
+# against a known-bad environment certifies nothing.
+# ---------------------------------------------------------------------------
+
+#: Every module the package imports UNCONDITIONALLY. Not "nice to have":
+#: naukri_server/domain/salary.py, scoring.py and policy.py all import these
+#: at module scope, so if one is missing the package does not import at all.
+HARD_DEPENDENCIES = (
+    "jobcore",
+    "jobcore.buildinfo",
+    "jobcore.config",
+    "jobcore.fit",
+    "jobcore.paths",
+    "jobcore.policy",
+    "jobcore.salary",
+    "jobcore.scoring",
+    "jobcore.skills",
+)
+
+REMEDIATION = "python -m pip install -e ../jobcore"
+
+
+def missing_hard_dependencies(names=HARD_DEPENDENCIES):
+    """Return [(module_name, exception)] for every name that will not import.
+
+    Deliberately catches Exception, not just ImportError: a dependency that
+    imports but raises on import is just as broken, and a bare ImportError
+    catch would let that one through silently.
+    """
+    missing = []
+    for name in names:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - any failure is a broken dep
+            missing.append((name, exc))
+    return missing
+
+
+def pytest_collection_finish(session):
+    """Record which test MODULES actually contribute a test that will RUN.
+
+    `pytest_collection_finish`, not `pytest_collection_modifyitems`: marker
+    deselection (`addopts = -m "not e2e"`) is itself implemented as a
+    modifyitems hook, and hook ordering meant an earlier version of this saw
+    the PRE-deselection list - so a module whose every test had been deselected
+    still counted as contributing. That is precisely the silent shrinkage this
+    exists to catch, so it has to measure what SURVIVES selection.
+    `session.items` at collection_finish is that final list.
+
+    Stashed on `config` rather than a module global: pytest may load this
+    conftest under a different module identity than a plain
+    `from tests.conftest import ...` would resolve, and a stale empty set would
+    make the completeness check vacuous.
+    """
+    modules = set()
+    for item in session.items:
+        path = getattr(item, "path", None) or getattr(item, "fspath", None)
+        if path is not None:
+            modules.add(Path(str(path)).name)
+    session.config._naukri_collected_modules = modules
+
+
+def pytest_sessionstart(session):
+    missing = missing_hard_dependencies()
+    if not missing:
+        return
+    raise pytest.UsageError(
+        "HARD DEPENDENCY MISSING - this suite cannot run and any result it "
+        "printed would be measuring a partial tree.\n"
+        + "\n".join("    %s -> %s: %s" % (name, type(exc).__name__, exc)
+                    for name, exc in missing)
+        + "\n\n    FIX: %s\n" % REMEDIATION
+        + "    (jobcore is installed EDITABLE from the sibling checkout on "
+          "purpose - putting its git URL in requirements.txt clobbers the "
+          "editable install. See requirements-ci.txt.)"
+    )
 
 
 # ---------------------------------------------------------------------------
