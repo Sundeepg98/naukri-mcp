@@ -727,7 +727,15 @@ async def get_stale_applications_raw(days_threshold: int = STALE_THRESHOLD_DAYS)
 # ---------------------------------------------------------------------------
 
 async def get_recruiter_history():
-    """Aggregate applications by company with min/max applied_at and response detection."""
+    """Aggregate applications by company with min/max applied_at and response detection.
+
+    Returns EVERY company, not a top-N slice. The caller decides how many rows to
+    show; only the caller can also report an honest total. This used to end in
+    ``LIMIT 20``, and ``recruiter_history`` then published ``len(rows)`` as
+    ``total_companies`` -- so an account with 115 distinct companies reported 20,
+    and responsive/unresponsive counts silently described the top 20 rather than
+    the portfolio (measured on the live account, 2026-08-22).
+    """
     db = await get_db()
     try:
         cursor = await db.execute("""
@@ -741,7 +749,6 @@ async def get_recruiter_history():
             WHERE company IS NOT NULL
             GROUP BY company
             ORDER BY COUNT(*) DESC
-            LIMIT 20
         """)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]

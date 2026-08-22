@@ -311,8 +311,13 @@ async def draft_follow_up(job_id: str) -> dict:
     }
 
 
-async def recruiter_history() -> dict:
-    """Aggregate per-recruiter communication history from applications + inbox."""
+async def recruiter_history(limit: int = 20) -> dict:
+    """Aggregate per-recruiter communication history from applications + inbox.
+
+    Args:
+        limit: How many company rows to return, most-applied first. The
+            *_count fields always describe every company, not this slice.
+    """
     from naukri_server.database import get_recruiter_history as db_get_history
 
     rows = await db_get_history()
@@ -331,12 +336,18 @@ async def recruiter_history() -> dict:
             "has_response": has_response,
         })
 
+    # Counts describe the WHOLE portfolio; `companies` is only the page shown.
+    # Computing them off the slice is what made total_companies read 20 when the
+    # real figure was 115.
+    shown = companies[:limit] if limit else companies
     return {
         "status": "success",
         "total_companies": len(companies),
         "responsive_count": sum(1 for c in companies if c["has_response"]),
         "unresponsive_count": sum(1 for c in companies if not c["has_response"]),
-        "companies": companies,
+        "returned": len(shown),
+        "has_more": len(shown) < len(companies),
+        "companies": shown,
     }
 
 

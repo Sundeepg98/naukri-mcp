@@ -4,6 +4,7 @@ from typing import Optional
 
 from naukri_server import mcp
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.validation import validate_limit
 from naukri_server.interfaces import api_client  # noqa: F401 — re-exported for test patching
 from naukri_server.config import (
     logger, BATCH_APPLY_DEFAULT_DELAY_MS, BATCH_APPLY_DEFAULT_CONCURRENCY,
@@ -175,16 +176,22 @@ async def naukri_draft_follow_up(
 
 
 @mcp.tool()
-async def naukri_recruiter_history() -> dict:
+async def naukri_recruiter_history(limit: int = 20) -> dict:
     """Aggregate per-company communication history from tracked applications.
 
     Groups by company, counts applications, tracks response status, and sorts by volume.
 
+    Args:
+        limit: How many company rows to return, most-applied first (default 20).
+            The three *_count fields always describe EVERY company you have
+            applied to, not just the rows returned here.
+
     Returns:
-        {status, total_companies, responsive_count, unresponsive_count, companies}
+        {status, total_companies, responsive_count, unresponsive_count,
+         returned, has_more, companies}
     """
     return await handle_tool_action(
-        lambda: _recruiter_history(),
+        lambda: _recruiter_history(limit=validate_limit(limit)),
         "applications.recruiter_history",
     )
 
