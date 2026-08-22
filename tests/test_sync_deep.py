@@ -29,7 +29,7 @@ class TestSyncNeverDeletes:
     @patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock)
-    @patch("naukri_server.database.upsert_application", new_callable=AsyncMock)
+    @patch("naukri_server.database.upsert_applications", new_callable=AsyncMock)
     @patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock)
     async def test_applications_past_the_old_horizon_are_kept_and_persisted(
@@ -48,7 +48,10 @@ class TestSyncNeverDeletes:
         result = await _sync_applications()
 
         assert result["status"] == "success"
-        upserted_ids = [call.args[0]["job_id"] for call in mock_upsert.call_args_list]
+        # persist writes the batch in ONE call now (see upsert_applications),
+        # so the ids come from the list it was handed rather than one call each.
+        upserted_ids = [a["job_id"] for call in mock_upsert.call_args_list
+                        for a in call.args[0]]
         assert "old1" in upserted_ids, "a 200-day-old application must survive a sync"
         assert "recent1" in upserted_ids
         assert result["purged"] == 0
@@ -58,7 +61,7 @@ class TestSyncNeverDeletes:
     @patch("naukri_server.tools.sync._save_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._load_sync_state_async", new_callable=AsyncMock)
     @patch("naukri_server.database.delete_applications_before", new_callable=AsyncMock)
-    @patch("naukri_server.database.upsert_application", new_callable=AsyncMock)
+    @patch("naukri_server.database.upsert_applications", new_callable=AsyncMock)
     @patch("naukri_server.database.list_all_applications", new_callable=AsyncMock)
     @patch("naukri_server.tools.sync._fetch_applied_jobs_rest", new_callable=AsyncMock)
     async def test_source_no_longer_decides_who_survives(
@@ -78,7 +81,10 @@ class TestSyncNeverDeletes:
         from naukri_server.tools.sync import _sync_applications
         result = await _sync_applications()
 
-        upserted_ids = [call.args[0]["job_id"] for call in mock_upsert.call_args_list]
+        # persist writes the batch in ONE call now (see upsert_applications),
+        # so the ids come from the list it was handed rather than one call each.
+        upserted_ids = [a["job_id"] for call in mock_upsert.call_args_list
+                        for a in call.args[0]]
         assert "manual1" in upserted_ids
         assert "synced1" in upserted_ids, "a synced row must survive exactly as a manual one does"
         assert result["purged"] == 0
