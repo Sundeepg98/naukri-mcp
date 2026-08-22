@@ -978,7 +978,13 @@ class TestDFPTargeting:
         from naukri_server.tools.profile import naukri_profile_targeting
         result = await naukri_profile_targeting()
         assert result["status"] == "success"
-        assert result["profile"]["ctc_lpa"] == 17.0
+        # Renamed from `ctc_lpa`. Profile-CTC is Naukri's ROUNDED ad-targeting
+        # bucket, and under the old name it contradicted the two tools that
+        # report his real CTC: measured live, this said 17.0 while
+        # naukri_dashboard said 12.50 and naukri_get_profile.current_ctc was
+        # 1650000. See tests/test_ctc_sources_disagree.py.
+        assert result["profile"]["targeting_ctc_bucket"] == 17.0
+        assert "ctc_lpa" not in result["profile"]
         assert result["profile"]["location"] == "Bengaluru"
         assert result["ad_slots"] == 1
 
