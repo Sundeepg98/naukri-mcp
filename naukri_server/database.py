@@ -4,6 +4,7 @@ import asyncio
 import aiosqlite
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = DATA_DIR / "naukri.db"
 _db_lock = asyncio.Lock()
+
+# Guards the metadata key that has_pending_notification splices into a JSON
+# path. Asserted at import rather than trusted: a backslash class silently
+# mangled by a shell heredoc has already cost this repo a debugging round, and
+# a regex that quietly matches everything would turn the guard into a decoy
+# without failing a single test.
+_JSON_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+assert _JSON_KEY_RE.match("constant_name") and _JSON_KEY_RE.match("job_id")
+assert not _JSON_KEY_RE.match("a.b") and not _JSON_KEY_RE.match("$.job_id")
 
 # Name of the one-shot JSON -> SQLite data migration as recorded in the
 # `migrations` ledger table. Bump the suffix only if the import ever has to
@@ -829,8 +839,10 @@ async def mark_notifications_delivered(ids: list, via: str = "brief") -> int:
         await db.close()
 
 
-async def has_pending_notification(event_type: str, job_id: str) -> bool:
-    """Is there already an undelivered notification of this type for this job?
+async def has_pending_notification(
+    event_type: str, key_value: str, metadata_key: str = "job_id",
+) -> bool:
+    """Is there already an undelivered notification of this type for this key?
 
     The dedupe predicate for repeating events. `delivered_via IS NULL` is the
     honest reading of "he has not been shown this yet": the daily brief is what
@@ -838,12 +850,26 @@ async def has_pending_notification(event_type: str, job_id: str) -> bool:
     delivered row means the notification did its job and the next due check may
     mint a fresh one.
 
-    json_extract, not `metadata LIKE '%job_id%'`: metadata is a JSON TEXT
-    column, Naukri job_ids are numeric strings that routinely share prefixes,
-    and a LIKE would suppress a real reminder for a different job.
+    json_extract, not `metadata LIKE '%key%'`: metadata is a JSON TEXT column,
+    and both key spaces nest by construction - Naukri job_ids are numeric
+    strings that routinely share prefixes, and config constant names do too
+    (DASHBOARD_API is a strict prefix of a plausible DASHBOARD_API_V2). A LIKE
+    would suppress a real notification for a different job or endpoint.
+
+    `metadata_key` selects WHICH identity in the metadata blob is the dedupe
+    key. It defaults to job_id, which is what ReminderDue and ApplicationStale
+    use. EndpointDrift is not about a job at all - it is one fact per drifted
+    config constant - so the healing router passes "constant_name".
     """
-    if not job_id:
+    if not key_value:
         return False
+    if not _JSON_KEY_RE.match(metadata_key):
+        # The JSON path is built from this argument, so a non-identifier is a
+        # programming error. Raise rather than match nothing forever: every
+        # caller wraps this in a fail-open try/except that logs and notifies
+        # anyway, so a loud failure degrades to noise, never to silence.
+        raise ValueError(
+            "metadata_key must be a plain identifier, got %r" % (metadata_key,))
     db = await get_db()
     try:
         cursor = await db.execute(
@@ -851,10 +877,10 @@ async def has_pending_notification(event_type: str, job_id: str) -> bool:
             SELECT 1 FROM notifications
             WHERE event_type = ?
               AND delivered_via IS NULL
-              AND json_extract(metadata, '$.job_id') = ?
+              AND json_extract(metadata, ?) = ?
             LIMIT 1
             """,
-            (event_type, job_id),
+            (event_type, "$." + metadata_key, key_value),
         )
         return await cursor.fetchone() is not None
     finally:

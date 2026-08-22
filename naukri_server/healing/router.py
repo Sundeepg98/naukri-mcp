@@ -95,13 +95,50 @@ def _drift_summary(event: EndpointDriftDetected) -> str:
 async def _store_drift_notification(
     constant_name: str, reason: str, event: EndpointDriftDetected,
 ) -> None:
-    """Persist a plain drift notification (used when we can't safely auto-fix).
+    """Persist a plain drift notification - at most one live one per constant.
+
+    A drifted endpoint STAYS drifted until someone fixes the parser, and the
+    scheduled api_validator probe re-reports it on every run, so an
+    unconditional store banks a duplicate per constant per run. That is how
+    three drifted constants became 81 notifications - 41% of his undelivered
+    queue and its largest single group.
+
+    Note which half of the reminder-storm fix applies here and which does not.
+    This event's producer is a SCHEDULED probe, not a read path, so the
+    emission is correct and is left alone; only the banking was wrong.
+
+    DEDUPE BY EXISTING UNDELIVERED ROW keyed on `constant_name`, not by a
+    `last_notified_at` column plus an interval. An interval only sets the
+    storm's RATE for a condition that never clears on its own, and drift is
+    exactly that shape. This predicate is bounded by construction - one
+    undelivered EndpointDrift per constant, ever - needs no schema migration,
+    and re-arms the moment the brief delivers the notification.
+
+    The key is the CONSTANT, deliberately, and not something coarser: a drift
+    on an endpoint with nothing pending must announce itself immediately even
+    while a backlog for other endpoints sits undelivered. That is the whole
+    point of the signal, and it happened for real mid-audit when
+    RECOMMENDED_JOBS_API started drifting with 58 rows for two other constants
+    already banked.
 
     Lazy import + try/except so a notification failure never crashes the
     event bus dispatch.
     """
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        # Fail OPEN: the notification is the payload, the dedupe is an
+        # optimisation over it. A broken predicate degrades to the old noise,
+        # which is recoverable; swallowing a genuine NEW drift is not.
+        try:
+            if constant_name and await has_pending_notification(
+                    "EndpointDrift", constant_name, metadata_key="constant_name"):
+                logger.debug("EndpointDrift for %s already pending - suppressed",
+                             constant_name)
+                return
+        except Exception as exc:  # noqa: BLE001 - notify anyway
+            logger.warning("EndpointDrift dedupe check failed, notifying anyway: %s", exc)
+
         await store_notification({
             "event_type": "EndpointDrift",
             "title": f"API drift on {constant_name} ({reason})",
