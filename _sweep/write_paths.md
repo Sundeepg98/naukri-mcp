@@ -43,7 +43,7 @@ that enumeration is closed.
 
 | tool | verdict | evidence (file:line + writing call) |
 |---|---|---|
-| `naukri_read_message(message_id, vcard_id, unique_id)` | **EVENT-WRITE** | Upstream read is a GET - `tools/inbox.py:153 api_client.get(MESSAGE_API, ...)` - so it does **not** mark the message read on Naukri. But `tools/inbox.py:166-171 event_bus.emit(InboxMessageRead(...))` fires unconditionally, and `subscribers.py:729-746 _on_inbox_message_read -> store_notification(...)` stores unconditionally. Net: 1 `notifications` row + 1 `event_log` row per call. See REMAINING section. |
+| `naukri_read_message(message_id, vcard_id, unique_id)` | ~~EVENT-WRITE~~ **SAFE-READ as of 2026-08-22** | Upstream read is a GET - `tools/inbox.py:153 api_client.get(MESSAGE_API, ...)` - so it does **not** mark the message read on Naukri. But `tools/inbox.py:166-171 event_bus.emit(InboxMessageRead(...))` fires unconditionally, and `subscribers.py:729-746 _on_inbox_message_read -> store_notification(...)` stores unconditionally. Net: 1 `notifications` row + 1 `event_log` row per call. See REMAINING section. |
 | `naukri_tailor_resume(job_id)` | SAFE-READ | `tools/resume_tailor.py:99-108` fetches job + profile and returns suggestions only. No POST/PUT reached; it does **not** create or modify a resume on Naukri. |
 | `naukri_mock_interview_prep(job_id)` | SAFE-READ | `tools/mock_interview.py:173 _interview_prep`; 19 functions reached, zero write sinks. Does not touch `_start_interview`. |
 | `naukri_mock_interview_topics()` | SAFE-READ | `tools/mock_interview.py:24-25 api_client.get` x2. |
@@ -131,10 +131,17 @@ that enumeration is closed.
 `scheduler_tasks.py` (`:88`, `:132`, `:176`). The three fixed read paths are therefore clean,
 and the guard pinning that is real.
 
-### 1. `naukri_read_message` - the b34f118/8190def shape, still live (CONFIRMED)
+### 1. `naukri_read_message` - the b34f118/8190def shape ~~still live~~ **CLOSED 2026-08-22**
+
+> **CLOSED 2026-08-22.** Everything below was true when written and is now history: the
+> emit, the `_on_inbox_message_read` subscriber and the `InboxMessageRead` dataclass were all
+> removed, and the allowlist entry with them. Removed rather than gated for the same reason
+> `RecruiterEngaged` was: there is no scheduled producer for an inbox read, so an
+> `emit_events` flag would have been a parameter nothing ever sets. The line and file
+> references in this section no longer resolve - do not go looking for them.
 
 This is the instance `8190def` recorded in its own allowlist as "KNOWN DEFECT, reported not
-fixed". It is still present at `c983094`, and it is worse than the allowlist entry suggests
+fixed". It was still present at `c983094`, and it was worse than the allowlist entry suggested
 because the second half was never applied either:
 
 - **Half one, unconditional emit:** `naukri_server/tools/inbox.py:166-171`

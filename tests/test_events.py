@@ -147,7 +147,6 @@ from unittest.mock import AsyncMock, patch
 from naukri_server.events import (
     ReminderSet,
     ApplicationsPurged,
-    InboxMessageRead,
     InboxInviteAccepted,
     AgentJobApplied,
 )
@@ -229,8 +228,15 @@ async def test_purge_applications_dry_run_does_not_emit():
 
 
 @pytest.mark.asyncio
-async def test_read_message_emits_inbox_message_read():
-    """_read_message() must emit InboxMessageRead with thread_id and message_id."""
+async def test_read_message_emits_nothing():
+    """_read_message() is a read: it must emit NOTHING at all.
+
+    Positive guard, replacing test_read_message_emits_inbox_message_read after
+    InboxMessageRead was removed on 2026-08-22. The assertion is on the emit
+    mock rather than on a notification count on purpose: the requirement is
+    that the read path stays silent, not merely that one subscriber stopped
+    banking rows. Shown RED against the pre-removal tree (await_count == 1).
+    """
     from naukri_server.tools.inbox import _read_message
 
     fake_resp = {
@@ -248,14 +254,10 @@ async def test_read_message_emits_inbox_message_read():
         result = await _read_message(message_id="M1", vcard_id="V1", unique_id="U1")
 
     assert result["status"] == "success"
-    read_calls = [
-        c for c in mock_emit.call_args_list
-        if c.args and isinstance(c.args[0], InboxMessageRead)
-    ]
-    assert len(read_calls) == 1
-    event = read_calls[0].args[0]
-    assert event.message_id == "M1"
-    assert event.thread_id == "C42"
+    assert mock_emit.await_count == 0, (
+        "read path emitted %d event(s): %r"
+        % (mock_emit.await_count, [c.args[0] for c in mock_emit.call_args_list])
+    )
 
 
 @pytest.mark.asyncio
@@ -355,19 +357,6 @@ async def test_agent_approve_emits_agent_job_applied_per_success():
     assert len(agent_calls) == 2
     assert {c.args[0].job_id for c in agent_calls} == {"JA1", "JA2"}
     assert {c.args[0].fit_score for c in agent_calls} == {80, 75}
-
-
-@pytest.mark.asyncio
-async def test_inbox_message_read_subscriber_registered():
-    """The InboxMessageRead subscriber should be wired and respond to events."""
-    import naukri_server.subscribers  # noqa: F401 — ensure decorators ran
-    from naukri_server.framework.registry import registry
-
-    inbox_read_subs = [
-        it for it in registry.by_kind("subscriber")
-        if it.key is InboxMessageRead
-    ]
-    assert len(inbox_read_subs) >= 1
 
 
 @pytest.mark.asyncio

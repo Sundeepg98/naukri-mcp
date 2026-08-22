@@ -25,6 +25,13 @@ differently. Both corrections are pinned below:
     the field-name bug fixed separately so the tool stops reporting a blank
     action for all 95 of his recorded recruiter actions.
 
+CLOSED 2026-08-22 - the last KNOWN-DEFECT allowlist entry, `InboxMessageRead`,
+is gone: the event was removed outright (emit, subscriber, dataclass) rather
+than gated, because it had no scheduled producer to opt in and its sole
+subscriber did nothing but bank a notification on every read. An allowlist
+entry is a deferred defect; READ_SHAPED_EMIT_ALLOWLIST now holds only the one
+genuine exception (`ProfileScoreChanged`, change-detected).
+
 Every guard here ships with a CONTROL proving it can fail. A suppression fix is
 trivially satisfiable by suppressing everything, and this codebase has already
 produced more than seven checks that could not fail - two of them found today.
@@ -68,11 +75,6 @@ READ_SHAPED_EMIT_ALLOWLIST = {
         "ProfileScoreChanged is change-detected, not opt-in: it emits only "
         "when the score actually differs from the last logged one. There is no "
         "scheduled profile audit to opt in, so a flag would be a decoy.",
-    ("tools/inbox.py", "_read_message"):
-        "KNOWN DEFECT, reported not fixed 2026-08-21: reading a message emits "
-        "InboxMessageRead, whose subscriber banks a notification per read. Same "
-        "class as the four fixed here; 0 rows banked so far only because the "
-        "tool has not been used. Fix is the same two halves.",
 }
 
 # Every (file, function, event) that may emit at all. A new emit ANYWHERE fails
@@ -112,7 +114,6 @@ EMIT_CENSUS = {
     ("tools/apply.py", "_finalize_applied", "ApplicationSubmitted"),
     ("tools/inbox.py", "_accept_nvite", "InboxInviteAccepted"),
     ("tools/inbox.py", "_mark_interested", "RecruiterEngaged"),
-    ("tools/inbox.py", "_read_message", "InboxMessageRead"),
     ("tools/insights.py", "_cached_answers", "CachedAnswerDeleted"),
     ("tools/insights.py", "_cached_answers", "CachedAnswerUpdated"),
     ("tools/profile_update.py", "_boost_visibility", "ProfileBoosted"),

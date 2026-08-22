@@ -162,16 +162,6 @@ async def _read_message(message_id: str, vcard_id: str, unique_id: str) -> dict:
 
     conversation_id = safe_get(mail, "conversationId", default=None)
 
-    # Emit InboxMessageRead so subscribers can react (last-read tracking, cache invalidation)
-    try:
-        from naukri_server.events import event_bus, InboxMessageRead
-        await event_bus.emit(InboxMessageRead(
-            thread_id=str(conversation_id or ""),
-            message_id=str(message_id or ""),
-        ))
-    except Exception as e:
-        logger.warning("Failed to emit InboxMessageRead: %s", e)
-
     return {
         "status": "success",
         "message_id": message_id,

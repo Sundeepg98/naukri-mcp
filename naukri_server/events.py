@@ -200,13 +200,6 @@ class SettingsUpdated(DomainEvent):
 
 
 @dataclass
-class InboxMessageRead(DomainEvent):
-    """Fired when a recruiter inbox message is opened/read."""
-    thread_id: str = ""
-    message_id: str = ""
-
-
-@dataclass
 class InboxInviteAccepted(DomainEvent):
     """Fired when a recruiter NVite invitation is accepted (job apply succeeded)."""
     invite_id: str = ""

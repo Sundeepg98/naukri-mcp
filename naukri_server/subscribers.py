@@ -19,7 +19,7 @@ from naukri_server.events import (
     ProfileUpdated, ProfileBoosted, AlertCreated, AlertUpdated, AlertDeleted,
     ApplicationsPurged, ResumeUploaded, PhotoUploaded, PhotoDeleted,
     CachedAnswerUpdated, CachedAnswerDeleted, SettingsUpdated,
-    InboxMessageRead, InboxInviteAccepted,
+    InboxInviteAccepted,
     NewEndpointDiscovered,
     AgentCycleStarted, AgentCycleCompleted, AgentJobApplied, AgentJobSkipped,
     AgentObserveCompleted, AgentDecideCompleted, AgentActCompleted,
@@ -724,28 +724,6 @@ async def _on_agent_act_completed(event):
                     event.cycle_id, event.mode, event.applied_count)
     except Exception as e:
         logger.warning("Failed to handle AgentActCompleted: %s", e)
-
-
-@subscriber(InboxMessageRead)
-async def _on_inbox_message_read(event: InboxMessageRead):
-    """Track last-read timestamp for inbox messages.
-
-    Persists a tiny notification entry so the read activity is auditable
-    via event_log/notifications. Lazy import + try/except — never crash caller.
-    """
-    try:
-        from naukri_server.database import store_notification
-        await store_notification({
-            "event_type": "InboxMessageRead",
-            "title": "Inbox message read",
-            "body": f"Message {event.message_id} (thread {event.thread_id}) read",
-            "priority": "low",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "metadata": {"thread_id": event.thread_id, "message_id": event.message_id},
-        })
-        logger.debug("Inbox message read: thread=%s msg=%s", event.thread_id, event.message_id)
-    except Exception as e:
-        logger.warning("Failed to handle InboxMessageRead: %s", e)
 
 
 @subscriber(InboxInviteAccepted)
