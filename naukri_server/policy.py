@@ -68,6 +68,7 @@ from typing import Optional
 from jobcore import config as _jobcore_config
 from jobcore.config import Loaded, MIN_AGENT_FIT_FLOOR
 from jobcore.paths import display_path as _jobcore_display_path
+from jobcore.paths import relativise_known as _jobcore_relativise_known
 from jobcore.policy import (
     DEFAULT_POLICY,
     CandidatePolicy,
@@ -302,6 +303,57 @@ def display_path(raw: Optional[str]) -> Optional[str]:
     return _jobcore_display_path(raw, anchor=_REPO_ROOT)
 
 
+def relativise_known_paths(text, loaded: Loaded):
+    """Render any path jobcore already baked into a composed message.
+
+    A BINDING of :func:`jobcore.paths.relativise_known`, not a second copy of
+    it: this supplies the two arguments naukri knows -- the snapshot's own path
+    list, and this module's `display_path` -- and the upstream owns the
+    algorithm, including the fact that a Windows path has TWO spellings
+    (`OSError.__str__` renders its filename through `repr()`, which doubles
+    every separator).
+
+    `Loaded.known_paths` rather than a hand-rolled `[source]`, and the
+    difference is not cosmetic: it includes the PARENT DIRECTORY of the config
+    and of every searched path, which is the only way to reach the two files
+    jobcore names FROM that directory -- the history ledger (`could not append
+    to {ledger}`) and the write lock (`config file locked by live PID ...
+    (lock: {lock_file})`). Neither equals `source`, both reach a caller through
+    `apply_patch`, and uplers measured the lock message publishing the full
+    temp path with a source-only list and clean with this one.
+
+    Substitution stays EXACT rather than heuristic -- only strings the snapshot
+    already knows are paths -- which is why a Naukri API route or a
+    `https://www.naukri.com/...` job URL in the same sentence is left alone.
+    """
+    return _jobcore_relativise_known(
+        text, known=loaded.known_paths, render=display_path
+    )
+
+
+def relativise_mapping(payload, loaded: Loaded):
+    """:func:`relativise_known_paths` over every string value of a flat dict.
+
+    For jobcore's `apply_patch` return, which this server hands back verbatim
+    and which carries a path in three places: `path` on SUCCESS,
+    `ledger_error`, and `detail` on a lock conflict. Passing that dict through
+    untouched is how a leak survived a sweep that had already cleaned every
+    path FIELD on the report beside it -- error paths are where everyone looks,
+    and this one is on the success payload.
+
+    Non-string values pass through, because the upstream returns anything that
+    is not a string unchanged. Deliberately identical to
+    `uplers_server.policy.relativise_mapping`: the two servers hand back the
+    same jobcore dict, and two renderers that disagree is the drift `report()`
+    already had to be rescued from.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    return {
+        key: relativise_known_paths(value, loaded) for key, value in payload.items()
+    }
+
+
 def report(section: Optional[str] = None) -> dict:
     """The payload ``naukri_config()`` returns: effective values + provenance.
 
@@ -360,7 +412,21 @@ def report(section: Optional[str] = None) -> dict:
 
 def apply_patch(patch: dict, *, base_revision: Optional[int] = None,
                 actor: str = "naukri", confirm_widen: bool = False) -> dict:
-    """Write into the config file, scoped to what this server may write."""
+    """Write into the config file, scoped to what this server may write.
+
+    EVERY PATH IN THE RETURN IS RENDERED, including the one on the SUCCESS
+    payload. jobcore's dict carries `str(target)` as `path` when the write
+    lands, plus `ledger_error` and `detail` on the failure branches; handing it
+    back verbatim published this machine's absolute layout out of a WRITE tool.
+    Measured at this layer on 2026-08-22, all three branches red.
+
+    RELATIVISED, NOT DELETED, and that is the load-bearing half. `path` answers
+    the one question a write tool's response has to answer -- WHICH file did
+    you just change -- and `utils.scrub_result` "saved" it downstream only by
+    collapsing it to the bare basename `jobhunt.json`, under which two
+    candidate config files read identically. A `None` there would trade a leak
+    for a field that answers a different question than it looks like.
+    """
     result = _jobcore_config.apply_patch(
         patch,
         start=_START,
@@ -371,4 +437,7 @@ def apply_patch(patch: dict, *, base_revision: Optional[int] = None,
     )
     if result.get("status") == "ok":
         invalidate()
-    return result
+    # AFTER the invalidate, so the snapshot whose `known_paths` drive the
+    # substitution is the post-write one -- the same file, re-read, rather than
+    # a cached pre-write object that a concurrent relocation could have staled.
+    return relativise_mapping(result, snapshot())
