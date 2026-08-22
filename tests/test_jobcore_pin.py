@@ -151,13 +151,27 @@ def _defines(source: str, name: str) -> bool:
     return False
 
 
-def _requirements(current_modules):
-    """What this package needs from jobcore: {module: {names}}.
+def _requirements():
+    """What this package needs from jobcore.
 
-    `current_modules` disambiguates `from jobcore import X`, where X may be a
-    submodule or a re-exported symbol.
+    Returns ``(needed, package_names)``:
+      * ``needed``   -- {submodule: {names used from it}}
+      * ``package_names`` -- names taken straight off the package,
+        ``from jobcore import X``, where X may be a SUBMODULE or a re-exported
+        symbol and this function deliberately does not try to tell which.
+
+    THE AMBIGUITY IS RESOLVED LATE, against the pinned commit, because that is
+    the only place the answer matters and the only place it can be had for
+    free. The previous version resolved it EARLY and needed a set of "current"
+    module names to do it -- and the only source on hand was the ../jobcore
+    clone, which does not exist on a CI runner. The set came back empty, the
+    gate `if orig in current_modules` was never true, and the scanner silently
+    stopped seeing `jobcore.buildinfo` at all: the one module reached only
+    through `from jobcore import buildinfo as _bi`. The attribute pass that
+    would have found `_bi.self_stamp` never ran either.
     """
     needed = defaultdict(set)
+    package_names = set()
     for path in PACKAGE.rglob("*.py"):
         text = path.read_text(encoding="utf-8", errors="replace")
         aliases = {}
@@ -172,16 +186,20 @@ def _requirements(current_modules):
 
         for chunk in FROM_PACKAGE.findall(text):
             for orig, alias in _parse_names(chunk):
-                if orig in current_modules:
-                    aliases[alias] = orig
-                    needed[orig]
+                # Recorded UNCONDITIONALLY, module or not. Nothing here needs
+                # to know jobcore's shape, so nothing here can go blind when
+                # the clone is missing.
+                package_names.add(orig)
+                aliases[alias] = orig
 
         # Attribute use through a module alias: `_bi.self_stamp(...)`.
         for alias, module in aliases.items():
             for attr in re.findall(r"\b%s\.(\w+)" % re.escape(alias), text):
                 if not (attr.startswith("__") and attr.endswith("__")):
                     needed[module].add(attr)
-    return needed
+    # A plain dict: a defaultdict would let `needed["typo"]` in a test silently
+    # create an empty entry and assert nothing.
+    return dict(needed), package_names
 
 
 def test_the_pin_line_is_present_and_is_an_exact_commit():
@@ -198,35 +216,45 @@ def test_every_jobcore_module_and_name_used_here_exists_at_the_pinned_commit():
             "../jobcore clone is absent or does not know commit %s; this check "
             "is offline by design and does not fetch" % sha)
 
-    current = _modules_at("HEAD")
     available = _modules_at(sha)
-    needed = _requirements(current)
-    assert needed, "no jobcore usage found at all -- the scanner is broken"
+    init_source = _source_at(sha, "__init__")
+    needed, package_names = _requirements()
+    assert needed or package_names, (
+        "no jobcore usage found at all -- the scanner is broken")
 
-    missing_modules = sorted(m for m in needed if m not in available and m in current)
-    assert not missing_modules, (
-        "requirements-ci.txt pins jobcore at %s, which does NOT contain the "
-        "module(s) %s -- CI dies at collection with ModuleNotFoundError while "
-        "every local run stays green. Bump the pin in the SAME commit."
-        % (sha[:12], ", ".join("jobcore.%s" % m for m in missing_modules)))
+    problems = []
 
-    missing_names = []
+    # `from jobcore import X`: at the pin, X must be a submodule OR a name the
+    # package re-exports. This is where the module-or-symbol ambiguity is
+    # settled, using the pinned tree rather than a guess about the local one.
+    for name in sorted(package_names):
+        if name in available:
+            continue
+        if init_source and _defines(init_source, name):
+            continue
+        problems.append("jobcore.%s (MODULE OR PACKAGE NAME MISSING)" % name)
+
     for module, names in sorted(needed.items()):
         if module not in available:
+            # Already judged above if it came off the package; otherwise it was
+            # imported as `jobcore.<module>` and is simply not there.
+            if module not in package_names:
+                problems.append("jobcore.%s (MODULE MISSING)" % module)
             continue
         source = _source_at(sha, module)
         if source is None:
             continue
         for name in sorted(names):
             if not _defines(source, name):
-                missing_names.append("jobcore.%s.%s" % (module, name))
+                problems.append("jobcore.%s.%s (ATTRIBUTE MISSING)" % (module, name))
 
-    assert not missing_names, (
-        "requirements-ci.txt pins jobcore at %s. The module exists there but "
-        "these NAMES do not: %s -- CI dies with AttributeError/ImportError "
-        "while every local run stays green, because the local venv has jobcore "
-        "editable from ../jobcore. Bump the pin in the SAME commit."
-        % (sha[:12], ", ".join(missing_names)))
+    assert not problems, (
+        "requirements-ci.txt pins jobcore at %s, which does not satisfy this "
+        "package: %s -- CI dies at import with ModuleNotFoundError or "
+        "AttributeError while every local run stays green, because the local "
+        "venv has jobcore editable from ../jobcore. Bump the pin in the SAME "
+        "commit that adds the usage."
+        % (sha[:12], "; ".join(problems)))
 
 
 def test_the_scanner_sees_both_import_forms_it_is_meant_to_guard():
@@ -238,17 +266,52 @@ def test_the_scanner_sees_both_import_forms_it_is_meant_to_guard():
     reached through that alias -- the shape that slipped past the module-only
     version of this check.
     """
-    needed = _requirements(_modules_at("HEAD"))
+    needed, package_names = _requirements()
 
     for module in ("config", "buildinfo", "paths", "policy"):
-        assert module in needed, "scanner missed jobcore.%s" % module
+        assert module in needed or module in package_names, (
+            "scanner missed jobcore.%s" % module)
 
-    assert "display_path" in needed["paths"], (
+    assert "display_path" in needed.get("paths", set()), (
         "scanner missed the NAME imported from jobcore.paths")
-    assert "self_stamp" in needed["buildinfo"], (
+    assert "self_stamp" in needed.get("buildinfo", set()), (
         "scanner missed an attribute reached through a module alias "
         "(`_bi.self_stamp`) -- this is the exact shape that slips through a "
         "module-only check")
+
+
+def test_the_scanner_resolves_from_package_imports_without_a_clone(monkeypatch):
+    """THE CI FAILURE, as a regression test.
+
+    This test file used to disambiguate `from jobcore import X` EARLY, against
+    a set of module names read from the ../jobcore clone. A runner checks out
+    naukri alone, so the clone is absent, the set came back EMPTY, and the gate
+    was never true. `naukri_server/buildinfo.py` reaches jobcore.buildinfo
+    ONLY through `from jobcore import buildinfo as _bi`, so the scanner stopped
+    seeing that module -- and the attribute pass that finds `_bi.self_stamp`
+    never ran either. The other modules survived because they arrive through
+    `from jobcore.X import ...`, which never consulted the clone.
+
+    Red before the fix with exactly the message CI produced:
+    `AssertionError: scanner missed jobcore.buildinfo`.
+
+    The scanner now needs no shape source at all, so pointing the clone at
+    nowhere must change nothing about what it finds.
+    """
+    import tests.test_jobcore_pin as mod
+
+    monkeypatch.setattr(mod, "JOBCORE_CLONE", Path("/nonexistent/jobcore"))
+    assert not _clone_knows("HEAD"), "the clone override did not take"
+
+    needed, package_names = _requirements()
+
+    assert "buildinfo" in package_names, (
+        "scanner missed jobcore.buildinfo with no clone present -- this is the "
+        "CI failure")
+    assert "self_stamp" in needed.get("buildinfo", set()), (
+        "the attribute pass through the alias did not run without a clone")
+    assert "display_path" in needed.get("paths", set()), (
+        "a from-submodule import regressed")
 
 
 def test_the_name_check_can_tell_present_from_absent():
@@ -286,7 +349,7 @@ def test_the_pinned_sources_are_actually_readable():
         pytest.skip("../jobcore does not know %s" % sha)
 
     available = _modules_at(sha)
-    needed = _requirements(_modules_at("HEAD"))
+    needed, _ = _requirements()
     checked = 0
     for module in sorted(needed):
         if module not in available:
