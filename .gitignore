@@ -81,3 +81,11 @@ Thumbs.db
 
 # Local backups of live data (never committed)
 _backup/
+
+# e2e sweep artifacts - raw captures hold live account data; harness is tracked
+_sweep/results*.json
+_sweep/verdicts.json
+_sweep/final_verdicts.json
+_sweep/backup-pre-sweep/
+_sweep/*.log
+exports/sweep_*.json

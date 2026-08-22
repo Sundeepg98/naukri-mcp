@@ -8,7 +8,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from playwright.async_api import async_playwright, BrowserContext, Page
 from playwright._impl._errors import TargetClosedError, TimeoutError as PlaywrightTimeoutError
@@ -366,6 +366,37 @@ async def is_page_alive(page, timeout: float = BROWSER_LIVENESS_TIMEOUT) -> bool
 class BrowserUnavailableError(Exception):
     """Raised when circuit breaker is open — browser is known-dead."""
     pass
+
+
+class _NoPagePool:
+    """Stand-in for ``page_pool`` while the browser is not started.
+
+    ``PagePool.acquire`` already fails cleanly with BrowserUnavailableError when
+    the circuit is open, but before ``start()`` and after ``stop()`` the pool
+    attribute itself is None — so all 27 ``browser.page_pool.acquire()`` call
+    sites raised a bare ``AttributeError: 'NoneType' object has no attribute
+    'acquire'`` instead, which error_handler cannot map and which tells the
+    caller nothing about what to do. This keeps the same failure typed.
+
+    Deliberately FALSY: every non-acquire use of the attribute is written as
+    ``if browser.page_pool`` / ``... if self.page_pool else None`` (health.py,
+    probes/pool.py, probes/browser.py, browser_watchdog.py, stop()), and those
+    guards must keep seeing "no pool".
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def acquire(self):
+        raise BrowserUnavailableError(
+            "Browser is not running — no page pool. Call naukri_login to start "
+            "a session, or check naukri_health_check for watchdog state."
+        )
+
+
+_NO_POOL = _NoPagePool()
 
 
 class PagePool:
@@ -742,7 +773,7 @@ class NaukriBrowser:
         self.pw = None
         self.context: Optional[BrowserContext] = None
         self.token_manager = TokenManager()
-        self.page_pool: Optional[PagePool] = None
+        self.page_pool: Union[PagePool, _NoPagePool] = _NO_POOL
         self.available = False
         self._holds_profile_lock = False
 
@@ -813,7 +844,7 @@ class NaukriBrowser:
                     await self.pw.stop()
             except Exception:
                 pass
-            self.page_pool = None
+            self.page_pool = _NO_POOL
             self.context = None
             self.pw = None
             # Startup failed — we never actually held a live persistent context,
@@ -847,7 +878,7 @@ class NaukriBrowser:
             except Exception as e:
                 logger.debug("Browser stop step %s failed (expected if already dead): %s", label, e)
 
-        self.page_pool = None
+        self.page_pool = _NO_POOL
         self.context = None
         self.pw = None
 
