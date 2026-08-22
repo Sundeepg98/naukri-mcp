@@ -11,12 +11,44 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_timeline(status_steps: list) -> list[dict]:
-    """Parse status timeline entries from API response."""
+    """Parse status timeline entries from the history-description response.
+
+    Every key this looked for was wrong. Captured live 2026-08-22, the API
+    sends:
+
+        {"statusId": 4, "appId": 107, "count": 6,
+         "dateTime": "2026-08-21 15:21:26", "statusValue": "Application Viewed",
+         "modifiedDate": "2026-08-21 15:36:49"}
+
+    while the parser read `status`/`label`, `date`, `description`,
+    `isCompleted`, `isCurrent`, `stepOrder`, `subStatus` -- none of which
+    exist. So it emitted `[{"status": ""}, {"status": ""}, {"status": ""}]`:
+    three well-formed rows carrying nothing, which is worse than an error
+    because the shape looks right. On his InApp application it discarded a real
+    three-step timeline whose last step was "Application Viewed", count 6.
+
+    `count` is the interesting one and had no field at all -- it is how many
+    times a recruiter opened the application.
+
+    The legacy key names are kept as fallbacks: this parser also serves the
+    v0/v3 shapes, and nothing here should regress if a route still sends them.
+    """
     timeline = []
     for step in status_steps:
-        entry = {"status": step.get("status") or step.get("label", "")}
-        if step.get("date"):
-            entry["date"] = step["date"]
+        entry = {
+            "status": step.get("statusValue")
+            or step.get("status")
+            or step.get("label", "")
+        }
+        date = step.get("dateTime") or step.get("date")
+        if date:
+            entry["date"] = date
+        if step.get("count") is not None:
+            entry["count"] = step["count"]
+        if step.get("statusId") is not None:
+            entry["status_id"] = step["statusId"]
+        if step.get("modifiedDate"):
+            entry["modified_date"] = step["modifiedDate"]
         if step.get("description"):
             entry["description"] = step["description"]
         if step.get("isCompleted") is not None:
