@@ -16,7 +16,6 @@ from naukri_server.config import (
     APPLIED_JOBS_API, SAVED_JOBS_API,
     BROWSER_MODAL_APPEAR,
     SYNC_STATE_FILE,
-    AUTO_PURGE_DAYS,
 )
 from naukri_server.events import event_bus, ApplicationStatusChanged
 
@@ -421,44 +420,44 @@ async def _sync_applications(
         else:
             job["status"] = "applied"
 
-    from naukri_server.database import list_all_applications, upsert_application, delete_applications_before
+    from naukri_server.database import list_all_applications, upsert_application
     from naukri_server.sagas import SagaExecutor
 
     local_apps = await list_all_applications()
     # Snapshot old statuses for change detection
     old_status_map = {a["job_id"]: a.get("status") for a in local_apps if a.get("job_id")}
 
-    # --- Saga: wrap merge + purge + persist + events in saga steps ---
+    # --- Saga: merge + persist + events. NO PURGE STEP: A SYNC NEVER DELETES.
+    #
+    # This saga used to carry a retention purge (step_purge filtered local_apps,
+    # step_persist then ran delete_applications_before). It is gone, and it must
+    # not come back, for three reasons measured on the live account 2026-08-22:
+    #
+    #  1. IT DELETED ON THE WRONG DATE. The cutoff was compared against
+    #     `applied_at`, which record_application sets to datetime.now() at
+    #     INSERT time -- and upsert_application never persisted the real
+    #     `applied_date` the parser extracts from Naukri. So `applied_at` is an
+    #     insert timestamp for every row in the table, not the date he applied.
+    #     Retention had never once had a correct input.
+    #  2. A READ TRIGGERED IT. naukri_status_changes -> detect_status_changes
+    #     calls _sync_applications unconditionally, so an analytics-shaped read
+    #     deleted history. That is the read-path-mutation family, in its most
+    #     destructive instance.
+    #  3. IT WAS SILENT. No preview, no confirmation, no tombstone. His table
+    #     was 12 days from losing 92% of itself (149 of 162 rows, staggered
+    #     2026-08-27 to 2026-09-08) and nothing would have said so.
+    #
+    # Retention now lives in exactly ONE place: the explicit
+    # naukri_purge_applications tool, which defaults to dry_run=True, previews
+    # what it would remove, and archives every row before deleting it.
     saga = SagaExecutor("sync_applications")
     stats = {}
-    purged = 0
     status_changes = []
-
-    # RETENTION. This DELETES his application history on every sync, so
-    # LOWERING it is the irreversible direction — jobcore makes the key tier B
-    # with "up" free for exactly that reason. Read ONCE for the whole saga:
-    # step_purge filters and step_persist deletes, and the two must never
-    # disagree about the cutoff.
-    from naukri_server import policy as _policy
-    retention_days = _policy.setting("retention.auto_purge_days", AUTO_PURGE_DAYS)
-    retention_cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=retention_days)
-    ).isoformat()
 
     async def step_merge():
         nonlocal stats
         stats = _merge_applications(local_apps, remote_jobs)
         return stats
-
-    async def step_purge():
-        nonlocal local_apps, purged
-        cutoff = retention_cutoff
-        before_count = len(local_apps)
-        local_apps = [a for a in local_apps if a.get("applied_at", "") >= cutoff or a.get("source") == "manual"]
-        purged = before_count - len(local_apps)
-        if purged:
-            logger.info("Auto-purged %d applications older than %d days", purged, retention_days)
-        return {"purged": purged}
 
     async def step_detect_changes():
         nonlocal status_changes
@@ -477,11 +476,8 @@ async def _sync_applications(
         return {"status_changes_count": len(status_changes)}
 
     async def step_persist():
-        cutoff = retention_cutoff
         for app in local_apps:
             await upsert_application(app)
-        if purged:
-            await delete_applications_before(cutoff)
         return {"persisted": len(local_apps)}
 
     async def step_emit_events():
@@ -496,14 +492,13 @@ async def _sync_applications(
         return {"events_emitted": len(status_changes)}
 
     saga.add_step("merge", step_merge)
-    # detect_changes MUST run before purge. step_purge rebinds local_apps to a
-    # retention-filtered list, and step_detect_changes iterates local_apps, so
-    # in the old order every status change on an application older than
-    # AUTO_PURGE_DAYS (or missing applied_at entirely) was silently dropped:
-    # no ApplicationStatusChanged event, nothing in naukri_status_changes.
-    # Retention is about what we KEEP, not about what we REPORT.
+    # detect_changes ran before purge because step_purge rebound local_apps to a
+    # retention-filtered list, so in the older order every status change on an
+    # application past the horizon was silently dropped. The purge is gone now,
+    # which removes that ordering hazard entirely -- but the principle it
+    # encoded still holds and is why the step is not folded back into persist:
+    # retention is about what we KEEP, never about what we REPORT.
     saga.add_step("detect_changes", step_detect_changes)
-    saga.add_step("purge", step_purge)
     saga.add_step("persist", step_persist)
     saga.add_step("emit_events", step_emit_events)
 
@@ -553,7 +548,9 @@ async def _sync_applications(
         "method": method,
         "total_remote": len(remote_jobs),
         **stats,
-        "purged": purged,
+        # Always 0: a sync no longer deletes anything. Kept so existing callers
+        # reading result["purged"] get an honest zero rather than a KeyError.
+        "purged": 0,
         "days_back": days_back,
         "last_sync": state.get("last_applications_sync"),
         "applications": local_apps[:20],

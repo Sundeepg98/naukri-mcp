@@ -286,10 +286,35 @@ class TestActionDispatchers:
             await naukri_batch_apply()
 
     @pytest.mark.asyncio
-    async def test_applications_purge_needs_before_date(self):
+    async def test_applications_purge_defaults_to_the_retention_horizon(self):
+        """`before_date` became optional when retention config moved here.
+
+        It used to be required, because the only OTHER place a horizon was
+        applied was the sync saga's silent purge. That purge is gone, so
+        `retention.auto_purge_days` now belongs to this tool. Omitting the date
+        is safe by construction: dry_run defaults to True, so a bare call is a
+        PREVIEW, and rows without a trustworthy apply date are never eligible.
+        """
+        from unittest.mock import AsyncMock, patch
+
         from naukri_server.tools.tracking import naukri_purge_applications
-        with pytest.raises(TypeError):
-            await naukri_purge_applications()
+
+        with patch("naukri_server.database.list_purgeable_applications",
+                   new_callable=AsyncMock, return_value=[]) as mock_purgeable, \
+             patch("naukri_server.database.list_applications",
+                   new_callable=AsyncMock, return_value=([], 0)), \
+             patch("naukri_server.database.list_all_applications",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("naukri_server.database.delete_applications_before",
+                   new_callable=AsyncMock) as mock_delete:
+            result = await naukri_purge_applications()
+
+        assert result["status"] == "success"
+        assert result["dry_run"] is True, "a bare call must never delete"
+        mock_delete.assert_not_called()
+        # It resolved a horizon rather than passing None down.
+        cutoff = mock_purgeable.call_args.args[0]
+        assert cutoff and cutoff.startswith("20"), cutoff
 
     @pytest.mark.asyncio
     async def test_jobs_report_fraud_needs_job_id(self):

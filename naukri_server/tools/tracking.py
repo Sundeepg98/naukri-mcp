@@ -91,17 +91,29 @@ async def naukri_get_application(
 
 @mcp.tool()
 async def naukri_purge_applications(
-    before_date: str,
+    before_date: Optional[str] = None,
     dry_run: bool = True,
 ) -> dict:
-    """Delete old applications from local tracking.
+    """Archive and delete old applications from local tracking.
+
+    THE ONLY path that removes an application. A sync never deletes.
+
+    Only applications with a TRUSTWORTHY apply date are eligible: `applied_at`
+    is the timestamp the row was recorded, not the date you applied, so rows
+    that carry no real `applied_date` from Naukri are never removed. The reply
+    reports how many were protected that way, so a zero is never ambiguous.
+
+    Every removed row is copied to `applications_archive` first.
 
     Args:
-        before_date: ISO date (YYYY-MM-DD). Delete applications applied before this date.
+        before_date: ISO date (YYYY-MM-DD). Remove applications APPLIED before
+            this date. Omit to use the configured retention horizon
+            (`retention.auto_purge_days`).
         dry_run: If True (default), only preview — don't actually delete.
 
     Returns:
-        {status, purged_count, remaining_count, dry_run, sample_purged}
+        {status, purged_count, remaining_count, dry_run, sample_purged,
+         protected_no_apply_date, archived, note}
     """
     return await handle_tool_action(
         lambda: _purge_applications(before_date, dry_run),

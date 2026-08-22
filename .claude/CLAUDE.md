@@ -217,7 +217,7 @@ Multi-step operations use SagaExecutor for partial-success handling.
 | Saga | Steps | File |
 |------|-------|------|
 | apply_workflow | apply → reminder | apply_service.py |
-| sync_applications | merge → purge → detect → persist → emit | sync.py |
+| sync_applications | merge → detect → persist → emit | sync.py (NO purge step: a sync never deletes) |
 | sync_saved_jobs | merge → persist → emit | sync.py |
 | apply_top_fits | score → apply_batch | smart_apply.py |
 | compare_jobs | fetch → score → aggregate | compare.py |

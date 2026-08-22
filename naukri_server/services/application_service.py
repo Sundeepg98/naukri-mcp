@@ -1,7 +1,7 @@
 """Application service — business logic for application tracking, follow-up, and analysis."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from naukri_server.interfaces import api_client
@@ -142,17 +142,44 @@ async def get_application_detail(job_id: str) -> dict:
     return result
 
 
-async def purge_applications(before_date: str, dry_run: bool = True) -> dict:
-    """Delete old applications from SQLite before a given date."""
-    from naukri_server.database import list_applications as db_list, delete_applications_before
+async def purge_applications(before_date: Optional[str] = None,
+                             dry_run: bool = True) -> dict:
+    """Archive-then-delete applications whose REAL apply date precedes a date.
 
-    purge_candidates, purge_count = await db_list(date_to=before_date, limit=5, offset=0)
+    This is now the ONLY path that removes an application. The sync saga used to
+    carry a silent copy of it; that is gone (see tools/sync.py).
+
+    The preview and the deletion share one predicate --
+    ``list_purgeable_applications`` -- so a dry run cannot report a different
+    set from the one a real run would remove. Rows with no trustworthy apply
+    date are excluded from BOTH: see database.real_applied_date.
+    """
+    from naukri_server.database import (
+        list_applications as db_list,
+        list_purgeable_applications,
+        delete_applications_before,
+    )
+
+    # Retention config lives HERE now. It used to drive the sync saga's silent
+    # purge; retention is an explicit, previewable, archived operation, so the
+    # horizon belongs to the tool that performs one.
+    if before_date is None:
+        from naukri_server.config import AUTO_PURGE_DAYS
+        from naukri_server import policy as _policy
+        days = _policy.setting("retention.auto_purge_days", AUTO_PURGE_DAYS)
+        before_date = (
+            datetime.now(timezone.utc) - timedelta(days=int(days))
+        ).isoformat()
+
+    purgeable = await list_purgeable_applications(before_date)
+    purge_count = len(purgeable)
     _, total = await db_list(limit=1, offset=0)
     remaining_count = total - purge_count
 
     sample = [
-        {"job_id": a.get("job_id"), "title": a.get("title"), "applied_at": (a.get("applied_at") or "")[:10]}
-        for a in purge_candidates
+        {"job_id": a.get("job_id"), "title": a.get("title"),
+         "applied_at": (a.get("applied_at") or "")[:10]}
+        for a in purgeable[:5]
     ]
 
     if not dry_run and purge_count > 0:
@@ -168,12 +195,27 @@ async def purge_applications(before_date: str, dry_run: bool = True) -> dict:
         except Exception:
             pass
 
+    # Make the guard VISIBLE. If he asks to purge everything before today and
+    # nothing goes, the reason must be in the response rather than inferred
+    # from a zero -- that is the "hard 0 that means it crashed" shape.
+    from naukri_server.database import list_all_applications, real_applied_date
+    all_apps = await list_all_applications()
+    protected = sum(1 for a in all_apps if real_applied_date(a) is None)
+
     return {
         "status": "success",
         "purged_count": purge_count,
         "remaining_count": remaining_count,
         "dry_run": dry_run,
         "sample_purged": sample,
+        "protected_no_apply_date": protected,
+        "archived": bool(not dry_run and purge_count),
+        "note": (
+            "%d application(s) carry no trustworthy apply date and were NOT "
+            "considered for deletion; applied_at is an insert timestamp, not "
+            "the date you applied. Purged rows are copied to "
+            "applications_archive first." % protected
+        ),
     }
 
 

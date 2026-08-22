@@ -181,9 +181,18 @@ async def test_purge_applications_emits_applications_purged():
     """purge_applications() must emit ApplicationsPurged after a real (non-dry-run) purge."""
     from naukri_server.services.application_service import purge_applications
 
-    sample = [{"job_id": "J1", "title": "T", "applied_at": "2024-01-01"}]
+    # list_purgeable_applications is now the ONE predicate shared by the preview
+    # and the delete, so that a dry run cannot describe a different set from the
+    # one a real run removes. purge_applications no longer counts via
+    # list_applications, which is why this test names the new collaborator.
+    sample = [{"job_id": "J%d" % i, "title": "T", "applied_at": "2024-01-01"}
+              for i in range(3)]
     with patch("naukri_server.database.list_applications",
-               new_callable=AsyncMock, return_value=(sample, 3)), \
+               new_callable=AsyncMock, return_value=([], 3)), \
+         patch("naukri_server.database.list_purgeable_applications",
+               new_callable=AsyncMock, return_value=sample), \
+         patch("naukri_server.database.list_all_applications",
+               new_callable=AsyncMock, return_value=[]), \
          patch("naukri_server.database.delete_applications_before",
                new_callable=AsyncMock, return_value=3), \
          patch("naukri_server.events.event_bus.emit", new_callable=AsyncMock) as mock_emit:

@@ -270,6 +270,36 @@ async def get_application(job_id: str):
         await db.close()
 
 
+# Columns written explicitly by upsert_application. Anything else on the dict
+# goes to the `extra` JSON blob.
+_APPLICATION_COLUMNS = frozenset((
+    "job_id", "title", "company", "status", "applied_at", "source",
+    "ars_score", "star_rating", "job_activity", "company_rating",
+    "is_open", "view_count", "follow_up_priority", "last_synced", "extra",
+))
+
+
+def _application_extra(app: dict) -> Optional[str]:
+    """JSON for the `extra` column: every field with no column of its own.
+
+    The `extra` column has existed since the first schema and upsert_application
+    never wrote it, so every non-column field the sync parser produced was
+    silently discarded at persist time. The costly one was `applied_date` --
+    Naukri's REAL apply date, parsed out of the history API on every sync and
+    thrown away every time, which is why retention had only the insert
+    timestamp to work with. See real_applied_date.
+    """
+    prior = app.get("extra")
+    if isinstance(prior, str):
+        try:
+            prior = json.loads(prior)
+        except Exception:
+            prior = None
+    merged = dict(prior) if isinstance(prior, dict) else {}
+    merged.update({k: v for k, v in app.items() if k not in _APPLICATION_COLUMNS})
+    return json.dumps(merged) if merged else None
+
+
 async def upsert_application(app: dict):
     """Insert or update an application."""
     db = await get_db()
@@ -277,14 +307,19 @@ async def upsert_application(app: dict):
         await db.execute("""
             INSERT INTO applications (job_id, title, company, status, applied_at, source,
                                       ars_score, star_rating, job_activity, company_rating,
-                                      is_open, view_count, follow_up_priority, last_synced)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      is_open, view_count, follow_up_priority, last_synced,
+                                      extra)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id) DO UPDATE SET
                 title=excluded.title, company=excluded.company, status=excluded.status,
                 ars_score=excluded.ars_score, star_rating=excluded.star_rating,
                 job_activity=excluded.job_activity, company_rating=excluded.company_rating,
                 is_open=excluded.is_open, view_count=excluded.view_count,
-                follow_up_priority=excluded.follow_up_priority, last_synced=excluded.last_synced
+                follow_up_priority=excluded.follow_up_priority, last_synced=excluded.last_synced,
+                -- Never blank an existing blob with a NULL: a caller that passes
+                -- only the column fields must not erase a real applied_date we
+                -- already captured on an earlier sync.
+                extra=COALESCE(excluded.extra, applications.extra)
         """, (
             app.get("job_id"), app.get("title"), app.get("company"),
             app.get("status", "applied"), app.get("applied_at"),
@@ -293,21 +328,173 @@ async def upsert_application(app: dict):
             json.dumps(app.get("company_rating")) if isinstance(app.get("company_rating"), dict) else app.get("company_rating"),
             app.get("is_open"), app.get("view_count"),
             app.get("follow_up_priority", 50), app.get("last_synced"),
+            _application_extra(app),
         ))
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_applications_before(date: str) -> int:
-    """Delete applications older than date. Returns count deleted."""
+_ARCHIVE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS applications_archive (
+    job_id TEXT PRIMARY KEY,
+    title TEXT,
+    company TEXT,
+    status TEXT,
+    applied_at TEXT,
+    source TEXT,
+    ars_score INTEGER,
+    star_rating TEXT,
+    job_activity INTEGER,
+    company_rating TEXT,
+    is_open INTEGER,
+    view_count INTEGER,
+    follow_up_priority INTEGER,
+    last_synced TEXT,
+    extra TEXT,
+    archived_at TEXT NOT NULL,
+    archived_reason TEXT
+);
+"""
+
+_ARCHIVE_COLUMNS = (
+    "job_id", "title", "company", "status", "applied_at", "source",
+    "ars_score", "star_rating", "job_activity", "company_rating",
+    "is_open", "view_count", "follow_up_priority", "last_synced", "extra",
+)
+
+
+def real_applied_date(row: dict) -> Optional[str]:
+    """The date he ACTUALLY applied, as a comparable ISO string, or None.
+
+    ``applications.applied_at`` is NOT that date. ``record_application`` sets it
+    to ``datetime.now()`` at INSERT time, so it is an insert timestamp for every
+    row -- which is why all 162 rows on the live account carried one of seven
+    batch timestamps rather than a spread of real apply dates.
+
+    The real date is Naukri's ``appliedDate``, which the sync parser extracts as
+    ``applied_date`` and which now survives into the ``extra`` blob.
+
+    Returns None when no trustworthy date exists or it cannot be parsed. Callers
+    MUST treat None as "do not delete": a row whose date provenance is unknown
+    has no evidence of age, and guessing costs him history he cannot get back.
+    """
+    extra = row.get("extra")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except Exception:
+            extra = None
+    if not isinstance(extra, dict):
+        return None
+
+    raw = extra.get("applied_date")
+    if raw is None or raw == "":
+        return None
+
+    # Epoch (Naukri's history API sends millis on some routes)
+    if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw.isdigit()):
+        try:
+            n = float(raw)
+        except Exception:
+            return None
+        if n > 1e11:          # millis
+            n /= 1000.0
+        if not (0 < n < 4e9):  # outside ~1970..2096 is not a date
+            return None
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            return _dt.fromtimestamp(n, _tz.utc).isoformat()
+        except Exception:
+            return None
+
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        parsed = _dt.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_tz.utc)
+        return parsed.isoformat()
+    except Exception:
+        pass
+    for fmt in ("%d %b %Y", "%d %B %Y", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d",
+                "%b %d, %Y", "%d %b, %Y"):
+        try:
+            return _dt.strptime(text, fmt).replace(tzinfo=_tz.utc).isoformat()
+        except Exception:
+            continue
+    return None
+
+
+async def list_purgeable_applications(date: str) -> list:
+    """Rows a purge to `date` would actually remove -- the ONE predicate.
+
+    Preview and deletion must never disagree: a dry run that reports N and then
+    removes a different N is its own defect. ``purge_applications`` uses this
+    for the preview and ``delete_applications_before`` uses it to choose rows.
+    """
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM applications WHERE applied_at < ?", (date,))
-        count = (await cursor.fetchone())[0]
-        await db.execute("DELETE FROM applications WHERE applied_at < ?", (date,))
+        cursor = await db.execute("SELECT * FROM applications")
+        rows = [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+    out = []
+    for r in rows:
+        real = real_applied_date(r)
+        if real is not None and real < date:
+            out.append(r)
+    return out
+
+
+async def delete_applications_before(date: str, reason: str = "retention") -> int:
+    """Archive, then delete, applications whose REAL apply date precedes `date`.
+
+    Two guarantees this function did not previously make:
+
+    * It compares ``real_applied_date(row)``, not ``applied_at``. A row with no
+      trustworthy apply date is NEVER deleted -- see real_applied_date. The old
+      version compared ``applied_at``, an insert timestamp, so it was set to
+      delete 149 of his 162 applications between 2026-08-27 and 2026-09-08 on
+      dates that recorded when the rows were IMPORTED.
+    * Every row is copied into ``applications_archive`` inside the same
+      transaction before it is removed, so a purge is recoverable. Soft-delete
+      was rejected as the mechanism: it would require ``WHERE deleted_at IS
+      NULL`` on every read path in the codebase, and a missed one silently
+      resurrects deleted rows.
+
+    Returns the number of rows archived and deleted.
+    """
+    doomed = await list_purgeable_applications(date)
+    if not doomed:
+        return 0
+
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc).isoformat()
+    placeholders = ", ".join("?" for _ in _ARCHIVE_COLUMNS)
+    insert_sql = (
+        "INSERT OR REPLACE INTO applications_archive (%s, archived_at, archived_reason) "
+        "VALUES (%s, ?, ?)" % (", ".join(_ARCHIVE_COLUMNS), placeholders)
+    )
+
+    db = await get_db()
+    try:
+        await db.executescript(_ARCHIVE_TABLE_SQL)
+        for row in doomed:
+            await db.execute(
+                insert_sql,
+                tuple(row.get(c) for c in _ARCHIVE_COLUMNS) + (now, reason),
+            )
+        await db.executemany(
+            "DELETE FROM applications WHERE job_id = ?",
+            [(row.get("job_id"),) for row in doomed],
+        )
         await db.commit()
-        return count
+        logger.info("Archived and deleted %d applications older than %s (%s)",
+                    len(doomed), date, reason)
+        return len(doomed)
     finally:
         await db.close()
 
