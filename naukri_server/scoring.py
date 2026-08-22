@@ -109,8 +109,54 @@ def parse_skills(raw) -> set:
 
     Handles comma-separated strings, lists, tuples, and sets.
     All skills are normalized through SKILL_ALIASES (e.g., "JS" -> "javascript").
+
+    NOTE: this NORMALISES but does not FILTER -- every input token comes out the
+    other side, recognised or not. That is correct for fit scoring, where an
+    unknown job tag should still count against the match. It is wrong for
+    skill-gap reporting; use ``known_skills`` there.
     """
     return set(DEFAULT_TAXONOMY.parse_set(raw))
+
+
+def taxonomy_tokens() -> frozenset:
+    """Every token the 88-skill taxonomy recognises (canonical names + aliases).
+
+    Reads ``_lookup`` because ``jobcore.skills.SkillTaxonomy`` exposes no public
+    membership predicate -- only normalize / parse_set / match / extended and
+    the three count properties. Adding one belongs in jobcore, which is SHARED
+    with the uplers and instahyre servers, so it is out of scope here.
+
+    Returns an EMPTY set if that attribute ever goes away, and every caller
+    treats empty as "cannot filter" and says so in its output rather than
+    silently reverting to the unfiltered behaviour.
+    """
+    lookup = getattr(DEFAULT_TAXONOMY, "_lookup", None)
+    if not isinstance(lookup, dict) or not lookup:
+        return frozenset()
+    return frozenset(lookup) | frozenset(lookup.values())
+
+
+def known_skills(raw) -> set:
+    """``parse_skills`` minus anything the taxonomy does not recognise.
+
+    Naukri's `tagsAndSkills` is an SEO tag list, not a skill list. Measured on
+    his live recommendations, one job carried
+    "Artificial Intelligence, Fullstack Development, React.js, Langchain,
+    Fast API, Full Stack, Node.js, SQL" -- a mix of real skills and phrases like
+    "Full Stack" and "Development" that are not skills at all. Fed to skill-gap
+    unfiltered, they produced advice to go and learn "development", "software"
+    and "stack".
+
+    Precision over recall on purpose: a skill-gap report he might ACT on must
+    not invent a gap. The cost is that a genuinely new skill outside the 88
+    (e.g. "langchain", today) is dropped rather than reported -- a coverage gap
+    fixed by extending the taxonomy, not by loosening this.
+    """
+    parsed = set(DEFAULT_TAXONOMY.parse_set(raw))
+    known = taxonomy_tokens()
+    if not known:
+        return parsed
+    return {s for s in parsed if s in known}
 
 
 # ── Bonus Scoring Helpers ────────────────────────────────────────────────────

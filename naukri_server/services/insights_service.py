@@ -11,6 +11,7 @@ This service re-exports them via lazy import so callers can use either path.
 """
 
 import asyncio
+import collections
 import logging
 import re
 from collections import Counter
@@ -23,7 +24,7 @@ from naukri_server.config import (
     NAUKRI_BASE, CCS_PAGE_API, BROWSER_DOM_SETTLE,
     MATCH_ANALYTICS_API, logger,
 )
-from naukri_server.scoring import normalize_skill, parse_skills
+from naukri_server.scoring import known_skills, taxonomy_tokens, normalize_skill, parse_skills
 from naukri_server.domain.application import StatusTransition
 from naukri_server.domain.salary import Salary
 from naukri_server.models import Application, ApplicationStatus
@@ -609,8 +610,19 @@ async def skill_gap_analysis(
         matched_counter = Counter()
         missing_jobs = {}
 
+        # Counter, not a set: the MOST FREQUENT dropped tags are the useful
+        # ones -- they are the candidates for extending the 88-skill
+        # taxonomy. Alphabetical order buries them.
+        dropped_tags: collections.Counter = collections.Counter()
         for job in jobs:
-            job_skills = parse_skills(job.get("tags") or job.get("skills") or [])
+            # known_skills, NOT parse_skills: Naukri's tagsAndSkills is an SEO
+            # tag list, so unfiltered it told him to learn "development",
+            # "software" and "stack". A gap report he might act on must not
+            # invent a gap. See scoring.known_skills.
+            raw_tags = job.get("tags") or job.get("skills") or []
+            all_tags = parse_skills(raw_tags)
+            job_skills = known_skills(raw_tags)
+            dropped_tags.update(all_tags - job_skills)
             if not job_skills:
                 continue
 
@@ -665,6 +677,16 @@ async def skill_gap_analysis(
             "assessments_used": len(passed_skills),
             "skill_gaps": skill_gaps,
             "strong_skills": strong_skills,
+            # Make the filtering VISIBLE. Silently dropping tags would leave no
+            # way to tell a clean run from a taxonomy that has stopped
+            # recognising anything, and `taxonomy_filtered: false` is the only
+            # honest way to report that the filter could not run at all.
+            "taxonomy_filtered": bool(taxonomy_tokens()),
+            "unrecognised_tags_dropped": len(dropped_tags),
+            "unrecognised_tags_top": [
+                {"tag": t, "seen_in_jobs": n}
+                for t, n in dropped_tags.most_common(10)
+            ],
         }
 
     try:
