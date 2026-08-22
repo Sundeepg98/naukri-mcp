@@ -460,3 +460,272 @@ class TestAPathSpelledByReprIsStillThatPath:
         assert "/" in err, (
             "collapsed to a bare basename (%r) -- the reader cannot tell which "
             "jobhunt.json" % err)
+
+
+# =====================================================================
+# Can that guard actually fail?
+# =====================================================================
+
+# TRAP GUARD, EVALUATED AT IMPORT AND DELIBERATELY NOT A TEST.
+#
+# Measured on 2026-08-22: a bash heredoc through an agent harness COLLAPSES
+# `\\` to `\` in the file it writes. It turned the character class `[\\/]`
+# into `[\/]` -- forward slash only -- and a drive-letter detector then
+# reported CLEAN on a genuine Windows leak. Every backslash literal below is
+# load-bearing for exactly that reason, so a future mangling must raise on
+# import rather than quietly certify nothing. Collapsing `"\\"` yields an
+# unterminated string and a SyntaxError; collapsing `"\\\\"` is caught here.
+assert len("\\") == 1, "backslash literals in this file have been mangled"
+assert len("\\\\") == 2, "backslash literals in this file have been mangled"
+assert _doubled("a\\b") == "a\\\\b", (
+    "_doubled no longer produces the repr() spelling -- every absence "
+    "assertion in this file that uses it is now measuring nothing"
+)
+
+
+def test_an_oserror_spells_its_filename_with_doubled_backslashes(tmp_path):
+    """The doubling is a property of CPYTHON, not of this server.
+
+    `OSError.__str__` renders its `filename` through `repr()`, and `repr()` of
+    a str escapes backslashes. That single fact is the entire reason
+    `jobcore.paths._spellings` exists and the reason this file carries a second
+    needle at all -- so it is pinned here rather than assumed forever.
+
+    A future Python that stops repr-ing the filename would make every doubled
+    spelling in this file dead weight. This test fails loudly on that day, so
+    the extra spellings can be retired knowingly instead of lingering as cargo
+    nobody dares remove.
+
+    The doubling assertion is guarded on `os.sep` because it is only reachable
+    where separators ARE backslashes. On POSIX the two spellings are the same
+    string, which is asserted rather than skipped past.
+    """
+    cfg = tmp_path / "jobhunt.json"
+    rendered = str(OSError(13, "Permission denied", str(cfg)))
+
+    assert "Permission denied" in rendered
+    assert "jobhunt.json" in rendered
+
+    if os.sep == "\\":
+        assert _doubled(str(cfg)) in rendered, (
+            "OSError no longer spells its filename through repr(): %r"
+            % rendered
+        )
+        assert str(cfg) not in rendered, (
+            "the SINGLE spelling now appears too -- a single-spelling "
+            "scrubber would start working again and _spellings could go"
+        )
+    else:
+        assert str(cfg) in rendered
+        assert _doubled(str(cfg)) == str(cfg), (
+            "a POSIX path grew a backslash; the two spellings no longer "
+            "collapse and this platform now needs the second needle too"
+        )
+
+
+def _relativise_known_without_the_repr_fix(text, *, known, render):
+    """`jobcore.paths.relativise_known` EXACTLY as it stood before 6acc7e6.
+
+    Taken from `git show 6acc7e6 -- src/jobcore/paths.py`: the fix added the
+    `_spellings` helper and rebuilt this loop around it, and changed nothing
+    else in the function. So this body is the real pre-fix behaviour -- one
+    pass over the SINGLE spelling of each known path -- rather than an invented
+    failure mode that never shipped.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    # Longest first: one searched path is often a prefix of another, and
+    # replacing the short one first would leave a mangled tail behind.
+    for raw in sorted({str(k) for k in known if k}, key=len, reverse=True):
+        if raw in text:
+            text = text.replace(raw, str(render(raw)))
+    return text
+
+
+class TestTheReprGuardCanActuallyFail:
+    """THE CONTROL for `TestAPathSpelledByReprIsStillThatPath` above.
+
+    That class is GREEN ON ARRIVAL and says so plainly: naukri's venv installs
+    jobcore EDITABLE from `../jobcore`, so the fix is present on this box no
+    matter what `requirements-ci.txt` pins, and those assertions have never
+    been seen failing here. A guard nobody has watched fail certifies nothing,
+    and a suite of such guards manufactures confidence at scale -- so this
+    class makes the guard fail on purpose and asserts that it does.
+
+    WHAT IS NEUTRALISED, AND WHERE. `jobcore.paths.relativise_known` is
+    replaced, for the duration of one test, by its own pre-6acc7e6 body above.
+    Two properties make that the stable hook rather than a lucky one:
+
+    * it is jobcore's PUBLIC surface -- `relativise_known` is named in
+      `jobcore.paths.__all__`, so it carries a compatibility promise that the
+      private `_spellings` does not. A permanent control coupled to a private
+      helper breaks on any upstream rename, and that break would arrive
+      looking exactly like a regression;
+    * `jobcore.config.Loaded.report` does `from .paths import relativise_known`
+      INSIDE the function, so patching the module attribute is picked up at
+      call time. If that import is ever hoisted to module scope the patch stops
+      biting -- and this class fails, because the guard it expects to fire
+      would not. That is the intended behaviour, not a flake.
+
+    WHY IT IS WORTH A PERMANENT SLOT. The closure lives in a dependency PIN
+    (`requirements-ci.txt` -> jobcore 6acc7e6), not in this repo. Roll the pin
+    back or revert the upstream fix and naukri regresses in silence; nothing
+    else in 2600+ tests looks at this. The guard above catches that. This class
+    is what keeps the guard honest about being able to catch it.
+
+    HOW TO RETIRE IT KNOWINGLY. If jobcore's repr handling ever moves into
+    naukri, or the pin stops being the way the fix arrives, this control has
+    nothing left to neutralise and should be deleted along with the shim. If
+    instead `relativise_known` is renamed or its signature changes, the correct
+    edit is to RE-POINT the shim, never to delete the class.
+    """
+
+    @pytest.fixture
+    def unreadable_config(self, tmp_path, monkeypatch):
+        """A config file that EXISTS but cannot be read.
+
+        Deliberately a copy of the sibling class's fixture rather than a shared
+        one: this control has to reproduce that guard's exact scenario, and a
+        fixture edited for one of them while the other silently follows along
+        is how a control quietly stops controlling anything.
+
+        `Path.read_bytes` is patched NARROWLY -- one file, everything else
+        real. A genuine OS-level lock is not an option: it would not reproduce
+        on the Linux runner, where this suite actually gates a merge.
+        """
+        import naukri_server.policy as naukri_policy
+
+        cfg = tmp_path / "jobhunt.json"
+        cfg.write_text("{}", encoding="utf-8")
+
+        real = Path.read_bytes
+
+        def boom(self):
+            if self == cfg:
+                raise OSError(13, "Permission denied", str(cfg))
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        monkeypatch.setenv("JOBHUNT_CONFIG", str(cfg))
+        naukri_policy.invalidate()
+        try:
+            yield cfg
+        finally:
+            naukri_policy.invalidate()
+
+    @pytest.mark.skipif(
+        os.sep != "\\",
+        reason="the repr spelling only differs from the plain one where "
+               "separators are backslashes; the collapse is asserted by "
+               "test_on_posix_the_two_spellings_are_the_same_string",
+    )
+    def test_the_guard_fires_when_the_repr_fix_is_neutralised(
+            self, unreadable_config, monkeypatch):
+        """Green -> RED -> green, with the fix as the only variable.
+
+        The sequence is the whole point. Asserting the guard passes BEFORE the
+        shim rules out a broken `assert_path_absent` that raises on everything
+        (which would make `pytest.raises` below pass for no reason), and
+        asserting it passes again AFTER rules out the fixture having leaked on
+        its own.
+        """
+        import jobcore.paths as jobcore_paths
+
+        from naukri_server import policy
+
+        cfg = str(unreadable_config)
+        repr_cfg = _doubled(cfg)
+        assert repr_cfg != cfg, "the two spellings must differ here"
+
+        # 1. With the fix present -- the guard passes, and the field is still
+        #    an answer. A "fix" that empties config_error would satisfy every
+        #    absence assertion in this file and help nobody.
+        before = policy.report()
+        assert_path_absent(before, repr_cfg, "policy.report() [repr, fix in]")
+        err_before = before["config_error"] or ""
+        assert "jobhunt.json" in err_before, "which file failed is gone"
+        assert "Permission denied" in err_before, "why it failed is gone"
+
+        # 2. With the fix neutralised -- the guard's own assertion must raise.
+        with monkeypatch.context() as m:
+            m.setattr(jobcore_paths, "relativise_known",
+                      _relativise_known_without_the_repr_fix)
+            during = policy.report()
+
+            with pytest.raises(AssertionError) as caught:
+                assert_path_absent(during, repr_cfg, "policy.report() [repr]")
+            # `assert_path_absent` formats the needle with `%r`, and repr()
+            # doubles backslashes -- the same CPython behaviour that caused
+            # this defect now shapes the message reporting it, so the needle
+            # appears in the failure text DOUBLY doubled. Matching on
+            # `repr(repr_cfg)` is the exact form and says why it is exact.
+            assert repr(repr_cfg) in str(caught.value), (
+                "the guard fired but did not name the path it caught, which "
+                "is the half of a failure message a reader acts on"
+            )
+
+            # ONE SENTENCE, TWO HALVES, TWO OPPOSITE VERDICTS -- the shape that
+            # made this defect survive being looked at. The {path} half is
+            # still correctly relativised by the very same call.
+            assert_path_absent(during, cfg,
+                               "policy.report() [single, fix neutralised]")
+
+        # 3. Fix restored -- green again, so step 2 was caused by the shim.
+        after = policy.report()
+        assert_path_absent(after, repr_cfg, "policy.report() [repr, fix back]")
+
+    @pytest.mark.skipif(
+        os.sep != "\\",
+        reason="the drive-letter walker cannot fire without a drive letter",
+    )
+    def test_the_second_opinion_also_fires_when_the_fix_is_neutralised(
+            self, unreadable_config, monkeypatch):
+        """The corroborating detector is not dead either.
+
+        `assert_path_absent` is the PRIMARY assertion because it works on
+        Linux; `assert_no_absolute_path` is kept as a second opinion. A second
+        opinion that cannot dissent is decoration, so it gets the same
+        treatment as the primary.
+        """
+        import jobcore.paths as jobcore_paths
+
+        from naukri_server import policy
+
+        assert_no_absolute_path(policy.report(), "policy.report() [fix in]")
+
+        with monkeypatch.context() as m:
+            m.setattr(jobcore_paths, "relativise_known",
+                      _relativise_known_without_the_repr_fix)
+            during = policy.report()
+
+            with pytest.raises(AssertionError) as caught:
+                assert_no_absolute_path(during, "policy.report()")
+            # Which prose field it names first is dict-insertion order, not a
+            # property worth pinning -- `config_status` is derived from
+            # `config_error` and both carry the leak. What matters is that it
+            # fired on a PROSE field and not on some unrelated corner.
+            named = str(caught.value)
+            assert ("config_status" in named or "config_error" in named), (
+                "the walker fired somewhere other than the prose fields this "
+                "control is about: %s" % named
+            )
+            assert DRIVE_PATH.search(during["config_error"] or ""), (
+                "config_error itself is clean, so the walker's dissent came "
+                "from somewhere this control did not neutralise"
+            )
+
+    def test_on_posix_the_two_spellings_are_the_same_string(self):
+        """Why the two tests above skip off Windows -- asserted, not asserted
+        in a comment.
+
+        `_spellings` collapses to a single entry when a path holds no
+        backslash, so the pre-fix body and the fixed one are indistinguishable
+        there and the guard genuinely cannot be made to fail. This runs on both
+        platforms so the reason stays true rather than merely stated.
+        """
+        posix_shaped = "/home/runner/work/naukri/naukri/config/jobhunt.json"
+        assert _doubled(posix_shaped) == posix_shaped
+
+        windows_shaped = "D:\\Sundeep\\config\\jobhunt.json"
+        assert _doubled(windows_shaped) != windows_shaped
+        assert "\\\\" in _doubled(windows_shaped)
