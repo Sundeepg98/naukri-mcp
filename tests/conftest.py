@@ -48,6 +48,14 @@ HARD_DEPENDENCIES = (
 
 REMEDIATION = "python -m pip install -e ../jobcore"
 
+#: The likelier fix on a dev box, and the one that actually applied on
+#: 2026-08-22: the repo ships its own venv (the MCP server runs from it), and
+#: `python` on PATH was the Windows Store interpreter, which has never had
+#: jobcore. The dependency was not missing from the project - the run was
+#: pointed at the wrong interpreter, which no "pip install" message would have
+#: told anyone. Named first because it costs nothing to check.
+VENV_HINT = "naukri/venv/Scripts/python.exe -m pytest tests/ -q"
+
 
 def missing_hard_dependencies(names=HARD_DEPENDENCIES):
     """Return [(module_name, exception)] for every name that will not import.
@@ -98,7 +106,10 @@ def pytest_sessionstart(session):
         "printed would be measuring a partial tree.\n"
         + "\n".join("    %s -> %s: %s" % (name, type(exc).__name__, exc)
                     for name, exc in missing)
-        + "\n\n    FIX: %s\n" % REMEDIATION
+        + "\n\n    CHECK THE INTERPRETER FIRST - this repo ships its own venv "
+          "and the\n    server runs from it:\n        %s\n" % VENV_HINT
+        + "\n    Otherwise install it into the interpreter you are using:\n"
+          "        %s\n" % REMEDIATION
         + "    (jobcore is installed EDITABLE from the sibling checkout on "
           "purpose - putting its git URL in requirements.txt clobbers the "
           "editable install. See requirements-ci.txt.)"

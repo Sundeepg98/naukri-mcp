@@ -38,7 +38,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
-    HARD_DEPENDENCIES, REMEDIATION, missing_hard_dependencies,
+    HARD_DEPENDENCIES, REMEDIATION, VENV_HINT, missing_hard_dependencies,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -122,6 +122,11 @@ class TestHardDependencyPreflight:
         assert REMEDIATION in out, (
             "the abort message must carry the fix, or it is just another "
             "traceback:\n%s" % out[-3000:])
+        assert VENV_HINT in out, (
+            "the abort message must name the project venv FIRST. The real "
+            "2026-08-22 cause was the wrong interpreter, not a missing "
+            "package, and no pip instruction would have surfaced that:\n%s"
+            % out[-3000:])
         assert "errors during collection" not in out, (
             "the preflight must fire BEFORE collection - if collection ran, "
             "the wall of import errors is back and the message is buried"
