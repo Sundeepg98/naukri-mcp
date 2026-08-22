@@ -53,10 +53,25 @@
 # the local ../jobcore clone and skips when that clone is absent, so it catches
 # the mistake before a push rather than after a CI round trip.
 #
-# SECOND RULE, same day: PIN A COMMIT WHOSE OWN CI IS GREEN. 0f557eb carries
-# everything named above and was the obvious target, but its jobcore CI run was
-# RED. Pinning a red commit makes a green naukri CI mean nothing -- naukri would
-# be certifying itself against a dependency nobody had certified. d1720c3 is
-# jobcore master, is CI-verified green, and is a descendant of 0f557eb, so it
-# contains every module and API listed above.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@d1720c3b5709adf082ff5be26d23c76d8647d599
+# SECOND RULE, same day: PIN A COMMIT WHOSE OWN CI IS GREEN. 0f557eb carried
+# everything needed and was the obvious target, but its jobcore CI run was RED.
+# Pinning a red commit makes a green naukri CI mean nothing -- naukri would be
+# certifying itself against a dependency nobody had certified.
+#
+# THIRD RULE, and the reason the check above now reads NAMES and not just
+# modules: a pin can be new enough for the MODULE and too old for the ATTRIBUTE.
+# Measured across the three commits this file has pointed at:
+#
+#     16ae934 : buildinfo.py present=0  def self_stamp=n/a
+#     d1720c3 : buildinfo.py present=1  def self_stamp=0
+#     998baf1 : buildinfo.py present=1  def self_stamp=1
+#
+# `naukri_server/buildinfo.py` now calls `jobcore.buildinfo.self_stamp()`, which
+# d1720c3 does not have -- CI would have died with `AttributeError: module
+# 'jobcore.buildinfo' has no attribute 'self_stamp'`, one commit after fixing
+# the ModuleNotFoundError. A sibling repo hit exactly that today.
+#
+# 998baf1 is jobcore master, CI-verified green, a descendant of d1720c3, and
+# carries `self_stamp`, the `version` field on BuildStamp, and
+# `source: "git" | "package" | "unknown"`.
+jobcore @ git+https://github.com/Sundeepg98/jobcore@998baf12aa1095fae8cc8cdb7de4b44fe469019f

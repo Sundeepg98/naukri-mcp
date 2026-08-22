@@ -36,7 +36,6 @@ saying which, never to a plausible-looking hash nobody measured.
 
 from __future__ import annotations
 
-import jobcore
 from jobcore import buildinfo as _bi
 
 from naukri_server.utils import SERVER_ROOT
@@ -46,12 +45,20 @@ __all__ = ["BUILD", "JOBCORE_BUILD", "CLOCK"]
 #: The naukri checkout this process was started from.
 BUILD = _bi.stamp(SERVER_ROOT)
 
-#: The sibling jobcore checkout, which can be stale independently of naukri.
-#: Anchored on ``jobcore.__file__`` rather than on a guessed sibling path, so it
-#: names whichever copy was actually IMPORTED -- an editable install and a
-#: vendored copy would give different answers, and the imported one is the only
-#: one whose code is running.
-JOBCORE_BUILD = _bi.stamp(jobcore.__file__)
+#: The jobcore that was actually IMPORTED, however it was installed.
+#:
+#: This was ``_bi.stamp(jobcore.__file__)``, which is correct only when jobcore
+#: is an editable install pointing at a work tree -- the developer case. CI, and
+#: any real deployment, installs it from a git URL into ``site-packages``, which
+#: is NOT a work tree, so the stamp honestly returned ``source: "unknown"`` and
+#: told nobody anything. Silent in exactly the deployment where nobody can run
+#: ``git log`` by hand, which is the one this whole module exists to serve.
+#:
+#: ``self_stamp()`` answers in both installations: a work tree gives the commit
+#: AND the version; a packaged install gives ``source: "package"`` and the
+#: installed version. Neither degrades to "unknown", so
+#: ``build.jobcore`` identifies the library on a runner as well as on this box.
+JOBCORE_BUILD = _bi.self_stamp()
 
 #: Process identity and uptime. Deliberately NOT folded into the frozen stamps:
 #: uptime is derived fresh on every read, and a cached uptime is a lie that

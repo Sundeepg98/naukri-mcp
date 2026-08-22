@@ -30,6 +30,9 @@ from tests.test_path_leaks import DRIVE_PATH, assert_no_absolute_path
 
 BUILD_STAMP_KEYS = {
     "commit", "commit_full", "branch", "committed_at", "dirty", "dirty_files",
+    # `version` arrived with jobcore 998baf1: a pip-installed dependency has no
+    # commit, but it does have a version, and reporting neither was the hole.
+    "version",
     "resolved_at", "source", "detail",
 }
 
@@ -112,8 +115,8 @@ class TestTheBuildBlock:
         assert set(code) == BUILD_STAMP_KEYS, (
             "the build block is not a full BuildStamp: %s" % sorted(code)
         )
-        assert code["source"] in ("git", "unknown")
-        if code["source"] == "unknown":
+        assert code["source"] in ("git", "package", "unknown")
+        if code["source"] != "git":
             pytest.skip("no resolvable git work tree here: %s" % code["detail"])
 
         assert code["commit"], "source is git but no commit was reported"
@@ -171,13 +174,28 @@ class TestJobcoreIsStampedSeparately:
         code, jc = build["code"], build["jobcore"]
 
         assert set(jc) == BUILD_STAMP_KEYS
-        if code["source"] != "git" or jc["source"] != "git":
-            pytest.skip("one of the two checkouts is not a git work tree")
 
-        assert code["commit_full"] != jc["commit_full"], (
-            "both blocks name the same commit -- jobcore is not being stamped "
-            "from its own checkout"
+        # THE PROPERTY, NOT THIS BOX'S ANSWER. jobcore is an editable install
+        # from a work tree here, so it reports source "git" with a commit. On
+        # CI it is installed from a git URL into site-packages -- not a work
+        # tree -- and reports source "package" with a version. Asserting
+        # == "git" would pin the developer case and go red on the runner, which
+        # is exactly how a sibling repo broke today.
+        assert jc["source"] in ("git", "package"), (
+            "jobcore stamped as %r -- an installed dependency must identify "
+            "itself in BOTH installations, never degrade to unknown"
+            % jc["source"]
         )
+        assert jc["commit"] or jc["version"], (
+            "jobcore reported neither a commit nor a version; the stamp is "
+            "honest and useless at the same time"
+        )
+
+        if code["source"] == "git" and jc["source"] == "git":
+            assert code["commit_full"] != jc["commit_full"], (
+                "both blocks name the same commit -- jobcore is not being "
+                "stamped from its own checkout"
+            )
 
     def test_the_two_stamps_come_from_two_different_anchors(self):
         """Structural: separate memo keys, so neither can shadow the other.
@@ -201,7 +219,10 @@ class TestJobcoreIsStampedSeparately:
         # Identity, not equality: these must be the very objects resolved at
         # import, not fresh ones that happen to agree.
         assert nb.BUILD is bi.stamp(SERVER_ROOT)
-        assert nb.JOBCORE_BUILD is bi.stamp(jobcore.__file__)
+        # jobcore stamps ITSELF now. `stamp(jobcore.__file__)` was right only
+        # for an editable install; a git-URL install into site-packages is not
+        # a work tree and returned source "unknown".
+        assert nb.JOBCORE_BUILD is bi.self_stamp()
 
     @needs_git
     async def test_the_jobcore_commit_is_jobcores_own_head(self):
@@ -310,3 +331,51 @@ class TestItIsRegisteredAsATool:
         assert "git rev-parse HEAD" in doc
         assert "stale" in doc.lower()
         assert "restart" in doc.lower()
+
+
+class TestJobcoreIdentifiesItselfWhenItIsNotAWorkTree:
+    """The hole `self_stamp()` closed, and why it was invisible locally.
+
+    `stamp(jobcore.__file__)` anchors on a PATH, so it can only answer when
+    that path sits in a git work tree -- the editable-install developer case.
+    CI and any real deployment install jobcore from a git URL into
+    site-packages, which is not a work tree, so the stamp honestly returned
+    `source: "unknown"` and identified nothing. Honest and useless together,
+    and silent in exactly the deployment where nobody can run `git log`.
+    """
+
+    def test_a_path_outside_a_work_tree_stamps_as_unknown(self, tmp_path):
+        """The defect, as a measurement: this is what CI was getting."""
+        from jobcore import buildinfo as bi
+
+        fake = tmp_path / "site-packages" / "jobcore" / "__init__.py"
+        fake.parent.mkdir(parents=True)
+        fake.write_text("", encoding="utf-8")
+
+        anchored = bi.stamp(fake)
+        if anchored.source != "unknown":
+            pytest.skip(
+                "the temp dir is inside a git work tree (%s); this box cannot "
+                "simulate a packaged install by path" % anchored.source)
+        assert anchored.commit is None
+        assert anchored.version is None
+
+    def test_self_stamp_identifies_jobcore_either_way(self):
+        """And the fix: it answers in both installations, never 'unknown'."""
+        from jobcore import buildinfo as bi
+
+        own = bi.self_stamp()
+        assert own.source in ("git", "package"), (
+            "jobcore could not identify itself (%r)" % own.source)
+        assert own.commit or own.version, (
+            "neither a commit nor a version -- nothing to compare against")
+
+    def test_the_server_info_payload_carries_it(self):
+        """The property held end to end, through the tool."""
+        import asyncio
+
+        from naukri_server.tools.server_info import naukri_server_info
+
+        jc = asyncio.run(naukri_server_info())["build"]["jobcore"]
+        assert jc["source"] in ("git", "package")
+        assert jc["commit"] or jc["version"]
