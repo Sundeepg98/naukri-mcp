@@ -90,3 +90,5 @@ _sweep/backup-pre-sweep/
 _sweep/*.log
 exports/sweep_*.json
 _sweep/tools.json
+_sweep/livelist.txt
+_sweep/backup-pre-sync.db
