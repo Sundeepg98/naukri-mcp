@@ -208,8 +208,16 @@ async def _notify_t3(event: EndpointDriftDetected, repo_root: Path) -> None:
             after_source=after,
             drift_summary=_drift_summary(event),
         )
-        if not outcome.delivered:
-            # diff was empty or store failed — fall back to plain notification
+        if not outcome.delivered and not outcome.suppressed:
+            # Diff was empty or the store failed - fall back to a plain
+            # notification so the drift still reaches him.
+            #
+            # `not outcome.suppressed` is load-bearing. A SUPPRESSED duplicate
+            # means a HealingProposal for this constant is already sitting
+            # undelivered, so there is nothing to tell him; falling back there
+            # would bank an EndpointDrift row on every probe run instead,
+            # converting a proposal storm into a drift storm and fixing
+            # nothing. A suppression is a no-op.
             await _store_drift_notification(
                 event.constant_name,
                 outcome.skipped_reason or outcome.error or "proposal not delivered",
@@ -273,9 +281,37 @@ async def _store_synthesis_proposal(
     Used in shadow mode (good candidate withheld) so the operator can watch the
     healer propose correct fixes before flipping HEALING_AUTOFIX_ENABLED on.
     Never raises.
+
+    AT MOST ONE LIVE PROPOSAL PER CONSTANT, the same predicate and for the same
+    reason as _store_drift_notification above. The drift that produces the
+    candidate is re-reported by the scheduled api_validator probe on every run,
+    and the candidate is deterministic, so an unconditional store banks the
+    identical proposal per constant per run - the EndpointDrift storm again,
+    latent today only because it takes a dry-run-passing candidate to reach
+    here. Keyed on `constant_name` so a proposal for an endpoint with nothing
+    pending still announces immediately, and re-armed by delivery.
+
+    The dedupe is shared with notify_t3_proposal by construction: both key
+    ("HealingProposal", constant_name), so a T3 proposal already waiting for
+    review also suppresses a synthesized one for that same constant. One
+    endpoint's healing story is one fact in his queue.
+
+    Fail OPEN - a broken predicate degrades to the old noise, which is
+    recoverable; swallowing a genuine new proposal is not.
     """
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        try:
+            if candidate.constant_name and await has_pending_notification(
+                    "HealingProposal", candidate.constant_name,
+                    metadata_key="constant_name"):
+                logger.debug("HealingProposal for %s already pending - suppressed",
+                             candidate.constant_name)
+                return
+        except Exception as exc:  # noqa: BLE001 - notify anyway
+            logger.warning("HealingProposal dedupe check failed, notifying anyway: %s", exc)
+
         await store_notification({
             "event_type": "HealingProposal",
             "title": (f"Auto-fix proposal (shadow): {candidate.constant_name}"

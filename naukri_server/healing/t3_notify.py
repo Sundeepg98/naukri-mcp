@@ -28,9 +28,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class T3NotifyOutcome:
-    """Structured result of a T3 proposal notification."""
+    """Structured result of a T3 proposal notification.
+
+    `suppressed` is NOT a flavour of `delivered=False` - the router reads the
+    two separately. Its fallback banks a plain EndpointDrift row whenever a
+    proposal could not be delivered, which is right for a failure (he must
+    still hear that the endpoint drifted) and exactly wrong for a duplicate:
+    routing suppressed duplicates into the fallback would convert a
+    HealingProposal storm into an EndpointDrift storm and change nothing.
+    A suppression is a NO-OP; only `suppressed=False, delivered=False` falls
+    back. See router._notify_t3.
+    """
 
     delivered: bool
+    suppressed: bool = False
     notification_id: int | None = None
     constant_name: str = ""
     skipped_reason: str | None = None
@@ -80,7 +91,31 @@ async def notify_t3_proposal(
 
     Returns:
         T3NotifyOutcome with delivered=True + notification_id on success,
-        or delivered=False + error on failure.
+        delivered=False + suppressed=True when an undelivered proposal for
+        this constant already exists, or delivered=False + error on failure.
+
+    AT MOST ONE LIVE PROPOSAL PER CONSTANT. A drifted T3 endpoint STAYS
+    drifted until someone edits the parser by hand - that is the definition of
+    T3 - and the scheduled api_validator probe re-reports it on every run, so
+    an unconditional store banks a duplicate per constant per run. That is how
+    three drifted constants became 81 EndpointDrift notifications, 41% of his
+    undelivered queue; this path is the same producer on the same cadence and
+    is latent only because the healer circuit is off.
+
+    DEDUPE BY EXISTING UNDELIVERED ROW keyed on `constant_name`, not by a
+    `last_notified_at` column plus an interval. An interval only sets the
+    storm's RATE for a condition that never clears on its own. This predicate
+    is bounded by construction - one undelivered HealingProposal per constant,
+    ever - needs no schema migration, and re-arms the moment the brief delivers
+    the notification.
+
+    The key is the CONSTANT, deliberately, and not something coarser: a T3
+    drift on an endpoint with nothing pending must announce itself immediately
+    even while a backlog for other endpoints sits undelivered.
+
+    Fail OPEN, and report a duplicate as `suppressed`, never as a plain
+    `delivered=False` - the router's fallback turns the latter into an
+    EndpointDrift row, which would move the storm rather than stop it.
     """
     entry = tier_registry.tier_for(constant_name)
     if entry is None:
@@ -119,7 +154,27 @@ async def notify_t3_proposal(
     )
 
     try:
-        from naukri_server.database import store_notification
+        from naukri_server.database import store_notification, has_pending_notification
+
+        # Fail OPEN: the proposal is the payload, the dedupe is an optimisation
+        # over it. A broken predicate degrades to the old noise, which is
+        # recoverable; swallowing a genuine NEW proposal is not.
+        try:
+            if constant_name and await has_pending_notification(
+                    "HealingProposal", constant_name, metadata_key="constant_name"):
+                logger.debug("HealingProposal for %s already pending - suppressed",
+                             constant_name)
+                return T3NotifyOutcome(
+                    delivered=False,
+                    suppressed=True,
+                    constant_name=constant_name,
+                    skipped_reason=(
+                        "an undelivered HealingProposal for %s is already pending"
+                        % constant_name),
+                )
+        except Exception as exc:  # noqa: BLE001 - notify anyway
+            logger.warning("HealingProposal dedupe check failed, notifying anyway: %s", exc)
+
         nid = await store_notification({
             "event_type": "HealingProposal",
             "title": f"Healing proposal: {constant_name} (T3 — review required)",
