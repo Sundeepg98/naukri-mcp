@@ -18,6 +18,7 @@ when the watchdog gives up. `crash_count` still increments every cycle, so
 nothing observable is lost -- only the repetition.
 """
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -90,7 +91,24 @@ async def test_a_second_outage_after_recovery_is_announced_again():
     # Browser comes back: the monitor loop zeroes the failure count, and a
     # sustained healthy stretch restores the budget.
     wd._consecutive_failures = 0
-    wd._last_restart = 0.0
+    # "The last restart was longer ago than the budget window" -- expressed
+    # RELATIVE TO THE CLOCK, never as the literal 0.0.
+    #
+    # This was `wd._last_restart = 0.0`, and it encoded a MACHINE UPTIME
+    # assumption nobody meant to make. `_maybe_restore_restart_budget` compares
+    # `time.monotonic() - self._last_restart` against 600s, and monotonic()
+    # counts from SYSTEM BOOT -- so 0.0 means "long ago" only on a box that has
+    # already been up ten minutes. On this dev box (up ~95h) it passed; on a
+    # GitHub Actions container, seconds old, `monotonic() - 0.0` is under 600
+    # and the restore correctly declines, leaving _restart_count at 3.
+    # `assert 3 == 0`, red on ubuntu 3.10/3.11/3.12 and green here.
+    #
+    # Not a Windows-vs-Linux difference: a freshly booted Windows box fails it
+    # too. The PRODUCTION code is correct -- `_restart_count` and
+    # `_last_restart` are assigned together in `_attempt_restart`, so a nonzero
+    # count always carries a real timestamp and the 0.0 initialiser is
+    # unreachable with a nonzero count.
+    wd._last_restart = time.monotonic() - wd._RESTART_BUDGET_RESET_SECONDS - 1
     wd._maybe_restore_restart_budget()
     assert wd._restart_count == 0
     assert wd._announced_exhausted is False, "the give-up notice must re-arm"
@@ -119,3 +137,96 @@ async def test_recovery_rearms_the_notice_too():
 
     assert wd._announced_exhausted is False
     assert wd._consecutive_failures == 0
+
+
+# =====================================================================
+# The clock assumption, pinned
+# =====================================================================
+# `test_a_second_outage_after_recovery_is_announced_again` set
+# `_last_restart = 0.0` to mean "long ago". `time.monotonic()` counts from
+# SYSTEM BOOT, so that is only true on a machine already up past the 600s
+# budget window. It passed on a dev box up 95 hours and was red on every
+# ubuntu runner in CI, which is where it had never once run green.
+#
+# These are GUARDS, not the reproduction -- the reproduction is the CI failure
+# plus a local run with monotonic() pinned to a fresh-boot value. They exist so
+# the assumption cannot be re-introduced silently.
+
+
+class TestTheBudgetRestoreIgnoresTheAbsoluteClock:
+
+    @pytest.mark.parametrize("now", [700.0, 1200.0, 344_000.0])
+    @pytest.mark.parametrize("elapsed,expect_restore", [(599.0, False), (601.0, True)])
+    def test_the_decision_depends_on_elapsed_time_not_machine_uptime(
+            self, now, elapsed, expect_restore):
+        """Same elapsed time must give the same verdict on any uptime.
+
+        Three absolute clocks spanning a seconds-old container to a box up four
+        days; the verdict must track only `now - _last_restart`.
+        """
+        from naukri_server import browser_watchdog as mod
+
+        wd = BrowserWatchdog()
+        wd._restart_count = wd._max_restarts
+        wd._last_restart = now - elapsed
+
+        with patch.object(mod.time, "monotonic", return_value=now):
+            wd._maybe_restore_restart_budget()
+
+        assert (wd._restart_count == 0) is expect_restore, (
+            "uptime %.0fs, elapsed %.0fs: restore=%s, expected %s"
+            % (now, elapsed, wd._restart_count == 0, expect_restore)
+        )
+
+    def test_a_fresh_boot_clock_does_not_fake_a_budget_restore(self):
+        """The exact CI condition, asserted as correct CODE behaviour.
+
+        45 seconds after boot the watchdog must NOT hand the budget back just
+        because `_last_restart` happens to read 0.0. The code declining here is
+        right; the old test asserting the opposite is what was wrong.
+        """
+        from naukri_server import browser_watchdog as mod
+
+        wd = BrowserWatchdog()
+        wd._restart_count = wd._max_restarts
+        wd._last_restart = 0.0
+
+        with patch.object(mod.time, "monotonic", return_value=45.0):
+            wd._maybe_restore_restart_budget()
+
+        assert wd._restart_count == wd._max_restarts, (
+            "the budget was restored 45s after boot -- 0.0 is not a timestamp "
+            "meaning 'long ago', it is the initialiser"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_successful_restart_stamps_the_time_with_the_count(self):
+        """WHY the 0.0 initialiser is unreachable in production.
+
+        The whole diagnosis rests on this invariant: `_attempt_restart` sets
+        `_restart_count` and `_last_restart` together, so a nonzero count always
+        carries a real timestamp. If anything ever increments the count without
+        stamping the clock, the 0.0 initialiser becomes reachable and the
+        production bug the old test appeared to be reporting becomes real.
+        """
+        from naukri_server import browser_watchdog as mod
+
+        wd = BrowserWatchdog()
+        assert wd._restart_count == 0
+        assert wd._last_restart == 0.0
+
+        fake_browser = type("B", (), {"page_pool": None})()
+        fake_browser.stop = AsyncMock()
+        fake_browser.start = AsyncMock()
+
+        with patch.object(mod, "BROWSER_RESTART_TIMEOUT", 5), \
+             patch("naukri_server.browser.browser", fake_browser), \
+             patch("naukri_server.events.event_bus.emit", new=AsyncMock()):
+            await wd._attempt_restart()
+
+        assert wd._restart_count == 1, "the restart did not count"
+        assert wd._last_restart > 0.0, (
+            "_restart_count moved without stamping _last_restart -- the 0.0 "
+            "initialiser is now reachable with a nonzero count, which makes "
+            "the budget restore depend on machine uptime for real"
+        )
