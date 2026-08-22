@@ -261,9 +261,14 @@ class TestResearchCompany:
             mock_rev.return_value = {"status": "success", "overall_rating": 4.0}
             mock_int.return_value = {"status": "success", "interview_experiences": []}
             result = await naukri_research_company(keyword="Wipro", include_jobs=False)
-            assert result["status"] == "success"
+            # Reviews and interviews landed, salary did not -> partial_success.
+            # This used to read "success" no matter how much had failed; on the
+            # live account 2026-08-22 that produced a success with zero data and
+            # two swallowed AttributeErrors.
+            assert result["status"] == "partial_success"
             assert "errors" in result
             assert any("Salary" in e and "connection timeout" in e for e in result["errors"])
+            assert "reviews" in result, "what DID land must still be returned"
 
 
 # =====================================================================

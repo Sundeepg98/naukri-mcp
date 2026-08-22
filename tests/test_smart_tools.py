@@ -389,6 +389,12 @@ class TestDailyBrief:
         "naukri_server.tools.assessments._list_assessments",
         "naukri_server.tools.insights._match_quality",
         "naukri_server.tools.notifications._get_unified_notify",
+        # The 19th. It was missing from this fixture and the gap was invisible,
+        # because _fetch_ab_applied_insights swallowed its exception and
+        # returned a fabricated {"status": "success", "count": 0}. With that
+        # removed, an unmocked AB fetch correctly shows up as a failure -- so
+        # the fixture has to actually mock it.
+        "naukri_server.tools.ambitionbox.ab_get_applied_jobs_insights",
     ]
 
     # Corresponding mock return values (order matches _DAILY_BRIEF_PATCHES)
@@ -411,6 +417,7 @@ class TestDailyBrief:
         {"status": "success", "assessments": [{"skill": "Python", "status": "passed"}]},
         {"status": "success", "match_quality": {"score": 75, "breakdown": {}}},
         {"status": "success", "source": "unified_notify", "categories": {"recoJobs": {"count": 10, "has_new": True}}, "total_types": 1},
+        {"status": "success", "count": 0, "insights": []},
     ]
 
     # Short labels matching the patch order (for override dict keys)
@@ -570,13 +577,13 @@ class TestDailyBrief:
         assert result["dashboard"]["profile_views"] == 42
         assert result["subscription"]["plan"] == "premium"
 
-        # Notifications section should be zeroed out
-        assert result["notifications"]["count"] == 0
-        assert result["notifications"]["items"] == []
+        # The failed section is None. It used to read {"count": 0, "items": []},
+        # which claims he has no notifications when in fact the fetch raised.
+        assert result["notifications"] is None
 
     @pytest.mark.asyncio
     async def test_daily_brief_handles_error_status_from_helper(self):
-        """When a helper returns {status: error}, section is zeroed and error logged."""
+        """When a helper returns {status: error}, the section is None and the error logged."""
         from naukri_server.tools.daily_brief import naukri_daily_brief
 
         overrides = {
@@ -597,10 +604,10 @@ class TestDailyBrief:
 
         assert result["status"] == "partial_success"
         assert any("Inbox" in e for e in result["errors"])
-        # Inbox zeroed out
-        assert result["unread_messages"]["count"] == 0
-        assert result["unread_messages"]["messages"] == []
-        # Other sections still fine
+        # Inbox is None -- it FAILED, and a zero would have claimed he simply
+        # has no unread messages.
+        assert result["unread_messages"] is None
+        # Sections that succeeded are unaffected.
         assert result["recommendations"]["count"] == 3
 
     @pytest.mark.asyncio
@@ -621,16 +628,24 @@ class TestDailyBrief:
                 cm.__exit__(None, None, None)
 
         assert result["status"] == "partial_success"
-        assert len(result["errors"]) == 18
-        # All sections should be zeroed/default
-        assert result["unread_messages"]["count"] == 0
+        # 19, not 18: _fetch_ab_applied_insights used to swallow its exception
+        # and return {"status": "success", "count": 0, "insights": []} -- a
+        # crash wearing a measurement. It now reports the failure like the rest.
+        assert len(result["errors"]) == 19
+
+        # A SECTION WHOSE FETCH FAILED IS None, NEVER A ZERO. Every one of these
+        # used to read 0 while its fetch had RAISED, which is indistinguishable
+        # from a real measurement of nothing. That is the exact shape that let
+        # seven LinkedIn tools pass for months.
+        assert result["unread_messages"] is None
         assert result["activity_level"] == "UNKNOWN"
         assert result["subscription"] is None
         assert result["profile_completeness"] is None
         assert result["search_impressions"] is None
-        assert result["saved_jobs"]["total"] == 0
-        assert result["assessments"]["total"] == 0
-        assert result["job_alerts"]["triggered_count"] == 0
+        assert result["saved_jobs"] is None
+        assert result["assessments"] is None
+        assert result["job_alerts"] is None
+        assert result["dashboard"] is None, "profile_views 0 was the worst of them"
 
 
 # =====================================================================

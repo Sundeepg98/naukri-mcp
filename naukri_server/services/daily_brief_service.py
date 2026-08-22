@@ -126,7 +126,7 @@ def build_recommended_actions(brief: dict) -> list:
     actions: list[dict] = []
 
     # High priority: pending workflow notifications
-    pending_notifs = brief.get("pending_notifications", [])
+    pending_notifs = (brief.get("pending_notifications") or [])
     high_priority_notifs = [n for n in pending_notifs if n.get("priority") == "high"]
     if high_priority_notifs:
         actions.append({
@@ -149,7 +149,7 @@ def build_recommended_actions(brief: dict) -> list:
         pass
 
     # High priority: unread recruiter messages
-    inbox = brief.get("unread_messages", {})
+    inbox = (brief.get("unread_messages") or {})
     if inbox.get("count", 0) > 0:
         actions.append({
             "priority": "high",
@@ -158,7 +158,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # High priority: due reminders
-    reminders = brief.get("due_reminders", {})
+    reminders = (brief.get("due_reminders") or {})
     due_count = reminders.get("count", 0)
     if due_count > 0:
         actions.append({
@@ -168,7 +168,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # Medium priority: stale applications
-    stale = brief.get("stale_applications", {})
+    stale = (brief.get("stale_applications") or {})
     stale_count = stale.get("count", 0)
     if stale_count > 0:
         actions.append({
@@ -178,7 +178,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # High priority: stale applications with high follow-up priority
-    if brief.get("stale_applications", {}).get("top_stale"):
+    if (brief.get("stale_applications") or {}).get("top_stale"):
         top_stale = brief["stale_applications"]["top_stale"]
         high_priority = [s for s in top_stale if s.get("follow_up_priority", 0) >= 70]
         if high_priority:
@@ -189,7 +189,7 @@ def build_recommended_actions(brief: dict) -> list:
             })
 
     # Medium priority: conversion funnel dead zones
-    funnel = brief.get("conversion_funnel", {})
+    funnel = (brief.get("conversion_funnel") or {})
     dead_zones = funnel.get("dead_zones", [])
     if dead_zones:
         companies = ", ".join(d.get("company", "?") for d in dead_zones[:3])
@@ -200,7 +200,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # High priority: recruiter search activity (from notification_summary)
-    notify = brief.get("notification_summary", {})
+    notify = (brief.get("notification_summary") or {})
     recruiter_search = notify.get("categories", {}).get("recruiterSearch", {})
     if recruiter_search.get("count", 0) > 0:
         actions.append({
@@ -210,7 +210,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # Medium priority: new early access roles
-    ea = brief.get("early_access_roles", {})
+    ea = (brief.get("early_access_roles") or {})
     new_count = ea.get("newly_posted_count", 0)
     if new_count > 0:
         actions.append({
@@ -220,7 +220,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # Medium priority: pending assessments
-    assessments = brief.get("assessments", {})
+    assessments = (brief.get("assessments") or {})
     pending = assessments.get("pending", 0)
     if pending > 0:
         actions.append({
@@ -240,7 +240,7 @@ def build_recommended_actions(brief: dict) -> list:
         })
 
     # Medium priority: high average competition across recent applications
-    competition = brief.get("competition_overview", {})
+    competition = (brief.get("competition_overview") or {})
     avg_applicants = competition.get("average_applicants")
     if avg_applicants is not None and avg_applicants > 200:
         avg = int(avg_applicants)

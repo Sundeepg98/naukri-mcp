@@ -133,6 +133,7 @@ def _all_good_results(
             else _make_match_quality(),                            # 16
         {"status": "success", "source": "unified_notify",
          "categories": {}, "total_types": 0},                     # 17
+        {"status": "success", "count": 0, "insights": []},        # 18 (AB)
     ]
 
 
@@ -157,6 +158,12 @@ GATHER_PATCHES = [
     ("naukri_server.tools.assessments._list_assessments",),
     ("naukri_server.tools.insights._match_quality",),
     ("naukri_server.tools.notifications._get_unified_notify",),
+    # The 19th gathered helper. It was absent from this list and the gap was
+    # invisible, because _fetch_ab_applied_insights swallowed any exception and
+    # returned a fabricated {"status": "success", "count": 0, "insights": []}.
+    # With that removed an unmocked AB fetch correctly reports a failure, so the
+    # fixture has to mock it like the rest.
+    ("naukri_server.tools.ambitionbox.ab_get_applied_jobs_insights",),
 ]
 
 
@@ -437,7 +444,7 @@ def _patch_all_17(results_list):
     """Return list of (target_path, AsyncMock) tuples for all 18 gather helpers."""
     return [
         (GATHER_PATCHES[i][0], AsyncMock(return_value=results_list[i]))
-        for i in range(18)
+        for i in range(min(len(GATHER_PATCHES), len(results_list)))
     ]
 
 
@@ -582,12 +589,13 @@ class TestNaukriDailyBriefPartialFailures:
         assert "Subscription" in error_text
 
     @pytest.mark.asyncio
-    async def test_unread_messages_zero_when_inbox_fails(self):
+    async def test_unread_messages_is_none_not_zero_when_inbox_fails(self):
         results = _all_good_results()
         results[0] = Exception("inbox error")
         result = await _run_brief_with_mocked_results(results)
-        assert result["unread_messages"]["count"] == 0
-        assert result["unread_messages"]["messages"] == []
+        # None, not 0. A zero here claims he has no unread messages when
+        # the inbox fetch actually FAILED -- the shape this change removes.
+        assert result["unread_messages"] is None
 
 
 class TestNaukriDailyBriefISTDate:
@@ -734,15 +742,22 @@ class TestPendingAssessmentCount:
     async def test_pending_count_zero_when_no_assessments(self):
         results = _all_good_results(assessment_items=[])
         result = await _run_brief_with_mocked_results(results)
+        # 0 is CORRECT here: the fetch succeeded and returned an empty list.
+        # That is the distinction the None change exists to preserve -- a
+        # measured zero still reads 0; only a FAILED fetch becomes None.
         assert result["assessments"]["pending"] == 0
         assert result["assessments"]["total"] == 0
 
     @pytest.mark.asyncio
-    async def test_pending_count_zero_when_assessments_task_fails(self):
+    async def test_assessments_is_none_not_zero_when_the_task_fails(self):
         results = _all_good_results()
         results[15] = Exception("assessments API down")
         result = await _run_brief_with_mocked_results(results)
-        assert result["assessments"]["pending"] == 0
+        # The fetch RAISED. It used to report {"total": 0, "pending": 0},
+        # which is the same answer as "you have no pending assessments" -- and
+        # he would act on it.
+        assert result["assessments"] is None
+        assert any("Assessments" in e for e in result["errors"])
 
 
 # =====================================================================

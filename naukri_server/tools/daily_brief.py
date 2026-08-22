@@ -27,8 +27,14 @@ async def _fetch_ab_applied_insights() -> dict:
     try:
         from naukri_server.tools.ambitionbox import ab_get_applied_jobs_insights
         return await ab_get_applied_jobs_insights()
-    except Exception:
-        return {"status": "success", "count": 0, "insights": []}
+    except Exception as e:
+        # NOT a fabricated success. This used to return
+        # {"status": "success", "count": 0, "insights": []} on ANY exception --
+        # a crash wearing a measurement, and the purest form of the defect the
+        # section builders above were also committing.
+        logger.warning("AB applied insights failed: %s: %s", type(e).__name__, e)
+        return {"status": "error", "message": "%s: %s" % (type(e).__name__, e),
+                "error_code": "API_ERROR"}
 
 
 async def _fetch_pending_notifications() -> list:
@@ -176,65 +182,80 @@ async def naukri_daily_brief(explain: bool = False) -> dict:
             if status_val not in ("passed", "completed", "failed"):
                 pending_count += 1
 
+    # A SECTION WHOSE FETCH FAILED IS None, NEVER A ZERO.
+    #
+    # Every section below used to read `x.get(k, 0) if x else 0`, so a fetch
+    # that RAISED produced `{"count": 0}` / `{"profile_views": 0}` -- a hard
+    # zero indistinguishable from a real measurement of nothing. Measured
+    # 2026-08-22: with the session expired all 14 sub-fetches failed and the
+    # brief still reported profile_views 0, recommendations 0, unread 0. The
+    # `errors` list named all fourteen, but that is a separate channel most
+    # callers never join, and the zeros are what gets read.
+    #
+    # None cannot be mistaken for a measurement. build_recommended_actions
+    # reads every section through `or {}` for exactly this reason.
+    def _section(source, build):
+        return build(source) if source is not None else None
+
     brief = {
         "status": "success",
         "date": today,
-        "unread_messages": {
-            "count": inbox.get("count", 0) if inbox else 0,
-            "messages": inbox.get("messages", []) if inbox else [],
-        },
-        "notifications": {
-            "count": notifs.get("count", 0) if notifs else 0,
-            "items": notifs.get("notifications", []) if notifs else [],
-        },
-        "notification_summary": {
-            "categories": notify_summary.get("categories", {}) if notify_summary else {},
-            "total_types": notify_summary.get("total_types", 0) if notify_summary else 0,
-        },
-        "recommendations": {
-            "count": recs.get("count", 0) if recs else 0,
-            "jobs": recs.get("jobs", []) if recs else [],
-            "clusters": recs.get("clusters", {}) if recs else {},
-            "agent_eligible": recs.get("agent_eligible_exists", False) if recs else False,
-        },
-        "recruiter_activity": {
-            "total": recruiter.get("total_actions", 0) if recruiter else 0,
-            "change": recruiter.get("percentage_change") if recruiter else None,
-            "recent": recruiter.get("activities", []) if recruiter else [],
-        },
+        "unread_messages": _section(inbox, lambda d: {
+            "count": d.get("count", 0),
+            "messages": d.get("messages", []),
+        }),
+        "notifications": _section(notifs, lambda d: {
+            "count": d.get("count", 0),
+            "items": d.get("notifications", []),
+        }),
+        "notification_summary": _section(notify_summary, lambda d: {
+            "categories": d.get("categories", {}),
+            "total_types": d.get("total_types", 0),
+        }),
+        "recommendations": _section(recs, lambda d: {
+            "count": d.get("count", 0),
+            "jobs": d.get("jobs", []),
+            "clusters": d.get("clusters", {}),
+            "agent_eligible": d.get("agent_eligible_exists", False),
+        }),
+        "recruiter_activity": _section(recruiter, lambda d: {
+            "total": d.get("total_actions", 0),
+            "change": d.get("percentage_change"),
+            "recent": d.get("activities", []),
+        }),
+        # Stays "UNKNOWN" rather than None: unlike a 0, the string already SAYS
+        # it is not a measurement, which is the whole point of this change.
         "activity_level": activity.get("level", "UNKNOWN") if activity else "UNKNOWN",
-        "todays_applications": {
-            "count": apps.get("count", 0) if apps else 0,
-            "applications": apps.get("applications", []) if apps else [],
-        },
-        "dashboard": {
-            "profile_views": dashboard.get("profile_views", 0) if dashboard else 0,
-            "total_matches": dashboard.get("total_matches", 0) if dashboard else 0,
-            "unread_invites": dashboard.get("unread_invites", 0) if dashboard else 0,
-        },
+        "todays_applications": _section(apps, lambda d: {
+            "count": d.get("count", 0),
+            "applications": d.get("applications", []),
+        }),
+        "dashboard": _section(dashboard, lambda d: {
+            "profile_views": d.get("profile_views", 0),
+            "total_matches": d.get("total_matches", 0),
+            "unread_invites": d.get("unread_invites", 0),
+        }),
         "early_access_roles": _build_early_access_section(early_access, errors),
         "subscription": subscription if subscription else None,
-        "due_reminders": {
-            "count": reminders_result.get("due_count", 0) if reminders_result else 0,
-            "reminders": [r for r in (reminders_result.get("reminders") or []) if r.get("is_due")][:5] if reminders_result else [],
-        },
-        "stale_applications": {
-            "count": stale.get("total", 0) if stale else 0,
-            "top_stale": stale.get("stale_applications", [])[:3] if stale else [],
-        },
-        "job_alerts": {
-            "triggered_count": len(alerts.get("alerts", [])) if alerts else 0,
-            "alerts": alerts.get("alerts", [])[:3] if alerts else [],
-        },
+        "due_reminders": _section(reminders_result, lambda d: {
+            "count": d.get("due_count", 0),
+            "reminders": [r for r in (d.get("reminders") or []) if r.get("is_due")][:5],
+        }),
+        "stale_applications": _section(stale, lambda d: {
+            "count": d.get("total", 0),
+            "top_stale": d.get("stale_applications", [])[:3],
+        }),
+        "job_alerts": _section(alerts, lambda d: {
+            "triggered_count": len(d.get("alerts", [])),
+            "alerts": d.get("alerts", [])[:3],
+        }),
         "profile_completeness": completeness if completeness else None,
-        "saved_jobs": {
-            "total": saved.get("total", 0) if saved else 0,
-        },
+        "saved_jobs": _section(saved, lambda d: {"total": d.get("total", 0)}),
         "search_impressions": impressions if impressions else None,
-        "assessments": {
-            "total": len(assessments_result.get("assessments", [])) if assessments_result else 0,
+        "assessments": _section(assessments_result, lambda d: {
+            "total": len(d.get("assessments", [])),
             "pending": pending_count,
-        },
+        }),
         "match_quality": match_quality if match_quality else None,
         "competition_overview": _build_competition_section(apps),
         "applied_salary_insights": ab_insights if ab_insights else None,

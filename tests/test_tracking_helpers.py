@@ -562,14 +562,25 @@ class TestInterviewPrep:
                    new_callable=AsyncMock, return_value=fit_data):
             result = await _interview_prep("IP2")
 
-        assert result["status"] == "success"
+        # A missing enrichment must SAY SO. This used to assert "success" while
+        # company_rating / interview_difficulty / sample_questions vanished
+        # silently -- a caller could not tell "AmbitionBox has no interview data
+        # for FailCo" from "the fetch raised". Measured on the live account
+        # 2026-08-22 the tool returned six scalars and called itself a success.
+        assert result["status"] == "partial_success"
+        assert any("Company intel" in e for e in result["errors"]), result["errors"]
         assert result["job_id"] == "IP2"
         assert result["company"] == "FailCo"
-        # Company intel fields should be absent
+        # Company intel fields are still absent...
         assert "company_rating" not in result
         assert "interview_difficulty" not in result
         assert "sample_questions" not in result
-        # Mock topics and fit data should be present
+        # ...but now they are NAMED as absent rather than just missing.
+        assert "company_rating" in result["missing_sections"]
+        assert "sample_questions" in result["missing_sections"]
+        # What did land is unaffected, and is not listed as missing.
         assert result["mock_topics"] == ["React", "CSS", "JavaScript"]
         assert result["matched_skills"] == ["React", "TypeScript"]
         assert result["missing_skills"] == ["Vue"]
+        assert "mock_topics" not in result["missing_sections"]
+        assert "matched_skills" not in result["missing_sections"]

@@ -236,28 +236,40 @@ def compute_follow_up_priority(app: dict) -> int:
 # Interview prep helpers
 # ---------------------------------------------------------------------------
 
+# These three used to swallow the exception and return None, and interview_prep
+# then OMITTED the corresponding fields while still reporting status "success".
+# They now return an ERROR DICT instead of None, so the caller can say what is
+# missing and why. Returning a dict rather than a (value, error) tuple is
+# deliberate: it keeps the single-return signature every existing caller and
+# test mock already expects.
+def _fetch_error(label, exc):
+    return {"status": "error",
+            "message": "%s: %s: %s" % (label, type(exc).__name__, exc),
+            "error_code": "API_ERROR"}
+
+
 async def _safe_fetch_company_intel(company):
     try:
         from naukri_server.tools.ambitionbox import naukri_company_intel
         return await naukri_company_intel(company=company, intel_type="interviews")
-    except Exception:
-        return None
+    except Exception as e:
+        return _fetch_error("Company intel", e)
 
 
 async def _safe_fetch_mock_topics():
     try:
         from naukri_server.tools.mock_interview import naukri_mock_interview
         return await naukri_mock_interview(action="topics")
-    except Exception:
-        return None
+    except Exception as e:
+        return _fetch_error("Mock topics", e)
 
 
 async def _safe_fetch_fit_score(job_id):
     try:
         from naukri_server.tools.smart_apply import naukri_assess_fit
         return await naukri_assess_fit(job_id=job_id)
-    except Exception:
-        return None
+    except Exception as e:
+        return _fetch_error("Fit score", e)
 
 
 async def interview_prep(job_id: str) -> dict:
@@ -277,9 +289,35 @@ async def interview_prep(job_id: str) -> dict:
         return_exceptions=True,
     )
 
-    company_intel = results[0] if not isinstance(results[0], Exception) else None
-    mock_topics = results[1] if not isinstance(results[1], Exception) else None
-    fit_data = results[2] if not isinstance(results[2], Exception) else None
+    # A MISSING ENRICHMENT MUST SAY SO.
+    #
+    # This returned status "success" while silently OMITTING company_rating,
+    # sample_questions, matched_skills and missing_skills whenever their fetch
+    # died -- four of the eight fields the docstring promises, gone with no
+    # error channel at all. A caller could not tell "AmbitionBox has no
+    # interview data for this company" from "the fetch raised". Measured
+    # 2026-08-22: with the session expired the tool returned six scalars and
+    # called itself a success. Interview prep with no prep in it.
+    #
+    # daily_brief's partial_success + errors[] is the house pattern; this is it.
+    errors = []
+
+    def _unpack(idx, label):
+        r = results[idx]
+        if isinstance(r, Exception):
+            errors.append("%s: %s: %s" % (label, type(r).__name__, r))
+            return None
+        if not isinstance(r, dict):
+            errors.append("%s: no data returned" % label)
+            return None
+        if r.get("status") != "success":
+            errors.append("%s: %s" % (label, r.get("message", "unknown")))
+            return None
+        return r
+
+    company_intel = _unpack(0, "Company intel")
+    mock_topics = _unpack(1, "Mock topics")
+    fit_data = _unpack(2, "Fit score")
 
     prep = {
         "status": "success",
@@ -290,17 +328,31 @@ async def interview_prep(job_id: str) -> dict:
         "ars_score": app.get("ars_score"),
     }
 
-    if company_intel and isinstance(company_intel, dict) and company_intel.get("status") == "success":
+    if company_intel:
         prep["company_rating"] = company_intel.get("overall_rating")
         prep["interview_difficulty"] = company_intel.get("difficulty_breakdown")
         prep["sample_questions"] = company_intel.get("interview_experiences", [])[:3]
 
-    if mock_topics and isinstance(mock_topics, dict) and mock_topics.get("status") == "success":
+    if mock_topics:
         prep["mock_topics"] = mock_topics.get("topics", [])[:5]
 
-    if fit_data and isinstance(fit_data, dict) and fit_data.get("status") == "success":
-        prep["matched_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("matched", [])
-        prep["missing_skills"] = fit_data.get("fit_assessment", {}).get("skill_match", {}).get("missing", [])
+    if fit_data:
+        skill_match = fit_data.get("fit_assessment", {}).get("skill_match", {})
+        prep["matched_skills"] = skill_match.get("matched", [])
+        prep["missing_skills"] = skill_match.get("missing", [])
+
+    if errors:
+        prep["status"] = "partial_success"
+        prep["errors"] = errors
+        prep["missing_sections"] = [
+            name for name, present in (
+                ("company_rating", company_intel),
+                ("sample_questions", company_intel),
+                ("mock_topics", mock_topics),
+                ("matched_skills", fit_data),
+                ("missing_skills", fit_data),
+            ) if not present
+        ]
 
     return prep
 

@@ -83,7 +83,9 @@ class TestComboFailures:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        # Some sections landed and some failed -> partial_success, the same
+        # pattern daily_brief already used. `errors` still tells the story.
+        assert result["status"] == "partial_success"
         assert "jobs" in result
         assert "reviews" in result
         assert "salary" not in result
@@ -101,7 +103,9 @@ class TestComboFailures:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        # Some sections landed and some failed -> partial_success, the same
+        # pattern daily_brief already used. `errors` still tells the story.
+        assert result["status"] == "partial_success"
         assert "salary" in result
         assert "reviews" not in result
         assert any("Reviews" in e and "scrape blocked" in e for e in result["errors"])
@@ -118,7 +122,9 @@ class TestComboFailures:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, side_effect=ConnectionError("refused")):
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        # Some sections landed and some failed -> partial_success, the same
+        # pattern daily_brief already used. `errors` still tells the story.
+        assert result["status"] == "partial_success"
         assert "salary" in result
         assert "reviews" in result
         assert "interviews" not in result
@@ -136,7 +142,9 @@ class TestComboFailures:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        # Some sections landed and some failed -> partial_success, the same
+        # pattern daily_brief already used. `errors` still tells the story.
+        assert result["status"] == "partial_success"
         assert "interviews" in result
         assert "salary" not in result
         assert "reviews" not in result
@@ -158,7 +166,9 @@ class TestComboFailures:
             result = await _research_company(keyword="Google")
 
         # Still "success" because jobs worked, but errors collected
-        assert result["status"] == "success"
+        # Some sections landed and some failed -> partial_success, the same
+        # pattern daily_brief already used. `errors` still tells the story.
+        assert result["status"] == "partial_success"
         assert "jobs" in result
         assert "salary" not in result
         assert "reviews" not in result
@@ -177,7 +187,12 @@ class TestComboFailures:
             result = await _research_company(keyword="Google")
 
         # Jobs exception is caught, then AB calls also fail
-        assert result["status"] == "success"  # structural status, errors tell the story
+        # NOT "success" any more. It returned success with zero data and two
+        # swallowed AttributeErrors on the live account 2026-08-22; a caller
+        # checking status saw success and a caller not reading `errors` never
+        # learned otherwise. Nothing landed here, so this is an error.
+        assert result["status"] == "error"
+        assert result["error_code"] == "API_ERROR"
         assert "errors" in result
         assert any("Jobs" in e for e in result["errors"])
         assert any("Salary" in e for e in result["errors"])
@@ -204,7 +219,7 @@ class TestUnicodeCompanyNames:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="ソニー株式会社")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         # derive_slug strips non-ASCII, slug may be empty string
         assert isinstance(result["slug"], str)
 
@@ -220,7 +235,7 @@ class TestUnicodeCompanyNames:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="AT&T")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         assert result["slug"] == "at-t"
 
     @pytest.mark.asyncio
@@ -235,7 +250,7 @@ class TestUnicodeCompanyNames:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="L'Oréal")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         assert result["slug"] == "l-or-al"
 
     @pytest.mark.asyncio
@@ -250,7 +265,7 @@ class TestUnicodeCompanyNames:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="Tata (TCS)")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         assert result["slug"] == "tata-tcs"
 
     @pytest.mark.asyncio
@@ -266,7 +281,7 @@ class TestUnicodeCompanyNames:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         assert result["slug"] == ""
 
 
@@ -325,7 +340,7 @@ class TestTimeoutHandling:
              patch(_P_INTERVIEWS, new_callable=AsyncMock, return_value=_ok_interviews()):
             result = await _research_company(keyword="FastCo", timeout_seconds=120)
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         assert "error_code" not in result
 
 
@@ -353,7 +368,7 @@ class TestAbRestBridge:
              patch(_P_AB_BENEFITS, new_callable=AsyncMock, return_value=_ab_ok_benefits()) as m_ben:
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         m_cult.assert_awaited_once_with("555")
         m_ben.assert_awaited_once_with("555")
         assert "work_culture" in result
@@ -378,7 +393,7 @@ class TestAbRestBridge:
              patch(_P_AB_BENEFITS, new_callable=AsyncMock, side_effect=RuntimeError("403")):
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         # Core data still present
         assert "salary" in result
         assert "reviews" in result
@@ -404,7 +419,7 @@ class TestAbRestBridge:
              patch(_P_AB_BENEFITS, new_callable=AsyncMock) as m_ben:
             result = await _research_company(keyword="Google")
 
-        assert result["status"] == "success"
+        assert result["status"] in ("success", "partial_success")
         m_cult.assert_not_awaited()
         m_ben.assert_not_awaited()
         assert "work_culture" not in result

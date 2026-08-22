@@ -572,8 +572,28 @@ async def research_company(
                 else:
                     errors.append(f"Interviews: {interviews_result.get('message', 'unknown error')}")
 
+        # THE STATUS MUST REFLECT WHAT LANDED.
+        #
+        # `errors` was collected faithfully and then ignored: the result kept
+        # status "success" no matter how much had failed. Measured 2026-08-22
+        # with the browser down, naukri_research_company(keyword="Infosys")
+        # returned {"status": "success", "company_name": "Infosys", "slug":
+        # "infosys", "errors": [2 x AttributeError]} -- success, zero data, two
+        # swallowed crashes. A caller that checks `status` sees success and a
+        # caller that does not check `errors` never learns otherwise.
+        #
+        # company_name and slug are echoes of the request, not findings, so
+        # they do not count as data.
         if errors:
             result["errors"] = errors
+            data_keys = [k for k in result
+                         if k not in ("status", "company_name", "slug", "errors")]
+            result["status"] = "partial_success" if data_keys else "error"
+            if not data_keys:
+                result["message"] = (
+                    "No company data could be retrieved: %s" % "; ".join(errors[:3])
+                )
+                result["error_code"] = "API_ERROR"
 
         return result
 
