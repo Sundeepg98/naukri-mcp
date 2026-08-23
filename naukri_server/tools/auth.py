@@ -141,6 +141,27 @@ async def _get_login_status() -> dict:
     return await _service_get_login_status()
 
 
+# --- The auth LIFECYCLE (contract of 2026-08-23) ----------------------------
+# Three adapters at this path for the same reason as `_get_login_status`
+# above: tests patch `naukri_server.tools.auth._<name>`, and the logic itself
+# lives in `services.session_service` where it can be exercised without the
+# MCP tool wrapper (watchdog + result scrubber) in the way.
+
+async def _session_info(verify_live: bool = True) -> dict:
+    from naukri_server.services.session_service import session_info
+    return await session_info(verify_live=verify_live)
+
+
+async def _logout() -> dict:
+    from naukri_server.services.session_service import logout
+    return await logout()
+
+
+async def _reauth() -> dict:
+    from naukri_server.services.session_service import reauth
+    return await reauth()
+
+
 # ---------------------------------------------------------------------------
 # Single-purpose MCP tools
 # ---------------------------------------------------------------------------
@@ -212,3 +233,92 @@ async def naukri_auth_status() -> dict:
         means: call naukri_login.
     """
     return await handle_tool_action(_get_login_status, "auth.status")
+
+
+@mcp.tool()
+async def naukri_session_info(verify_live: bool = True) -> dict:
+    """How long the Naukri session has left, and whether it works right now.
+
+    Answers the question naukri_auth_status cannot: not just "am I in?" but
+    "when does this lapse, what renews it, and does any of that need me?".
+
+    Args:
+        verify_live: True (default) asks Naukri, so ``authenticated`` is a
+            measurement. False is free -- no network, no browser -- and
+            reports the on-disk facts with ``authenticated`` null.
+
+    Returns:
+        {server, authenticated, checked_against, live_check, credential,
+         supporting, credential_source, durability, renewal, on_expiry}
+
+        - authenticated: true / false / **null**. Null means the live check
+          could not run and ``live_check.why_not`` says why. It is NOT a no.
+        - credential: nauk_at -- the short-lived JWT that signs REST calls.
+          ``expired`` is null when no expiry is knowable, never false.
+        - supporting: **nauk_rt** first. That is the refresh cookie; its
+          ``expires_in_days`` is how long silent renewal stays possible, and
+          it is the field that turns a dead session into a naukri_reauth
+          instead of a sign-in. Then nauk_sid (session) and nauk_cs (csrf).
+        - durability: the Chrome profile keeps the long-lived cookies, so a
+          server restart or a reboot re-mints nauk_at with no password.
+
+        No cookie or token VALUE is ever returned -- name, presence, format
+        and expiry only.
+    """
+
+    async def _impl():
+        return await _session_info(verify_live=verify_live)
+
+    return await handle_tool_action(_impl, "auth.session_info")
+
+
+@mcp.tool()
+async def naukri_logout() -> dict:
+    """Clear the LOCALLY cached Naukri credential. Does not sign you out.
+
+    Removes the cached nauk_at from this process and deletes the exported
+    auth_state.json. It does NOT delete the Chrome profile and it sends
+    nothing to Naukri -- you stay signed in there, and naukri_reauth will
+    usually get straight back in from the profile's nauk_rt.
+
+    Returns:
+        {cleared, scope, authenticated: false, reason, what_is_lost,
+         recover_by}
+
+        - cleared: was anything actually there to remove.
+        - authenticated is false because no credential is left here to sign a
+          request with -- provable without asking Naukri, and not a verdict
+          from Naukri.
+        - not_removed: present only when something (a locked file) survived.
+
+    Never raises.
+    """
+    return await handle_tool_action(_logout, "auth.logout")
+
+
+@mcp.tool()
+async def naukri_reauth() -> dict:
+    """Renew the Naukri credential silently -- no login page, no password.
+
+    Two stages, escalating: ``cache_refresh`` navigates with the profile's
+    still-valid nauk_rt so Naukri mints a fresh nauk_at; ``browser_restart``
+    relaunches the same persistent profile if that produced nothing. This is
+    the move that converted an 8.5-hour outage into a no-op on 2026-08-22.
+
+    Takes no arguments and never opens a sign-in form. If both stages fail it
+    says so and names naukri_login.
+
+    Returns:
+        {renewed, authenticated, method, stage, checked_against, reason,
+         credential}
+
+        - renewed: true ONLY after the live check confirmed the new
+          credential. A fresh token appearing is a reason to ask, never an
+          answer -- a revoked account is still handed one.
+        - authenticated: null when the live check could not complete; that is
+          not a no.
+        - On any outcome other than a proven success the previous cached
+          credential is put back exactly as it was, so a failed renew cannot
+          cost a session that was already working.
+    """
+    return await handle_tool_action(_reauth, "auth.reauth")
