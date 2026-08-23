@@ -144,6 +144,10 @@ APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-
 # The service distinguishes absent from present and answers both cleanly, so the 405 on
 # v1/cja is the signature of a live route rejecting the wrong verb -- it takes POST. The
 # old path could not complete a request on the identical transport.
+# Two more readings the same day: all three alerts on the live account come back
+# alertType "cja" and none is "ssa"; and the one alert with keywords: null is carrying the
+# exact defect the v1/cja create probe logged (a keyword sent but not bound), which is why
+# naukri_create_alert now sends `keyword` AND `keywords`.
 # Do not swap it back without a receipt showing an alert appear.
 JOB_ALERT_API = "/alertapi/v1/cja"
 # CJA = "Custom Job Alerts" — the unified list endpoint (GET) that returns both SSA and CJA alerts
