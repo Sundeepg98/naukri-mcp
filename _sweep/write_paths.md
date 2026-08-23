@@ -1,6 +1,6 @@
 # naukri MCP - read-path write audit
 
-Static source audit at `c983094` (branch `master`). No server was started, no MCP tool was
+Static source audit at `7e4ebfe` (branch `master`). No server was started, no MCP tool was
 called, nothing was executed. Every verdict below is traced from the `@mcp.tool()` definition
 through its helpers by an import-aware AST call graph, then confirmed by reading the code at
 the cited line.
@@ -62,7 +62,7 @@ that enumeration is closed.
 | `naukri_profile_targeting()` | SAFE-READ | `tools/profile.py:131`; 6 functions reached, zero write sinks. |
 | `naukri_get_recommendations(limit=5)` | SAFE-READ (POST-as-query) | `tools/search.py:159 api_client.post(RECOMMENDED_JOBS_API, body={})`. |
 | `naukri_list_early_access()` | SAFE-READ | `tools/early_access.py:176` -> `_list_with_filters` -> `:66 api_client.get(EARLY_ACCESS_API, ...)`. It does **not** call `_detect_new_roles`, so unlike the daily brief it does not write `early_access_tracking.json`. |
-| `naukri_recruiter_activity()` | SAFE-READ (POST-as-query) | `services/performance_service.py:174 api_client.post(RECRUITER_ACTIVITY_API, body=body)`. The old read-path `RecruiterEngaged` emit was removed in `8190def`; `performance_service.py:245-256` is now a comment explaining why. |
+| `naukri_recruiter_activity()` | SAFE-READ (POST-as-query) | `services/performance_service.py:174 api_client.post(RECRUITER_ACTIVITY_API, body=body)`. The old read-path `RecruiterEngaged` emit was removed in `aefdde4`; `performance_service.py:245-256` is now a comment explaining why. |
 | `naukri_search_impressions()` | SAFE-READ | `tools/performance.py:37`; 5 functions reached, zero write sinks. |
 | `naukri_activity_level()` | SAFE-READ | `tools/performance.py:127`; 3 functions reached, zero write sinks. |
 | `naukri_visibility()` | SAFE-READ | `tools/settings.py:471`; settings GET only. The `SETTINGS_API` POST at `tools/settings.py:239` is inside `_update_settings` and is not reached. |
@@ -87,10 +87,10 @@ that enumeration is closed.
 | `naukri_agent_decisions(cycle_id)` | SAFE-READ | `tools/agent_tool.py:304`; 8 functions reached, zero write sinks. |
 | `naukri_scheduler_status()` | SAFE-READ | `tools/scheduler_tool.py:81`; reads registry state. The `ScheduledTaskCompleted` emit at `scheduler.py:350,382` is in `_execute_task` and is reached only by the scheduler loop / `naukri_run_task_now`, not by this tool. |
 | `naukri_task_history()` | SAFE-READ | `tools/scheduler_tool.py:149`; 8 functions reached, zero write sinks. |
-| `naukri_list_reminders()` | SAFE-READ | `services/reminder_service.py:157 event_bus.emit(ReminderDue(...))` sits inside `:154 if emit_events:`, and the tool does not pass it. Fixed by `b34f118`. |
+| `naukri_list_reminders()` | SAFE-READ | `services/reminder_service.py:157 event_bus.emit(ReminderDue(...))` sits inside `:154 if emit_events:`, and the tool does not pass it. Fixed by `1dbcd1b`. |
 | `naukri_list_interview_rounds()` | SAFE-READ | `tools/tracking.py:240`; local DB read. |
 | `naukri_recruiter_history()` | SAFE-READ | `tools/tracking.py:178`; 8 functions reached, zero write sinks. |
-| `naukri_stale_applications()` | SAFE-READ | `services/application_service.py:431 emit(ApplicationStale)` sits inside `:410 if emit_events:`; tool does not pass it. Fixed by `8190def`. |
+| `naukri_stale_applications()` | SAFE-READ | `services/application_service.py:431 emit(ApplicationStale)` sits inside `:410 if emit_events:`; tool does not pass it. Fixed by `aefdde4`. |
 | `naukri_follow_up_priority()` | SAFE-READ (POST-as-query) | Same `emit_events` guard as above. Also reaches `tools/inbox.py:50 api_client.post(INBOX_API, body=body)` via `application_service.application_follow_up` - inbox listing query. |
 | `naukri_config(section=None)` | SAFE-READ | `tools/config_tool.py:71` -> `_config(section)`; reports effective policy, no write sinks. |
 | `naukri_export_data(data_type="applications", output_path=...)` | **FILE-WRITE** | `tools/export.py:97` and `:106 file_path.write_text(...)`. Also `:81 _EXPORTS_DIR.mkdir(exist_ok=True)` creates `exports/` in the repo root even when `output_path` points elsewhere, and `:92 file_path.parent.mkdir(parents=True, exist_ok=True)`. No remote or DB write. |
@@ -123,7 +123,7 @@ that enumeration is closed.
 | `naukri_get_profile()` | SAFE-READ | `tools/profile.py:66`; 18 functions reached, zero write sinks. |
 | `naukri_get_application(job_id)` | SAFE-READ | `tools/tracking.py:74`; local DB read. |
 | `naukri_list_applications()` | SAFE-READ | `tools/tracking.py:46`; local DB read. |
-| `naukri_list_saved_jobs()` | SAFE-READ | `services/saved_jobs_service.py:60 emit(SavedJobExpiring)` sits inside `:51 if emit_events:`; tool does not pass it. Fixed by `8190def`. |
+| `naukri_list_saved_jobs()` | SAFE-READ | `services/saved_jobs_service.py:60 emit(SavedJobExpiring)` sits inside `:51 if emit_events:`; tool does not pass it. Fixed by `aefdde4`. |
 
 ## REMAINING read-path mutations
 
@@ -131,7 +131,7 @@ that enumeration is closed.
 `scheduler_tasks.py` (`:88`, `:132`, `:176`). The three fixed read paths are therefore clean,
 and the guard pinning that is real.
 
-### 1. `naukri_read_message` - the b34f118/8190def shape ~~still live~~ **CLOSED 2026-08-22**
+### 1. `naukri_read_message` - the 1dbcd1b/aefdde4 shape ~~still live~~ **CLOSED 2026-08-22**
 
 > **CLOSED 2026-08-22.** Everything below was true when written and is now history: the
 > emit, the `_on_inbox_message_read` subscriber and the `InboxMessageRead` dataclass were all
@@ -140,8 +140,8 @@ and the guard pinning that is real.
 > `emit_events` flag would have been a parameter nothing ever sets. The line and file
 > references in this section no longer resolve - do not go looking for them.
 
-This is the instance `8190def` recorded in its own allowlist as "KNOWN DEFECT, reported not
-fixed". It was still present at `c983094`, and it was worse than the allowlist entry suggested
+This is the instance `aefdde4` recorded in its own allowlist as "KNOWN DEFECT, reported not
+fixed". It was still present at `7e4ebfe`, and it was worse than the allowlist entry suggested
 because the second half was never applied either:
 
 - **Half one, unconditional emit:** `naukri_server/tools/inbox.py:166-171`
