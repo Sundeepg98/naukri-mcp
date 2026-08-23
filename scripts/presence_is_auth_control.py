@@ -47,10 +47,10 @@ HOW TO RUN IT
     $env:PYTHONPATH="scripts"; venv/Scripts/python -m pytest \\
         tests/test_auth_lifecycle_honesty.py -p presence_is_auth_control
 
-MEASURED 2026-08-23, after all four contract items. The module is 121 passed
+MEASURED 2026-08-23, after all four contract items. The module is 124 passed
 clean; with this plugin loaded::
 
-    24 failed, 97 passed in 2.84s
+    24 failed, 100 passed in 5.00s
 
     FAILED TestAuthenticatedIsNullNotFalse::test_an_unverifiable_check_is_null
     FAILED TestAuthenticatedIsNullNotFalse::test_a_real_denial_is_false
@@ -95,7 +95,7 @@ Note ``api_denied`` and ``http-401`` in the list too. A real NO goes red under
 this build, and it should: presence-is-auth cannot express a denial any more
 than it can express a null.
 
-The 97 that survive are supposed to survive, and reading the list is the
+The 100 that survive are supposed to survive, and reading the list is the
 point:
 
 * ``test_a_confirmed_session_is_true`` and

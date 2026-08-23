@@ -26,7 +26,11 @@ import subprocess
 
 import pytest
 
-from tests.test_path_leaks import DRIVE_PATH, assert_no_absolute_path
+from tests.test_path_leaks import (
+    DRIVE_PATH,
+    assert_no_absolute_path,
+    assert_path_absent,
+)
 
 BUILD_STAMP_KEYS = {
     "commit", "commit_full", "branch", "committed_at", "dirty", "dirty_files",
@@ -246,10 +250,29 @@ class TestTheRestOfThePayload:
         A debug tool is the LAST place a leak is acceptable: it is the one most
         likely to be pasted into a shared transcript or an issue.
         """
+        from naukri_server.config import DATA_DIR
+        from naukri_server.database import DB_PATH
         from naukri_server.tools.server_info import naukri_server_info
+        from naukri_server.utils import SERVER_ROOT
 
         result = await naukri_server_info()
 
+        # PRIMARY. The two drive-letter checks below cannot fire on the Linux
+        # runner, where every path in this payload is /home/runner/work/... --
+        # they pass there without being able to see anything.
+        #
+        # DB_PATH is the needle that can actually fail HERE: `database` is the
+        # only path-bearing field the payload carries under this suite, because
+        # conftest's `_isolated_test_db` redirects DB_PATH to a session tmp
+        # file and `config.source` is None with the config disabled. So it is
+        # the one a red-first check can be run against.
+        assert_path_absent(result, str(DB_PATH), "naukri_server_info")
+        # SERVER_ROOT and DATA_DIR are the SAME field's production shapes --
+        # DB_PATH is DATA_DIR/naukri.db in a live process, and DATA_DIR is
+        # SERVER_ROOT unless NAUKRI_DATA_DIR moves the data off the repo, which
+        # is why both are needled rather than just the root.
+        assert_path_absent(result, str(SERVER_ROOT), "naukri_server_info")
+        assert_path_absent(result, str(DATA_DIR), "naukri_server_info")
         assert_no_absolute_path(result, "naukri_server_info")
         assert not DRIVE_PATH.search(repr(result))
         # And still an ANSWER, not a redaction.

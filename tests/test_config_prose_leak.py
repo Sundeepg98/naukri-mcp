@@ -216,6 +216,14 @@ class TestConfigStatusDoesNotClaimItLoaded:
         out = policy.report()
         assert out["config_error"] is None
         assert out["config_status"].startswith("loaded from")
+        # The honest branch was pinned by the drive-letter walker alone, and
+        # that walker is blind on the Linux runner where this fixture's file is
+        # /tmp/pytest-of-runner/... -- so "loaded from <absolute path>" would
+        # have gone green there. The two assertions around this one do not
+        # cover it either: `startswith` and `"jobhunt.json" in` are both
+        # satisfied by the raw absolute path.
+        assert_path_absent(out["config_status"], str(good_config),
+                           "config_status")
         assert not DRIVE_PATH.search(out["config_status"])
         assert "jobhunt.json" in out["config_status"]
 

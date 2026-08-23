@@ -67,6 +67,15 @@ class TestReadingWithNoFile:
         from naukri_server.tools.config_tool import naukri_config
 
         result = await naukri_config()
+        # The exact needle first. The two drive-letter checks beside it cannot
+        # fire on the Linux runner -- there this fixture's file is
+        # /tmp/pytest-of-runner/..., which has no drive letter -- so on the box
+        # that gates a merge they pass without being able to see anything.
+        # This one fails on a leak on either OS.
+        assert str(config_file) not in result["source"], (
+            "the reported source is this machine's absolute path: %r"
+            % result["source"]
+        )
         assert ":\\" not in result["source"] and ":/" not in result["source"]
         assert result["source"] != "jobhunt.json", (
             "collapsed to a bare basename — the caller cannot tell WHICH file"

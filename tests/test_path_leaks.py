@@ -235,6 +235,13 @@ class TestScrubber:
         text = "Exported to %s" % (SERVER_ROOT / "exports" / "apps.json")
         out = scrub_paths(text)
         assert "exports/apps.json" in out.replace("\\", "/")
+        # PRIMARY, and the only half of this pair that can fire where the suite
+        # gates a merge: on the Linux runner SERVER_ROOT is
+        # /home/runner/work/naukri/naukri, which carries no drive letter for
+        # the walker below to catch. See `assert_path_absent` above.
+        assert str(SERVER_ROOT) not in out, (
+            "the server root survived scrub_paths: %r" % out
+        )
         assert not DRIVE_PATH.search(out)
 
     def test_a_foreign_absolute_path_is_reduced_to_its_basename(self):
@@ -252,6 +259,11 @@ class TestScrubber:
 
         err = "[Errno 2] No such file or directory: '%s'" % (SERVER_ROOT / "sync_state.json")
         out = scrub_paths(err)
+        # Exact needle first, drive-letter walker as the Windows-only second
+        # opinion -- the same pairing as the test above, for the same reason.
+        assert str(SERVER_ROOT) not in out, (
+            "the server root survived the OSError shape: %r" % out
+        )
         assert not DRIVE_PATH.search(out)
         assert "No such file or directory" in out
         assert "sync_state.json" in out
@@ -305,6 +317,14 @@ class TestResultScrubbing:
             "nested": {"file_path": str(SERVER_ROOT / "resume.pdf")},
             "rows": [{"body": "git stderr: cannot open %s" % (SERVER_ROOT / "a.py")}],
         }
+        # PRIMARY, then the walker. Without this line the whole backstop test
+        # is a no-op on the Linux runner: every path in `leaky` is built from
+        # SERVER_ROOT, so where the root has no drive letter the walker looks
+        # at a fully unscrubbed payload and reports it clean. (`scrub_result`
+        # is pure, so calling it twice costs nothing and leaves the existing
+        # second-opinion line exactly as it was.)
+        assert_path_absent(scrub_result(leaky), str(SERVER_ROOT),
+                           "scrubbed tool result")
         assert_no_absolute_path(scrub_result(leaky))
 
     async def test_scrubbing_preserves_structure_and_non_string_values(self):
@@ -360,13 +380,21 @@ class TestDirectSites:
         assert_no_absolute_path(status, "circuit.status()")
 
     async def test_data_dir_probe_reports_a_verdict_not_a_path(self):
+        from naukri_server.config import DATA_DIR
         from naukri_server.health.probes.system import system_data_dir
 
         result = await system_data_dir()
+        # The needle is DATA_DIR rather than SERVER_ROOT because that is the
+        # path this probe names, and NAUKRI_DATA_DIR can point it anywhere.
+        # It is also the only detector that works on the Linux runner, where
+        # the pre-fix message read "DATA_DIR OK: /home/runner/work/naukri/
+        # naukri" and the drive-letter walker below saw nothing at all.
+        assert_path_absent(result.message, str(DATA_DIR), "system.data_dir probe")
         assert_no_absolute_path(result.message, "system.data_dir probe")
         assert result.message
 
     async def test_health_check_chrome_profile_warning_carries_no_path(self):
+        from naukri_server.config import CHROME_PROFILE
         from naukri_server.tools.health import naukri_health_check
 
         with patch("naukri_server.tools.health.os.path.isdir", return_value=False), \
@@ -387,4 +415,10 @@ class TestDirectSites:
             result = await naukri_health_check(include_browser=False)
 
         assert result.get("warnings"), "the warning must still be raised"
+        # Two layers could put the profile path in this warning -- the site,
+        # which takes a basename, and the boundary scrubber behind it -- and on
+        # Linux the walker below certifies neither, because CHROME_PROFILE
+        # there is /home/runner/work/naukri/naukri/chrome-profile. This is the
+        # assertion that holds on the runner.
+        assert_path_absent(result["warnings"], CHROME_PROFILE, "health warnings")
         assert_no_absolute_path(result["warnings"], "health warnings")

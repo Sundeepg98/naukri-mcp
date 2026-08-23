@@ -64,13 +64,26 @@ def _b64(obj) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+#: The base64url of `{"alg":"HS256","typ":"JWT"}` -- BYTE-IDENTICAL in every
+#: HS256 JWT ever minted, this server's and anybody else's. It is a public
+#: constant, not a secret, which is why `_token_needles` refuses to hunt it.
+JWT_PUBLIC_HEADER = _b64({"alg": "HS256", "typ": "JWT"})
+
+
 def _jwt(exp=None, marker=TOKEN_MARKER) -> str:
-    """A syntactically real JWT whose payload carries a findable secret."""
+    """A syntactically real JWT whose payload carries a findable secret.
+
+    The SIGNATURE is derived from the marker rather than hardcoded. It used to
+    be the literal `c2lnbmF0dXJl`, which made it a constant shared by every
+    token this module builds -- so two tokens carrying DIFFERENT secrets
+    collided on it and `_find_leak` reported a leak of one when shown the
+    other. A per-token signature is what makes the needle set discriminating.
+    """
     claims = {"sub": marker}
     if exp is not None:
         claims["exp"] = exp
     return "%s.%s.%s" % (
-        _b64({"alg": "HS256", "typ": "JWT"}), _b64(claims), "c2lnbmF0dXJl")
+        JWT_PUBLIC_HEADER, _b64(claims), _b64({"sig": marker}))
 
 
 def _status(logged_in, verified, reason):
@@ -79,14 +92,26 @@ def _status(logged_in, verified, reason):
 
 
 def _token_needles(token):
-    """The whole token AND each of its segments.
+    """The whole token AND each of its SECRET-BEARING segments.
 
     Segments matter: a leak that publishes only the payload is still a leak,
     and searching for a plaintext marker misses BOTH -- the marker lives
     base64-encoded inside the payload and never appears in the token string.
+
+    THE HEADER IS EXCLUDED, and that is the point of this function rather than
+    an optimisation. `JWT_PUBLIC_HEADER` is identical in every HS256 JWT, so a
+    needle set containing it fires on any unrelated token and proves nothing
+    about THIS credential. Measured 2026-08-23: with the header in the set,
+    `_find_leak` reported a leak when handed a completely different token whose
+    only shared substring was those 36 public characters. A needle that cannot
+    distinguish the secret from a public constant is not evidence of a leak --
+    it is a coin flip that happens to land on "leak" whenever a JWT is nearby.
+    `test_CONTROL_the_walker_is_quiet_on_a_foreign_token` pins both directions.
     """
-    parts = [p for p in str(token).split(".") if len(p) > 8]
-    return [str(token)] + parts
+    parts = str(token).split(".")
+    if len(parts) == 3 and parts[0] == JWT_PUBLIC_HEADER:
+        parts = parts[1:]
+    return [str(token)] + [p for p in parts if len(p) > 8]
 
 
 def _find_leak(value, needles):
@@ -753,6 +778,16 @@ class TestTheRefreshCookieIsReported:
 
         assert stored
         assert stored != CHROME_PROFILE
+        # PRIMARY, and the only one of these three that can fire on the runner
+        # that gates a merge. CI is ubuntu-latest, where CHROME_PROFILE is
+        # /home/runner/work/naukri/naukri/chrome-profile -- no colon, no
+        # backslash -- so the line below passes there without being able to see
+        # a total leak. `stored != CHROME_PROFILE` only catches a leak that is
+        # EXACTLY the path and misses "profile at <path>", which is the shape a
+        # message would actually take.
+        assert CHROME_PROFILE not in stored, (
+            "the absolute profile path survived into durability.stored_in: %r"
+            % stored)
         assert ":" not in stored and "\\" not in stored
 
 
@@ -836,6 +871,39 @@ class TestNoCredentialValueEscapes:
         assert _find_leak([{"a": ["x", token.split(".")[1]]}], needles)
         assert _find_leak({token: "as a KEY"}, needles)
         assert _find_leak({"clean": "no token here"}, needles) == []
+
+    def test_CONTROL_the_walker_is_quiet_on_a_foreign_token(self):
+        """The OTHER direction, and the one that was broken until today.
+
+        Catching every planted leak is half an instrument. A walker that also
+        fires on things that are NOT this credential cannot tell the two apart,
+        and "it went red" stops being information. Measured before the fix: a
+        token carrying a completely different secret was reported as a leak of
+        this one, because `_token_needles` included the public JWT header and
+        a hardcoded signature that every token in this module shared.
+
+        Asserted as an explicit comparison so the trap is visible: the two
+        tokens really DO share the public header, and that sharing must not be
+        enough to trip the walker.
+        """
+        mine = _jwt(exp=1800000000, marker="MINE_" + TOKEN_MARKER)
+        foreign = _jwt(exp=1900000000, marker="A_DIFFERENT_SECRET_ENTIRELY")
+        needles = _token_needles(mine)
+
+        assert mine != foreign
+        assert mine.split(".")[0] == foreign.split(".")[0] == JWT_PUBLIC_HEADER, (
+            "if these no longer share a header this control tests nothing")
+        assert JWT_PUBLIC_HEADER not in needles, (
+            "the public header is back in the needle set")
+
+        assert _find_leak({"other": foreign}, needles) == [], (
+            "a foreign token was reported as a leak of ours")
+        assert _find_leak({"h": JWT_PUBLIC_HEADER}, needles) == [], (
+            "the bare public header was reported as a leak")
+        # ...and the walker has NOT been silenced: our own token still trips it.
+        assert _find_leak({"ours": mine}, needles)
+        assert _find_leak({"payload_only": mine.split(".")[1]}, needles)
+        assert _find_leak({"sig_only": mine.split(".")[2]}, needles)
 
     async def test_session_info_never_logs_the_token(self, caplog):
         token = _jwt(exp=time.time() + 3600)
@@ -1446,7 +1514,15 @@ JAR_SECRET = "COOKIEVALUETHATMUSTNEVERBEREAD"
 
 def _build_jar(profile_dir: Path, rows):
     """A synthetic Chrome cookie jar, values included, so a leak has
-    something to leak."""
+    something to leak.
+
+    THE SECRET GOES IN BOTH VALUE COLUMNS. `encrypted_value` used to hold the
+    literal b"sealed", which meant `JAR_SECRET not in json.dumps(rows)` was
+    blind to a leak out of `encrypted_value` -- and on a real Chrome profile
+    that is the column the credential actually lives in, because `value` is
+    empty whenever the OS keyring is in use. The needle could only see the
+    column a live jar leaves blank.
+    """
     jar = profile_dir / "Default" / "Network" / "Cookies"
     jar.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(jar))
@@ -1456,7 +1532,8 @@ def _build_jar(profile_dir: Path, rows):
         "is_persistent INTEGER)")
     con.executemany(
         "INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [(n, h, JAR_SECRET, b"sealed", e, he, ip) for n, h, e, he, ip in rows])
+        [(n, h, JAR_SECRET, JAR_SECRET.encode(), e, he, ip)
+         for n, h, e, he, ip in rows])
     con.commit()
     con.close()
     return jar
@@ -1505,6 +1582,57 @@ class TestCookieJarReader:
         assert rows, "not vacuous - rows were returned"
         assert JAR_SECRET not in json.dumps(rows)
         assert all(set(r) == {"name", "expires"} for r in rows)
+
+    def test_CONTROL_the_value_assertions_can_actually_fail(self):
+        """The five jar assertions guard a WORKING Naukri login, and until
+        today not one of them had ever been watched failing.
+
+        What this control can and cannot do is worth being exact about. The
+        two result-shape assertions are shown firing on the record a
+        value-selecting reader WOULD hand back, and the two query assertions on
+        the queries that would produce it. That is a planted leak, not an
+        end-to-end one -- see `test_a_wildcard_query_cannot_leak_it_crashes`
+        below for why an end-to-end version is not constructible.
+        """
+        # The shape `read_jar` would return if somebody added a value column
+        # and passed it through -- exactly the regression these guard.
+        leaky = [{"name": "nauk_at", "expires": 1.0, "value": JAR_SECRET}]
+        assert JAR_SECRET in json.dumps(leaky), (
+            "the needle cannot see a planted value - it is measuring nothing")
+        assert not all(set(r) == {"name", "expires"} for r in leaky)
+
+        # ...and quiet on the real shape, which is the other half of a control.
+        clean = [{"name": "nauk_at", "expires": 1.0}]
+        assert JAR_SECRET not in json.dumps(clean)
+        assert all(set(r) == {"name", "expires"} for r in clean)
+
+        # The query guards, shown firing on the two queries that would leak.
+        assert "*" in "SELECT * FROM cookies"
+        assert "value" in "SELECT name, value FROM cookies".lower()
+        # Both forms of the encrypted column trip the same guard, which is why
+        # it tests `"value" in`, not `== "value"`.
+        assert "value" in "SELECT name, encrypted_value FROM cookies".lower()
+
+    def test_a_wildcard_query_cannot_leak_it_crashes(self, tmp_path):
+        """An accidental structural defence, pinned so a refactor keeps it.
+
+        `read_jar` unpacks each row into exactly five names. So `SELECT *`,
+        the obvious way this could go wrong, does not return the secret -- it
+        raises before any record is built. That is a real property and the
+        reason the wildcard guard at the query is a belt-and-braces check
+        rather than the only thing standing between the jar and a leak.
+
+        If a future refactor unpacks by index or by column name, this test
+        fails and says: the wildcard guard is now load-bearing on its own.
+        """
+        from naukri_server import cookie_jar
+
+        _build_jar(tmp_path, [
+            ("nauk_at", ".naukri.com", (1800000000 + WEBKIT) * 1000000, 1, 1)])
+
+        with patch.object(cookie_jar, "_JAR_QUERY", "SELECT * FROM cookies"):
+            with pytest.raises(ValueError):
+                cookie_jar.read_jar(tmp_path, ["nauk_at"])
 
     def test_the_query_names_metadata_columns_only(self):
         """The enforcement point, asserted at the query rather than at the
