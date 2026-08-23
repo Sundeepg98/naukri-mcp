@@ -66,6 +66,48 @@ async def _get_alerts_list() -> dict:
     }
 
 
+async def _confirm_created(response, name: str) -> tuple:
+    """``(alert_id, confirmed_by)`` for a create POST, or ``(None, None)``.
+
+    A create tool must not infer success from "the POST did not raise". A 2xx
+    that carries no id, an empty body, and a body reporting its own failure are
+    all indistinguishable at the HTTP layer from a working create -- and this
+    tool's endpoint spent months pointed at a path derived from the front-end
+    bundle that was never once observed creating anything. So creation is
+    ASSERTED here, on one of exactly two pieces of evidence:
+
+    1. ``alert_id`` -- a server-issued id in the response (``info.searchId`` on
+       the measured payload). An id Naukri minted is proof it created a row.
+    2. ``read_back`` -- the alert is in the alert list afterwards. Slower and
+       weaker (a same-named alert may pre-date this call), but it is real
+       evidence of the alert's existence, which is the caller's question.
+
+    Neither available -> ``(None, None)``, and the caller refuses. A read-back
+    that itself fails is NOT evidence of absence, but it is not evidence of
+    presence either, so it lands in the same refusal: we do not know.
+    """
+    if isinstance(response, dict):
+        info = response.get("info")
+        info = info if isinstance(info, dict) else {}
+        for candidate in (info.get("searchId"), info.get("alertId"),
+                          response.get("searchId"), response.get("alertId")):
+            if candidate is not None and str(candidate).strip():
+                return str(candidate), "alert_id"
+
+    try:
+        listing = await _get_alerts_list()
+    except Exception as e:
+        logger.warning("Create read-back for alert %r failed: %s", name, e)
+        return None, None
+    if listing.get("status") != "success":
+        return None, None
+    for alert in listing.get("alerts", []):
+        if (alert.get("name") or "").strip() == name.strip():
+            found = alert.get("alert_id")
+            return (str(found) if found is not None else ""), "read_back"
+    return None, None
+
+
 async def _update_alert_browser(a_id: str, alert_name: str, keywords, location, experience, min_salary, new_name) -> dict:
     """Browser-based alert update — extracted for timeout wrapping."""
     async with browser.page_pool.acquire() as page:
@@ -375,13 +417,24 @@ async def naukri_create_alert(
         industry_type_id: Industry type ID (from Naukri taxonomy)
 
     Returns:
-        {status, alert_name, message, total_matched?, matched_jobs?: [...]}
+        {status, alert_name, alert_id, confirmed_by, message, total_matched?, matched_jobs?: [...]}
+
+        `confirmed_by` names the evidence the alert exists: "alert_id" (Naukri
+        handed back a server-issued id) or "read_back" (it was found in the
+        alert list afterwards). With NEITHER, this returns an error -- see
+        `_confirm_created` below. It will not report a creation it cannot show.
     """
     if not name or not keywords:
         return {"status": "error", "message": "name and keywords are required.", "error_code": "VALIDATION_ERROR"}
 
     async def _create():
-        body = {"name": name, "keyword": keywords}
+        # `keyword` is the spelling the front-end bundle documents; `keywords`
+        # is the spelling in the body that was live-measured creating an alert.
+        # Which one the server binds is genuinely unsettled -- that round logged
+        # `keywords: null` on the created alert having sent it -- so send both.
+        # A key the server ignores costs nothing; the missing one costs the
+        # keywords on a real alert.
+        body = {"name": name, "keyword": keywords, "keywords": keywords}
         if location is not None:
             body["location"] = location
         if experience is not None:
@@ -399,6 +452,20 @@ async def naukri_create_alert(
 
         response = await api_client.post(JOB_ALERT_API, body)
 
+        alert_id, confirmed_by = await _confirm_created(response, name)
+        if alert_id is None:
+            return {
+                "status": "error",
+                "error_code": "API_ERROR",
+                "message": (
+                    f"Naukri accepted the POST but the alert '{name}' was NOT created: "
+                    f"the response carried no alert id, and the alert is not in the alert "
+                    f"list afterwards. Nothing was created -- do not retry blindly; check "
+                    f"{JOB_ALERT_API} is still the live create path."
+                ),
+                "alert_name": name,
+            }
+
         try:
             from naukri_server.events import event_bus, AlertCreated
             await event_bus.emit(AlertCreated(alert_name=name, keywords=keywords))
@@ -408,10 +475,18 @@ async def naukri_create_alert(
         result = {
             "status": "success",
             "alert_name": name,
+            "alert_id": alert_id,
+            "confirmed_by": confirmed_by,
             "message": f"Job alert '{name}' created for '{keywords}'.",
         }
-        # v1 API returns matched jobs inline — expose them
-        total_matched = response.get("totalRes") if isinstance(response, dict) else None
+        # The create response carries the match count and up to 5 matched jobs
+        # inline. `totalRes` sits under `info`, NOT at the top level -- read at
+        # the top level (as this did) it is always None.
+        info = response.get("info") if isinstance(response, dict) else None
+        info = info if isinstance(info, dict) else {}
+        total_matched = info.get("totalRes")
+        if total_matched is None and isinstance(response, dict):
+            total_matched = response.get("totalRes")
         matched_jobs = response.get("list", []) if isinstance(response, dict) else []
         if total_matched is not None:
             result["total_matched"] = total_matched

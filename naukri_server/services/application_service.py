@@ -700,6 +700,11 @@ async def add_interview_round(job_id: str, round_type: str, date: str = "",
         "job_id": job_id,
         "round_type": round_type,
         "total_rounds": len(job_rounds),
+        # Says in the PAYLOAD what the docstring says in prose: this row lives
+        # in naukri.db and nowhere else. Naukri has no jobseeker interview
+        # surface to write to, so a caller that reads only the result must not
+        # be able to come away thinking the platform was told.
+        "scope": "local",
     }
 
 
@@ -720,6 +725,9 @@ async def list_interview_rounds(job_id: Optional[str] = None) -> dict:
         "total_rounds": len(rounds),
         "jobs_with_rounds": len(by_job),
         "rounds": rounds,
+        # Local notebook, not a view of Naukri. An empty list here means
+        # nothing was recorded locally -- never that there are no interviews.
+        "scope": "local",
     }
 
 

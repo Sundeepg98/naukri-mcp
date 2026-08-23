@@ -237,7 +237,27 @@ async def naukri_add_interview_round(
     notes: str = "",
     status: str = "scheduled",
 ) -> dict:
-    """Track an interview round for a job application.
+    """Record an interview round in YOUR PRIVATE NOTEBOOK. Nothing reaches Naukri.
+
+    THIS IS A LOCAL RECORD, NOT A CHANNEL TO NAUKRI OR TO THE RECRUITER.
+    The round is written to the local `naukri.db` and stays there. It does not
+    schedule anything, does not confirm or decline a slot, does not notify the
+    recruiter, and never appears on naukri.com. The recruiter cannot see it.
+
+    That is a limit of the platform, not of this server. Naukri exposes no
+    jobseeker interview surface at all (measured 2026-08-23): four candidate
+    interview endpoints do not exist, against family-local controls that do; a
+    live application reports only Applied / Application Sent / Application
+    Viewed, with no interview state among them; and the logged-in navigation
+    has no interview tab. There is nothing to call. `tests/
+    test_interview_surface_absent.py` is the standing record -- read it before
+    building anything that claims to schedule.
+
+    One thing does leave the machine, and it is a READ, not a write: the round
+    emits `ApplicationInterviewScheduled`, whose subscriber runs the interview
+    lifecycle workflow, which fetches company interview data from AmbitionBox
+    over HTTP and sets a local reminder. So "local-only write" is exact;
+    "makes no network call" would not be.
 
     Args:
         job_id: The Naukri job ID
@@ -247,7 +267,7 @@ async def naukri_add_interview_round(
         status: "scheduled", "completed", or "cancelled" (default "scheduled")
 
     Returns:
-        {status, action: "round_added", job_id, round_type, total_rounds}
+        {status, action: "round_added", job_id, round_type, total_rounds, scope: "local"}
     """
     return await handle_tool_action(
         lambda: _add_interview_round(job_id, round_type, date, notes, status),
@@ -259,13 +279,19 @@ async def naukri_add_interview_round(
 async def naukri_list_interview_rounds(
     job_id: Optional[str] = None,
 ) -> dict:
-    """List interview rounds, optionally filtered by job_id. Groups by job.
+    """List interview rounds from YOUR PRIVATE NOTEBOOK. Naukri is not consulted.
+
+    Reads back only what `naukri_add_interview_round` wrote to the local
+    `naukri.db`. This is NOT a view of interviews Naukri knows about -- Naukri
+    exposes no jobseeker interview surface to read (see that tool's docstring
+    and `tests/test_interview_surface_absent.py`). An empty result means you
+    have recorded nothing here; it says nothing about your real interviews.
 
     Args:
         job_id: Optional Naukri job ID to filter rounds for a specific job
 
     Returns:
-        {status, total_rounds, jobs_with_rounds, rounds}
+        {status, total_rounds, jobs_with_rounds, rounds, scope: "local"}
     """
     return await handle_tool_action(
         lambda: _list_interview_rounds(job_id),

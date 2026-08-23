@@ -37,7 +37,13 @@ from naukri_server.config import (
 )
 
 _AUTH_STATE_FILE = Path(CHROME_PROFILE) / "auth_state.json"
+# Fallback only -- used when the token's own `exp` will not decode. See
+# get_auth_state: the file is rewritten only on a token refresh, so its age
+# says almost nothing about whether the credential still works.
 _STALE_THRESHOLD = 300  # 5 minutes
+# Refuse a token this close to expiry, so a caller does not start a sweep on a
+# credential that dies partway through it.
+_EXPIRY_MARGIN = 120  # 2 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +51,61 @@ _STALE_THRESHOLD = 300  # 5 minutes
 # ---------------------------------------------------------------------------
 
 def get_auth_state() -> dict:
-    """Read exported auth state from file. Raises if missing or stale."""
+    """Read exported auth state from file. Raises if missing, tokenless or expired.
+
+    THE GATE IS THE TOKEN'S OWN `exp`, NOT THE FILE'S AGE.
+
+    This file is written only by ``TokenManager._export_auth_state``, whose
+    only caller is ``extract()``, which runs only on a token REFRESH -- and
+    the token lives an hour. ``get_token()`` short-circuits on the cached
+    token, so nothing rewrites the file in between. Gating on file age
+    therefore rejected a perfectly good credential for most of its life:
+    measured 2026-08-23 at ``exported_at`` 2127s old holding a token with
+    1469s left, against a 300s threshold. The bridge exists so a second
+    process can reach Naukri without fighting for the Chrome profile lock,
+    and it was shut 91.7% of the time, saying "stale" about a working login.
+
+    Age was always a PROXY for "is the token still good". The token answers
+    that itself, so the proxy survives only for a token whose `exp` will not
+    decode -- the one case where there is nothing better to ask.
+
+    NOTHING SENSITIVE REACHES THE EXCEPTIONS. The file holds the live
+    ``nauk_at`` and the whole cookie header; every raise below is built from
+    a path, a float, or a fixed string.
+    """
+    from naukri_server.services.session_service import jwt_exp
+
     if not _AUTH_STATE_FILE.exists():
         raise FileNotFoundError(
             f"No auth state file at {_AUTH_STATE_FILE}. Is the MCP server running?"
         )
     state = json.loads(_AUTH_STATE_FILE.read_text())
+    token = state.get("token")
+    if not token:
+        raise ValueError(
+            "Auth state holds no exported token -- the MCP server has not "
+            "logged in yet, or logged out. Call naukri_login."
+        )
+
+    exp = jwt_exp(token)
+    if exp is not None:
+        remaining = exp - time.time()
+        if remaining <= _EXPIRY_MARGIN:
+            raise ValueError(
+                f"Exported token is expired or too close to it "
+                f"({remaining:.0f}s left, margin {_EXPIRY_MARGIN}s). The MCP "
+                f"server re-exports on its next refresh."
+            )
+        return state
+
+    # No readable `exp`. Fall back to the old, weaker proxy -- file age is the
+    # only signal left, and a token we cannot read is one we cannot vouch for.
     age = time.time() - state.get("exported_at", 0)
     if age > _STALE_THRESHOLD:
-        raise ValueError(f"Auth state is {age:.0f}s old (threshold: {_STALE_THRESHOLD}s)")
+        raise ValueError(
+            f"Auth state is {age:.0f}s old (threshold: {_STALE_THRESHOLD}s) and "
+            f"its token carries no readable exp claim to check instead."
+        )
     return state
 
 

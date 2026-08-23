@@ -88,7 +88,13 @@ async def naukri_debug(action: str = "browser_snapshot", url: str = "") -> dict:
         url: URL or API path. Context-dependent:
              - Browser actions: page URL to navigate to (uses current page if omitted)
              - API actions: API path (e.g., "/jobapi/v3/search"). For post/put: "PATH|{json}"
-             - discover_click: "PAGE_URL|CSS_SELECTOR"
+             - discover_click: "CSS_SELECTOR|OPTIONAL_NAV_URL" -- SELECTOR FIRST.
+               This read "PAGE_URL|CSS_SELECTOR" until 2026-08-23, which is
+               backwards: `discovery_actions.do_click_discover` splits once on
+               "|" and takes part 0 as the selector, part 1 as an optional URL
+               to navigate to first. Following the old order made the tool
+               try to click a URL as a selector. Omit the second half to click
+               on whatever page the pool tab is already showing.
 
     Returns:
         - {status: "ok", ...action-specific data}

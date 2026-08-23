@@ -128,8 +128,16 @@ MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-ma
 APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"  # GET ?days=7
 
 # Job Alerts (discovered via webpack chunk analysis of SRP page JS + live API research)
-# SSA = "Save Search Alert" — create-only endpoint (POST)
-JOB_ALERT_API = "/alertapi/v2/ssa"  # POST → create alert {name, keyword, location, functionAreaId, roleId, experience, minCTC, industryTypeId, email}
+# CJA = "Custom Job Alert". (SSA, "Save Search Alert", is the other family; the
+# list endpoint below returns both, tagged by `alertType`.)
+# POST -> create alert {name, keyword(s), location, functionAreaId, roleId, experience, minCTC, industryTypeId, email}
+# Response: {info: {searchId, totalRes}, list: [up to 5 matched jobs]} -- note `totalRes` is nested under `info`.
+# This is the ONLY create path ever observed creating an alert: the live round in
+# probing/alerts-saved-search-report.md got 200 + a server-issued searchId (90000000) here.
+# It replaced `/alertapi/v2/ssa`, which entered in 863e9a4 from WEBPACK ANALYSIS of the
+# front-end bundle, was never once watched creating anything, and read "Failed to fetch" in
+# that same live round. Do not swap it back without a receipt showing an alert appear.
+JOB_ALERT_API = "/alertapi/v1/cja"
 # CJA = "Custom Job Alerts" — the unified list endpoint (GET) that returns both SSA and CJA alerts
 JOB_ALERTS_LIST_API = "/alertapi/v2/user/cjas"  # GET → {list: [{alertId, name, keywords, location, functionAreaId, roleId, experience, minCTC, maxCTC, industryTypeId, alertType, email}]}
 
