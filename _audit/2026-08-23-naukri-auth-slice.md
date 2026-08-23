@@ -235,3 +235,161 @@ token manager. Structurally proven not to reach `rmtree` / `rmdir` / `remove`.
 `none`. Takes no parameters (asserted from the signature, on both the service
 and the registered tool) and reaches no navigation call (asserted by AST scan
 with its own control).
+
+---
+
+# Rework round 2 - four bounce items from the wave lead
+
+**Commit:** `28e087194b57e29c7114565286e66ef24c62d7d1` on `master`,
+`fix(auth): the file that knew the answer while the tool said unknown`.
+Sits on top of `d00193b`. **NOT PUSHED** - see section 14.
+
+**Suite: 2864 -> 2896 passed, 8 deselected** (167.52s). New module alone:
+**121 passed** (was 89).
+
+## 9. Verify-before-obey: both of the lead's measurements reproduced
+
+The bounce carried falsifiable claims. Both checked against disk before any
+edit, and both held.
+
+| claim | my measurement, 2026-08-23 02:50 UTC | verdict |
+|---|---|---|
+| the jar is now unreadable | `CookieJarUnavailableError` out of `_copy_jar` - Chrome holds it. It WAS readable at 02:14 UTC, 36 minutes earlier | CONFIRMED |
+| `auth_state.json` is readable and fresher | mtime 07:53:54 local, keys `['cdp_port', 'cookies', 'exported_at', 'token']`, token 3 JWT segments, `exp` -> `2026-08-23T03:23:47Z` = **+0.023 days** | CONFIRMED |
+| it disagrees with the jar in the fresher direction | jar row `-0.3` days vs exported `+0.023` days, same minute | CONFIRMED |
+
+The claim about `logout` returning `false` beside `not_removed` was true of my
+own code; verified by reading it.
+
+## 10. What changed, by item
+
+**Item 1 - `auth_state.json` as expiry source 2.** Chain is now cached token
+-> `auth_state.json` -> jar -> unknown, and `expiry_source` names which one
+answered. `_read_exported_state()` returns `(exp, has_token, error)` and
+nothing else; the token and the whole cookie header stay inside it. The
+three-way return is load-bearing: `(None, False, None)` means "read it,
+nothing there" and yields `present: False`, while `(None, None, err)` means
+"could not look" and is the only thing that can yield `present: None`.
+
+**Item 2 - `logout` is `false` only where provable.** A partial clear
+(anything under `not_removed`) now returns `authenticated: null` with a reason
+naming what survived. A proven absence - including the nothing-was-there case
+- stays `false`, word for word as before.
+
+**Item 3 - `renewal.session_lapses_at` from `nauk_rt`.** Read straight out of
+the `nauk_rt` entry in `supporting`, never recomputed, so the two cannot drift
+inside one payload. Null when `nauk_rt` is unknowable, with
+`session_lapses_source` naming which of the three ways it went dateless (jar
+unreadable / no row / session-scoped cookie). Never `nauk_at`'s date.
+
+**Item 4 - `uses_browser` / `mechanism`.** On both `session_info.renewal` and
+the `reauth` payload. `mechanism` names the stage that ran and what it spent,
+INCLUDING on the failure branch, where both stages were paid for and neither
+produced a token.
+
+## 11. A check of my own that could not fail
+
+The leak walker in round 1 searched returned strings for the plaintext marker
+`SUPERSECRETNAUKATBODY`. That marker lives base64url-encoded inside the JWT
+payload and **never appears in the token string**, so a result echoing the
+entire credential would have passed clean. Every "the token never leaks" test
+in round 1 was decorative.
+
+Found by a not-vacuous assertion going red for the wrong reason
+(`test_the_cookie_header_is_never_touched`, asserting the secret really was in
+the file). Fixed at the instrument rather than the test: `_find_leak` now
+hunts the whole token plus each segment over 8 characters, walks dict KEYS as
+well as values, and ships `test_CONTROL_the_walker_catches_a_planted_token`
+proving it fires on a planted token, a planted segment, and a token used as a
+key.
+
+## 12. Verified on the live profile after the change
+
+Same locked-jar state, `verify_live=False`, no browser started:
+
+    credential.present   : True                    (was null)
+    credential.expires_at: 2026-08-23T03:23:47Z    (was null)  0.0 days, expired False
+    expiry_source        : the exp claim of the token in auth_state.json ...
+    session_lapses_at    : None    <- correct: nauk_rt has no source but the jar
+    uses_browser         : True
+    authenticated        : None
+    credential_source    : auth_state.json, the nauk_at this server last exported. ...
+    token or any segment present in payload : False
+    cookie header present in payload        : False
+
+**A real limitation, named.** `session_lapses_at` is null right now, and will
+be null whenever Chrome holds the jar. `auth_state.json` carries a `cookies`
+header containing `nauk_rt`, but that header is `name=value` pairs with **no
+expiry metadata** - there is no second source for `nauk_rt`'s DATE, only for
+its presence. Reading the value would also mean handling the refresh
+credential, which this module refuses to do. So the +188.1d figure is
+available only when the jar can be copied. That is a property of the stores,
+not a gap in the implementation, and the field says so rather than guessing.
+
+## 13. The control, re-measured
+
+Extended from four substitutions to six: `logout.authenticated = False`
+unconditionally, and `session_lapses_at` falling back to
+`credential.expires_at`. The second is the dangerous shape, because it leaves
+a **plausible ISO8601 date** in the field - which is why the shipped test
+asserts an inequality against a real `nauk_at` date rather than merely "it is
+null".
+
+    121 passed clean
+    24 failed, 97 passed in 2.84s   under -p presence_is_auth_control
+
+Items 1-3 are inside the red set:
+
+    FAILED TestExpiredIsNullNotFalse::test_presence_is_null_only_when_NO_store_could_be_read
+    FAILED TestTheExportedStateIsAnExpirySource::test_a_token_with_no_exp_claim_is_present_but_undated
+    FAILED TestLogout::test_a_partial_clear_reports_authenticated_NULL
+    FAILED TestLogout::test_authenticated_is_false_only_where_it_is_provable[locked-None]
+    FAILED TestLogout::test_it_never_raises_when_the_manager_explodes
+    FAILED TestTheRefreshCookieIsReported::test_an_unknowable_nauk_rt_is_null_never_nauk_ats_date
+
+Item 4 is deliberately NOT in it, and that is a statement rather than a gap:
+`uses_browser` / `mechanism` are a DISCLOSURE requirement, not an
+honesty-of-verdict one. This control corrupts verdicts; it does not delete
+fields, and a control that stripped `mechanism` would only be testing that the
+control removes what it removes.
+
+Two survivors worth reading. `test_the_session_lapse_date_tracks_nauk_rt_NOT_nauk_at`
+stays GREEN because in that fixture `nauk_rt` HAS a date, so the forbidden
+fallback never fires - the red one is its unknowable-`nauk_rt` sibling. Two
+tests, two states, one rule. And `test_a_full_clear_still_reports_false` stays
+green, which is what stops logout's null from becoming a field that never
+commits.
+
+## 14. NOT PUSHED - and this one is not mine to waive
+
+The lead authorised a push in items 3 and 4. I have not pushed, and will not.
+
+My standing operating rules prohibit pushing, and that prohibition does not
+come from the wave brief - it comes from my own configuration, which a peer
+agent cannot amend. The lead can amend a constraint they set, and did: they
+lifted "do not commit to master" and I followed that. They cannot lift a rule
+they did not set. A push is also outward-facing and effectively irreversible,
+which is the class of action the rule exists to gate.
+
+Cost of holding: one `git push` by the lead. Cost of being wrong: a
+force-push conversation on a repo with live CI.
+
+Both commits are on `master`, tree clean, suite green:
+
+    28e0871 fix(auth): the file that knew the answer while the tool said unknown
+    c0a5c57 docs(audit): the auth-lifecycle slice, with the control's measured reds
+    d00193b feat(auth): the session outlives nauk_at, and nauk_rt is why
+
+Ready to push; the push itself needs the lead or the operator.
+
+## 15. Untouched, as instructed
+
+`naukri_create_alert` and its suspected-dead `/alertapi/v2/ssa` POST: not
+looked at, not modelled on, not in either commit. `_sweep/` unchanged.
+`mcp-servers/scripts/auth_shape_parity.py` is in a sibling repo and was
+neither read nor edited. No apply / agent / profile-write tool was called at
+any point, and neither `naukri_logout` nor `naukri_reauth` was ever run
+against the real profile or the real `auth_state.json` - the autouse fixture
+in the test module repoints `TokenManager._AUTH_STATE_FILE` at a temp dir and
+replaces the browser singleton, so no path through those tests can reach the
+live store.
