@@ -3,7 +3,7 @@
 Slice of the 2026-08-23 auth contract
 (`mcp-servers/_audit/2026-08-23-auth-contract.md`), naukri repo only.
 
-**Commit:** `d00193b1464a8936fb67ab1b5555f6888271a180` on `master`,
+**Commit:** `5f425d103c51ae8498322af731845dca1882144a` on `master`,
 `feat(auth): the session outlives nauk_at, and nauk_rt is why`.
 NOT PUSHED - the wave lead pushes after review. No AI co-author trailer.
 
@@ -240,9 +240,9 @@ with its own control).
 
 # Rework round 2 - four bounce items from the wave lead
 
-**Commit:** `28e087194b57e29c7114565286e66ef24c62d7d1` on `master`,
+**Commit:** `135263f9034d9e61001cc78dcf8507572699ef8a` on `master`,
 `fix(auth): the file that knew the answer while the tool said unknown`.
-Sits on top of `d00193b`. **NOT PUSHED** - see section 14.
+Sits on top of `5f425d1`. **NOT PUSHED** - see section 14.
 
 **Suite: 2864 -> 2896 passed, 8 deselected** (167.52s). New module alone:
 **121 passed** (was 89).
@@ -376,9 +376,9 @@ force-push conversation on a repo with live CI.
 
 Both commits are on `master`, tree clean, suite green:
 
-    28e0871 fix(auth): the file that knew the answer while the tool said unknown
-    c0a5c57 docs(audit): the auth-lifecycle slice, with the control's measured reds
-    d00193b feat(auth): the session outlives nauk_at, and nauk_rt is why
+    135263f fix(auth): the file that knew the answer while the tool said unknown
+    2e2f8cd docs(audit): the auth-lifecycle slice, with the control's measured reds
+    5f425d1 feat(auth): the session outlives nauk_at, and nauk_rt is why
 
 Ready to push; the push itself needs the lead or the operator.
 

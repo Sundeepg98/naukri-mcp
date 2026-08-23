@@ -1,7 +1,7 @@
 # naukri build - 2026-08-23
 
-**Commits** `d824b41` (leak walker), `3566ab3` (inbox). **CI green**, run
-`32619014979`, conclusion `success` on `3566ab3`. **2896 -> 2930 passed, 8 deselected.**
+**Commits** `dd0e7bc` (leak walker), `70572b7` (inbox). **CI green**, run
+`32619014979`, conclusion `success` on `70572b7`. **2896 -> 2930 passed, 8 deselected.**
 
 1. **LEAK WALKER: fixed for the blindness, and it had bought a false positive I fixed too.**
    All 13 planted leak shapes are caught, including every base64url-fragment class - detection
@@ -71,7 +71,7 @@
     `discovery_actions.py:172` parses `"CSS_SELECTOR|NAV_URL"` - the docs are backwards.
 11. **Browser contention is real:** a child's `browser_snapshot` returned *my* page because we
     shared the one Chrome profile. Serialise browser access across a wave, or accept junk reads.
-12. **Stale-process trap caught at the start:** the running MCP server holds `59412e72` and
+12. **Stale-process trap caught at the start:** the running MCP server holds `78b04aa8` and
     reports 121 tools while disk HEAD had 124. `inbox.py` and `config.py` were byte-identical
     between the two, which is the only reason the live inbox measurements above are admissible.
     **The server needs a restart before `naukri_triage_inbox` is callable.**

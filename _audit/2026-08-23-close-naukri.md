@@ -1,7 +1,7 @@
 # naukri close - 2026-08-23
 
-**Commits** `fb6c48b` (alerts + interviews + debug docs + auth bridge), `dba9df4` (read-back),
-`33fd25c` (external-apply fields). **CI green**, run `32625682803` on `33fd25c`.
+**Commits** `28ea56c` (alerts + interviews + debug docs + auth bridge), `262ad9d` (read-back),
+`4be47f1` (external-apply fields). **CI green**, run `32625682803` on `4be47f1`.
 **2930 -> 2979 passed, 8 deselected.**
 
 1. **`naukri_create_alert` WAS BROKEN, in three ways, and the worst was that it could not
@@ -48,7 +48,7 @@
    5 red against the old docstring). And an **independent recount** of the leak census returns
    **99 total / 24 platform-dependent / 0 without a platform-independent sibling** - the
    headline holds, reconciled member-by-member against the baseline's own rows (the 75 -> 99
-   drift is `d824b41`'s +7 plus the walker's own meta-tests).
+   drift is `dd0e7bc`'s +7 plus the walker's own meta-tests).
 5. **Found in flight: the cross-process auth bridge was shut 91.7% of the time.**
    `get_auth_state` rejected any `auth_state.json` older than 300s, but that file is rewritten
    only on a token refresh and the token lives 3600s - measured at 2127s old holding a token
@@ -61,6 +61,6 @@
    empty-body read to `/jobapi/v2/search/recom-jobs`, gated on the repo's own
    `_POST_ONLY_PATHS` allowlist and identical to what `naukri_get_recommendations` already
    issues. Browser access serialised throughout; no image-wide kills.
-7. **The running MCP server is now STALE** - it holds `5942c7e` while disk is `33fd25c`.
+7. **The running MCP server is now STALE** - it holds `cf41bc6` while disk is `4be47f1`.
    `naukri_create_alert`, the interview docstrings and the three new job fields are not live
    in it until it is restarted.
