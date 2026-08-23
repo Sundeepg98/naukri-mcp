@@ -254,11 +254,22 @@ async def naukri_session_info(verify_live: bool = True) -> dict:
         - authenticated: true / false / **null**. Null means the live check
           could not run and ``live_check.why_not`` says why. It is NOT a no.
         - credential: nauk_at -- the short-lived JWT that signs REST calls.
-          ``expired`` is null when no expiry is knowable, never false.
+          Its expiry comes from the first of three sources that can answer:
+          the cached token, then auth_state.json (the token this server last
+          exported -- the ONLY one readable while Chrome holds the jar
+          locked, and often fresher than the jar row), then the jar itself.
+          ``expiry_source`` names which one answered. ``expired`` is null when
+          no expiry is knowable, never false.
         - supporting: **nauk_rt** first. That is the refresh cookie; its
           ``expires_in_days`` is how long silent renewal stays possible, and
           it is the field that turns a dead session into a naukri_reauth
           instead of a sign-in. Then nauk_sid (session) and nauk_cs (csrf).
+        - renewal.**session_lapses_at**: THE date to look at. It comes from
+          nauk_rt, not nauk_at, and it is when you must sign in by hand.
+          ``credential.expires_in_days`` can read minutes while this reads
+          months, because nauk_at re-mints itself; neither is an alarm while
+          naukri_reauth returns renewed=true. Null, never nauk_at's date,
+          when nauk_rt is unknowable.
         - durability: the Chrome profile keeps the long-lived cookies, so a
           server restart or a reboot re-mints nauk_at with no password.
 
@@ -282,14 +293,17 @@ async def naukri_logout() -> dict:
     usually get straight back in from the profile's nauk_rt.
 
     Returns:
-        {cleared, scope, authenticated: false, reason, what_is_lost,
-         recover_by}
+        {cleared, scope, authenticated, reason, what_is_lost, recover_by}
 
         - cleared: was anything actually there to remove.
-        - authenticated is false because no credential is left here to sign a
-          request with -- provable without asking Naukri, and not a verdict
-          from Naukri.
+        - authenticated is false ONLY where the credential is provably gone --
+          no credential left here means no authenticated request can be made,
+          which needs no call to Naukri. It is NOT a verdict from Naukri.
         - not_removed: present only when something (a locked file) survived.
+          On that branch authenticated is **null**, not false: a credential
+          still on disk is still a credential, and claiming absence beside the
+          field naming the leftover would be a lie of the same class this
+          whole contract bans.
 
     Never raises.
     """
@@ -308,9 +322,15 @@ async def naukri_reauth() -> dict:
     Takes no arguments and never opens a sign-in form. If both stages fail it
     says so and names naukri_login.
 
+    NOT FREE. "Silent" means no sign-in and no password, not no cost: this
+    drives a real browser page, because Naukri mints nauk_at in the browser
+    and the REST surface is Akamai-gated with no token-mint route. Expect
+    seconds and a held pool slot. ``uses_browser`` and ``mechanism`` in the
+    result say exactly what was spent, including when nothing was gained.
+
     Returns:
-        {renewed, authenticated, method, stage, checked_against, reason,
-         credential}
+        {renewed, authenticated, method, stage, uses_browser, mechanism,
+         checked_against, reason, credential}
 
         - renewed: true ONLY after the live check confirmed the new
           credential. A fresh token appearing is a reason to ask, never an

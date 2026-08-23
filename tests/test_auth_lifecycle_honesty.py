@@ -45,6 +45,7 @@ import json
 import logging
 import sqlite3
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,41 @@ def _jwt(exp=None, marker=TOKEN_MARKER) -> str:
 def _status(logged_in, verified, reason):
     return {"status": "success", "logged_in": logged_in,
             "verified": verified, "reason": reason}
+
+
+def _token_needles(token):
+    """The whole token AND each of its segments.
+
+    Segments matter: a leak that publishes only the payload is still a leak,
+    and searching for a plaintext marker misses BOTH -- the marker lives
+    base64-encoded inside the payload and never appears in the token string.
+    """
+    parts = [p for p in str(token).split(".") if len(p) > 8]
+    return [str(token)] + parts
+
+
+def _find_leak(value, needles):
+    """Every string anywhere in ``value`` containing any of ``needles``.
+
+    Walks dict KEYS as well as values: a result keyed by the credential leaks
+    it just as thoroughly as one that returns it.
+    """
+    hits = []
+
+    def walk(node):
+        if isinstance(node, str):
+            if any(n and n in node for n in needles):
+                hits.append(node)
+        elif isinstance(node, dict):
+            for key, val in node.items():
+                walk(key)
+                walk(val)
+        elif isinstance(node, (list, tuple)):
+            for val in node:
+                walk(val)
+
+    walk(value)
+    return hits
 
 
 class _BrowserTripwire:
@@ -165,9 +201,42 @@ def _jar(**by_name):
     return read_jar
 
 
+class _UnreadableStateFile:
+    """auth_state.json is there and will not open -- a Windows-shaped lock."""
+
+    def is_file(self):
+        return True
+
+    def read_text(self, encoding=None):
+        raise PermissionError("used by another process")
+
+
+def _write_state(tmp_path, token=None, body=None):
+    """A real auth_state.json, in the shape ``_export_auth_state`` writes.
+
+    The ``cookies`` header carries the token VALUE, exactly as the live file
+    does. That is deliberate: it gives the leak walkers something real to
+    catch if the reader ever starts returning more than a date.
+    """
+    path = tmp_path / "auth_state.json"
+    if body is None:
+        body = {"cookies": "nauk_at=%s; nauk_rt=REFRESHCOOKIEVALUE" % (
+            token or ""), "exported_at": time.time(), "cdp_port": 9223}
+        if token is not None:
+            body["token"] = token
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
 async def _session_info(verify_live=True, token=None, status=None, jar=None,
-                        jar_error=None):
-    """Call the service with every outside edge scripted."""
+                        jar_error=None, state_path=None):
+    """Call the service with every outside edge scripted.
+
+    ``state_path`` is whatever ``_auth_state_path()`` should return -- a real
+    file from :func:`_write_state`, or a stub like
+    :class:`_UnreadableStateFile`. Left unset, the autouse fixture's temp path
+    applies, which reads as "no exported state".
+    """
     from naukri_server.services import session_service
 
     provider = MagicMock()
@@ -180,9 +249,13 @@ async def _session_info(verify_live=True, token=None, status=None, jar=None,
         read_jar = _jar(**(jar or {}))
 
     login = AsyncMock(return_value=status or _status(False, True, "no_token"))
-    with patch(SERVICE + ".browser_provider", provider), \
-            patch(SERVICE + ".get_login_status", login), \
-            patch(SERVICE + "._read_jar_rows", read_jar):
+    with ExitStack() as stack:
+        stack.enter_context(patch(SERVICE + ".browser_provider", provider))
+        stack.enter_context(patch(SERVICE + ".get_login_status", login))
+        stack.enter_context(patch(SERVICE + "._read_jar_rows", read_jar))
+        if state_path is not None:
+            stack.enter_context(
+                patch(SERVICE + "._auth_state_path", lambda: state_path))
         result = await session_service.session_info(verify_live=verify_live)
     return result, login
 
@@ -268,9 +341,9 @@ class TestAuthenticatedIsNullNotFalse:
 class TestExpiredIsNullNotFalse:
 
     async def test_no_knowable_expiry_reports_null(self):
-        """No cached token and no jar row: nothing on this machine knows when
-        the credential lapses, and ``False`` there would read as 'checked,
-        still good'."""
+        """No cached token, no exported state and no jar row: nothing on this
+        machine knows when the credential lapses, and ``False`` there would
+        read as 'checked, still good'."""
         result, _ = await _session_info(verify_live=False, token=None, jar={})
 
         cred = result["credential"]
@@ -278,6 +351,10 @@ class TestExpiredIsNullNotFalse:
         assert cred["expires_in_days"] is None
         assert cred["expired"] is None
         assert cred["expiry_source"].startswith("unknown:")
+        # All three sources named, so a reader can tell which one to fix.
+        assert "no cached nauk_at" in cred["expiry_source"]
+        assert "auth_state.json" in cred["expiry_source"]
+        assert "cookie jar" in cred["expiry_source"]
 
     async def test_an_undecodable_token_falls_through_to_null(self):
         """A cached token that is not a JWT is not an expiry. It must not
@@ -309,17 +386,223 @@ class TestExpiredIsNullNotFalse:
         assert result["credential"]["expired"] is True
         assert result["credential"]["expires_in_days"] < 0
 
-    async def test_an_unreadable_jar_makes_presence_null_not_false(self):
-        """"Not there" and "could not look" are different facts."""
+    async def test_presence_is_null_only_when_NO_store_could_be_read(self):
+        """"Not there" and "could not look" are different facts -- but the
+        null is earned only when NEITHER on-disk store answered. Here the jar
+        is locked AND auth_state.json will not open, which is the one state in
+        which nothing on this machine can say whether a credential exists."""
         result, _ = await _session_info(
-            verify_live=False, token=None, jar_error="jar is a directory")
+            verify_live=False, token=None, jar_error="jar is a directory",
+            state_path=_UnreadableStateFile())
 
-        assert result["credential"]["present"] is None
-        assert result["credential"]["expired"] is None
-        assert "could not be read" in result["credential"]["expiry_source"]
+        cred = result["credential"]
+        assert cred["present"] is None
+        assert cred["expired"] is None
+        assert "could not be read" in cred["expiry_source"]
+        assert "auth_state.json" in cred["why_unknown"]
+        assert "cookie jar" in cred["why_unknown"]
         for entry in result["supporting"]:
             assert entry["present"] is None, entry
             assert entry["expired"] is None, entry
+
+    async def test_one_readable_store_saying_nothing_is_a_real_false(
+            self, tmp_path):
+        """The other side of the same rule, and the reason the null above is
+        not just a way of never committing: auth_state.json READ fine and
+        holds no token, so absence is measured and ``present`` is a bool even
+        though the jar is locked."""
+        result, _ = await _session_info(
+            verify_live=False, token=None, jar_error="[WinError 32] locked",
+            state_path=_write_state(tmp_path, token=None))
+
+        assert result["credential"]["present"] is False
+        assert result["credential"]["format"] == "absent"
+
+
+# =====================================================================
+# 2b. auth_state.json -- the source that answers when the jar cannot
+# =====================================================================
+
+class TestTheExportedStateIsAnExpirySource:
+    """MEASURED 2026-08-23 08:20 local, and the reason this source exists.
+
+    Asked from a process with no browser of its own while the operator's
+    Chrome was running, the cached-token / jar chain returned ``present:
+    null`` and ``expired: null``: the jar could not even be COPIED, because
+    Chrome held it (``[WinError 32] ... used by another process``). That is
+    the outage question going unanswered. ``auth_state.json`` was readable
+    throughout and said 0.023 days left. It also DISAGREED with the jar in the
+    right direction -- jar row 0.3 days PAST, exported token 0.02 days FUTURE
+    -- because the live browser had not flushed.
+    """
+
+    async def test_a_locked_jar_still_yields_a_real_date_and_a_bool(
+            self, tmp_path):
+        """THE BOUNCE. The exact live state, reproduced: no cached token, jar
+        unreadable, auth_state.json present. Both fields must be real."""
+        soon = time.time() + 1800
+        result, _ = await _session_info(
+            verify_live=False, token=None,
+            jar_error="[WinError 32] The process cannot access the file "
+                      "because it is being used by another process",
+            state_path=_write_state(tmp_path, token=_jwt(exp=soon)))
+
+        cred = result["credential"]
+        assert cred["present"] is True, "a bool, not a null"
+        assert cred["expires_at"] is not None
+        assert cred["expired"] is False
+        assert "auth_state.json" in cred["expiry_source"]
+        assert "FRESHER" in cred["expiry_source"]
+
+    async def test_it_beats_the_jar_when_the_two_disagree(self, tmp_path):
+        """The measured disagreement, as a test: the jar row says the
+        credential lapsed hours ago, the export says it is still good. The
+        export is what the server actually holds, so it wins.
+
+        Twelve hours rather than the measured thirty minutes, because
+        ``expires_in_days`` is ``round(seconds / 86400, 1)`` per the contract
+        and a sub-hour horizon renders as ``0.0`` -- see
+        ``test_a_sub_hour_horizon_still_rounds_to_zero_days`` for that, pinned
+        separately rather than hidden here.
+        """
+        result, _ = await _session_info(
+            verify_live=False, token=None,
+            jar={"nauk_at": time.time() - 8 * 3600},
+            state_path=_write_state(
+                tmp_path, token=_jwt(exp=time.time() + 12 * 3600)))
+
+        assert result["credential"]["expired"] is False
+        assert result["credential"]["expires_in_days"] == 0.5
+        assert "auth_state.json" in result["credential"]["expiry_source"]
+
+    async def test_a_sub_hour_horizon_still_rounds_to_zero_days(self, tmp_path):
+        """The operator's REAL state at 08:20 on 2026-08-23: 0.023 days left.
+        The contract fixes the formula at round(seconds / 86400, 1), so that
+        renders as 0.0 -- which reads like 'no time information' but is not.
+        ``expired: false`` and ``expires_at`` carry the signal. Pinned so the
+        rounding is a known property rather than a surprise in an incident."""
+        result, _ = await _session_info(
+            verify_live=False, token=None, jar={},
+            state_path=_write_state(
+                tmp_path, token=_jwt(exp=time.time() + 1800)))
+
+        cred = result["credential"]
+        assert cred["expires_in_days"] == 0.0
+        assert cred["expired"] is False, "0.0 days is not expired"
+        assert cred["expires_at"] is not None
+
+    async def test_the_cached_token_still_beats_it(self, tmp_path):
+        """Precedence, not preference. The in-process token is the copy tools
+        actually send, so it stays first."""
+        from naukri_server.services.session_service import SOURCE_CACHED
+
+        result, _ = await _session_info(
+            verify_live=False, token=_jwt(exp=time.time() + 7200),
+            state_path=_write_state(tmp_path, token=_jwt(exp=time.time() + 1800)))
+
+        assert result["credential"]["expiry_source"] == SOURCE_CACHED
+        assert result["credential"]["expires_in_days"] > 0.06
+
+    async def test_it_falls_through_to_the_jar_when_there_is_no_export(self):
+        result, _ = await _session_info(
+            verify_live=False, token=None,
+            jar={"nauk_at": time.time() + 3 * 86400})
+
+        assert "cookie jar" in result["credential"]["expiry_source"]
+        assert result["credential"]["expires_in_days"] > 2
+
+    async def test_a_token_with_no_exp_claim_is_present_but_undated(
+            self, tmp_path):
+        """Presence and expiry are separate facts and must not be merged: the
+        export proves a credential exists even when its date will not decode."""
+        result, _ = await _session_info(
+            verify_live=False, token=None, jar={},
+            state_path=_write_state(tmp_path, token=_jwt(exp=None)))
+
+        assert result["credential"]["present"] is True
+        assert result["credential"]["expired"] is None
+        assert "no readable exp claim" in result["credential"]["expiry_source"]
+
+    async def test_credential_source_names_the_export_when_it_contributed(
+            self, tmp_path):
+        result, _ = await _session_info(
+            verify_live=False, token=None, jar={},
+            state_path=_write_state(tmp_path, token=_jwt(exp=time.time() + 60)))
+
+        assert "auth_state.json" in result["credential_source"]
+        assert "No browser was launched" in result["credential_source"]
+
+
+class TestTheExportedStateReader:
+    """The reader itself, including every way it declines to answer."""
+
+    def _read(self, path):
+        from naukri_server.services import session_service
+        with patch(SERVICE + "._auth_state_path", lambda: path):
+            return session_service._read_exported_state()
+
+    def test_a_real_export_yields_exp_and_present(self, tmp_path):
+        when = 1800000000
+        exp, has, err = self._read(_write_state(tmp_path, token=_jwt(exp=when)))
+
+        assert exp == float(when)
+        assert has is True
+        assert err is None
+
+    def test_a_missing_file_is_a_readable_absence_not_an_error(self, tmp_path):
+        """``(None, False, None)``: we looked and there is nothing. That is
+        what lets ``present`` be a real False rather than a null."""
+        assert self._read(tmp_path / "not-written.json") == (None, False, None)
+
+    def test_a_file_with_no_token_key_is_also_a_readable_absence(self, tmp_path):
+        assert self._read(_write_state(tmp_path, token=None)) == (
+            None, False, None)
+
+    def test_an_unreadable_file_is_an_ERROR_not_an_absence(self, tmp_path):
+        """The distinction the whole null rule rests on. A locked file must
+        never read as "no credential"."""
+        exp, has, err = self._read(_UnreadableStateFile())
+
+        assert exp is None
+        assert has is None, "None, not False -- we could not look"
+        assert "PermissionError" in err
+
+    def test_malformed_json_never_quotes_the_document(self, tmp_path):
+        """json's own exception embeds what it choked on, and what it choked
+        on is a working login plus the entire cookie header."""
+        path = tmp_path / "auth_state.json"
+        path.write_text('{"token": "%s", broken' % TOKEN_MARKER,
+                        encoding="utf-8")
+
+        exp, has, err = self._read(path)
+
+        assert (exp, has) == (None, None)
+        assert TOKEN_MARKER not in err
+        assert err == "auth_state.json is present but is not valid JSON"
+
+    def test_a_json_array_is_rejected_without_quoting_it(self, tmp_path):
+        path = tmp_path / "auth_state.json"
+        path.write_text(json.dumps([TOKEN_MARKER]), encoding="utf-8")
+
+        exp, has, err = self._read(path)
+
+        assert (exp, has) == (None, None)
+        assert TOKEN_MARKER not in err
+
+    def test_the_cookie_header_is_never_touched(self, tmp_path):
+        """The file holds the whole Cookie header beside the token. Only a
+        float and a bool come back, so neither can escape."""
+        token = _jwt(exp=1800000000)
+        path = _write_state(tmp_path, token=token)
+        on_disk = path.read_text(encoding="utf-8")
+        assert token in on_disk and "REFRESHCOOKIEVALUE" in on_disk, (
+            "not vacuous - the credential really is in the file")
+
+        exp, has, err = self._read(path)
+
+        assert (exp, has, err) == (1800000000.0, True, None)
+        assert all(isinstance(v, (float, bool, type(None)))
+                   for v in (exp, has, err))
 
 
 # =====================================================================
@@ -355,6 +638,101 @@ class TestTheRefreshCookieIsReported:
         assert result["renewal"]["silent_renew_available"] is True
         assert result["renewal"]["tool"] == "naukri_reauth"
         assert "nauk_rt" in result["renewal"]["why"]
+
+    async def test_the_session_lapse_date_tracks_nauk_rt_NOT_nauk_at(self):
+        """THE field this wave was about, and the substitution it forbids.
+
+        Measured on the live profile 2026-08-23: nauk_at had 0.02 days left
+        and nauk_rt had 188.1. Both true, different questions. A client that
+        read credential.expires_at as "when do I sign in again" would see
+        minutes on naukri and a year on linkedin, when the real comparison is
+        188 days against 364. session_lapses_at is the one that answers it.
+        """
+        now = time.time()
+        result, _ = await _session_info(
+            verify_live=False,
+            jar={"nauk_at": now - 8 * 3600,          # lapsed hours ago
+                 "nauk_rt": now + 188 * 86400,       # six months of headroom
+                 "nauk_sid": now + 188 * 86400,
+                 "nauk_cs": now + 364 * 86400},
+        )
+        renewal = result["renewal"]
+        rt = [s for s in result["supporting"] if s["name"] == "nauk_rt"][0]
+
+        assert renewal["session_lapses_at"] == rt["expires_at"], (
+            "it must be READ from the nauk_rt entry, not recomputed - two "
+            "routes to one date is two dates")
+        assert 187 < renewal["session_lapses_in_days"] < 189
+
+        # The point, stated as the inequality: months, not the credential's
+        # minutes.
+        assert result["credential"]["expired"] is True
+        assert renewal["session_lapses_at"] != result["credential"]["expires_at"]
+        assert (renewal["session_lapses_in_days"]
+                > result["credential"]["expires_in_days"] + 180)
+
+        assert "nauk_rt" in renewal["session_lapses_source"]
+        assert "NOT nauk_at" in renewal["session_lapses_source"]
+
+    async def test_an_unknowable_nauk_rt_is_null_never_nauk_ats_date(
+            self, tmp_path):
+        """The forbidden fallback, asserted as an inequality against a REAL
+        nauk_at date. A null is easy to get right by accident; silently
+        reaching for the credential's date when nauk_rt is missing is the bug,
+        and it would leave a plausible-looking date sitting in the field."""
+        result, _ = await _session_info(
+            verify_live=False, token=None,
+            jar_error="[WinError 32] locked by Chrome",
+            state_path=_write_state(
+                tmp_path, token=_jwt(exp=time.time() + 1800)))
+        renewal = result["renewal"]
+
+        assert result["credential"]["expires_at"] is not None, (
+            "not vacuous - a nauk_at date WAS available to wrongly fall back on")
+        assert renewal["session_lapses_at"] is None
+        assert renewal["session_lapses_in_days"] is None
+        assert renewal["session_lapses_at"] != result["credential"]["expires_at"]
+        assert renewal["session_lapses_source"].startswith("unknown:")
+        assert "locked by Chrome" in renewal["session_lapses_source"]
+
+    async def test_a_profile_with_no_nauk_rt_row_says_so_specifically(self):
+        """Three ways to have no date, and they are not the same fix: jar
+        unreadable, no row, or a session cookie. Each gets its own words."""
+        result, _ = await _session_info(verify_live=False, jar={})
+
+        source = result["renewal"]["session_lapses_source"]
+        assert result["renewal"]["session_lapses_at"] is None
+        assert "holds no nauk_rt row" in source
+
+    async def test_a_session_scoped_nauk_rt_is_null_and_says_why(self):
+        result, _ = await _session_info(
+            verify_live=False, jar={"nauk_rt": -1.0})
+
+        source = result["renewal"]["session_lapses_source"]
+        assert result["renewal"]["session_lapses_at"] is None
+        assert "SESSION cookie" in source
+
+    async def test_silent_renew_stays_available_and_named(self):
+        result, _ = await _session_info(
+            verify_live=False, jar={"nauk_rt": time.time() + 188 * 86400})
+
+        assert result["renewal"]["silent_renew_available"] is True
+        assert result["renewal"]["tool"] == "naukri_reauth"
+
+    async def test_renewal_discloses_that_it_drives_a_browser(self):
+        """"Silent renew available" reads as "free" and it is not. This wave
+        exists because something expensive happened and nothing said so, and a
+        renew that quietly launches a browser would be that defect again."""
+        result, _ = await _session_info(verify_live=False)
+        renewal = result["renewal"]
+
+        assert renewal["uses_browser"] is True
+        assert renewal["mechanism"]
+        assert "pool" in renewal["mechanism"]
+        assert "browser_restart" in renewal["mechanism"]
+        # The distinction stated, not left to be inferred.
+        assert "does not mean free" in renewal["mechanism"]
+        assert "NO SIGN-IN AND NO PASSWORD" in renewal["mechanism"]
 
     async def test_durability_says_a_restart_costs_nothing(self):
         result, _ = await _session_info(verify_live=False)
@@ -424,18 +802,17 @@ class TestOfflineModeIsFree:
 # =====================================================================
 
 class TestNoCredentialValueEscapes:
+    """The walker hunts the TOKEN STRING, not a plaintext marker.
 
-    def _walk(self, value, found):
-        if isinstance(value, str):
-            if TOKEN_MARKER in value:
-                found.append(value)
-        elif isinstance(value, dict):
-            for k, v in value.items():
-                self._walk(k, found)
-                self._walk(v, found)
-        elif isinstance(value, (list, tuple)):
-            for v in value:
-                self._walk(v, found)
+    It hunted the marker first, and that check could not fail: ``_jwt`` puts
+    the marker inside a base64url payload, so the literal
+    ``SUPERSECRETNAUKATBODY`` never appears in the token and a result echoing
+    the whole credential would have passed clean. Caught 2026-08-23 by the
+    not-vacuous assertion in ``test_the_cookie_header_is_never_touched`` going
+    red for the same reason. Needles are now the token itself plus each of its
+    three segments, so a PARTIAL leak fails too, and
+    ``test_CONTROL_the_walker_catches_a_planted_token`` proves it fires.
+    """
 
     @pytest.mark.parametrize("verify_live", [True, False])
     async def test_session_info_never_returns_the_token(self, verify_live):
@@ -445,11 +822,20 @@ class TestNoCredentialValueEscapes:
             status=_status(True, True, "api_confirmed"),
             jar={"nauk_at": time.time() + 3600})
 
-        found = []
-        self._walk(result, found)
-        assert found == [], "the token reached a returned field: %s" % found
+        assert _find_leak(result, _token_needles(token)) == []
         # The expiry DID come through, so this is not vacuous.
         assert result["credential"]["expires_at"] is not None
+
+    def test_CONTROL_the_walker_catches_a_planted_token(self):
+        """A leak walker that has never been shown catching one certifies
+        nothing -- and this one genuinely did not, until today."""
+        token = _jwt(exp=1800000000)
+        needles = _token_needles(token)
+
+        assert _find_leak({"credential": {"value": token}}, needles)
+        assert _find_leak([{"a": ["x", token.split(".")[1]]}], needles)
+        assert _find_leak({token: "as a KEY"}, needles)
+        assert _find_leak({"clean": "no token here"}, needles) == []
 
     async def test_session_info_never_logs_the_token(self, caplog):
         token = _jwt(exp=time.time() + 3600)
@@ -458,7 +844,7 @@ class TestNoCredentialValueEscapes:
                                 status=_status(True, True, "api_confirmed"))
 
         blob = "\n".join(r.getMessage() for r in caplog.records)
-        assert TOKEN_MARKER not in blob
+        assert _find_leak(blob, _token_needles(token)) == []
 
     async def test_an_undecodable_token_does_not_leak_through_the_error_path(self):
         """The likeliest leak: a decoder that reports what it choked on. This
@@ -467,18 +853,40 @@ class TestNoCredentialValueEscapes:
         broken = "%s.@@not-base64@@.%s" % (_b64({"alg": "none"}), TOKEN_MARKER)
         result, _ = await _session_info(verify_live=False, token=broken)
 
-        found = []
-        self._walk(result, found)
-        assert found == []
+        assert _find_leak(result, [broken, TOKEN_MARKER]) == []
+
+    async def test_the_exported_token_never_reaches_a_field(self, tmp_path):
+        """The new source reads a file holding both the token AND the whole
+        cookie header. Only a date may come out."""
+        token = _jwt(exp=time.time() + 1800)
+        result, _ = await _session_info(
+            verify_live=False, token=None, jar={},
+            state_path=_write_state(tmp_path, token=token))
+
+        leaked = _find_leak(
+            result, _token_needles(token) + ["REFRESHCOOKIEVALUE"])
+        assert leaked == [], "the exported token reached a field: %s" % leaked
+        # Not vacuous: the date really did come through this source.
+        assert result["credential"]["expires_at"] is not None
+        assert "auth_state.json" in result["credential"]["expiry_source"]
+
+    async def test_the_exported_token_never_reaches_a_log(self, tmp_path, caplog):
+        token = _jwt(exp=time.time() + 1800)
+        with caplog.at_level(logging.DEBUG):
+            await _session_info(
+                verify_live=False, token=None, jar={},
+                state_path=_write_state(tmp_path, token=token))
+
+        blob = "\n".join(r.getMessage() for r in caplog.records)
+        assert _find_leak(
+            blob, _token_needles(token) + ["REFRESHCOOKIEVALUE"]) == []
 
     async def test_reauth_never_returns_the_token(self):
         token = _jwt(exp=time.time() + 3600)
         result = await _reauth(mints=token,
                                status=_status(True, True, "api_confirmed"))
 
-        found = []
-        self._walk(result, found)
-        assert found == []
+        assert _find_leak(result, _token_needles(token)) == []
         assert result["credential"]["expires_at"] is not None
 
 
@@ -582,6 +990,46 @@ class TestLogout:
         assert "auth_state.json" in result["not_removed"]
         assert "PermissionError" in result["not_removed"]
 
+    async def test_a_partial_clear_reports_authenticated_NULL(self):
+        """The other direction of the same lie. A logout that could not unlink
+        auth_state.json used to answer ``authenticated: false`` in the same
+        object as a ``not_removed`` line admitting a live credential was still
+        sitting in that file -- readable by exactly the cross-process agents
+        ``scope`` names. An absence claimed from a clear that did not happen.
+
+        ``is None`` and not a falsy check, deliberately: ``False`` passes
+        ``not result["authenticated"]``, and ``False`` is the bug.
+        """
+        result, _ = await _logout(state_file=_LockedStateFile())
+
+        assert result["authenticated"] is None
+        assert result["authenticated"] is not False
+        assert "not_removed" in result
+        assert "PARTIAL" in result["reason"]
+        assert "treated as still present" in result["reason"]
+
+    async def test_a_full_clear_still_reports_false(self, tmp_path):
+        """CONTROL for the rule above. The null must be earned by a real
+        partial, or 'authenticated' becomes a field that never commits."""
+        state = tmp_path / "auth_state.json"
+        state.write_text("{}", encoding="utf-8")
+
+        result, _ = await _logout(state_file=state)
+
+        assert result["authenticated"] is False
+        assert "not_removed" not in result
+
+    async def test_nothing_to_clear_still_reports_false(self, tmp_path):
+        """The nothing-was-there case is a PROVEN absence, not a partial: no
+        credential means no authenticated request, established without asking
+        Naukri."""
+        result, _ = await _logout(
+            token=None, state_file=tmp_path / "never-written.json")
+
+        assert result["cleared"] is False
+        assert result["authenticated"] is False
+        assert "not_removed" not in result
+
     async def test_it_never_raises_when_the_manager_explodes(self, tmp_path):
         manager = MagicMock()
         manager._token = "cached"
@@ -590,7 +1038,9 @@ class TestLogout:
         result, _ = await _logout(manager=manager,
                                   state_file=tmp_path / "gone.json")
 
-        assert result["authenticated"] is False
+        assert result["authenticated"] is None, (
+            "the cached token could not be invalidated, so nothing about the "
+            "credential is proven")
         assert "not_removed" in result
 
     async def test_it_does_not_delete_the_profile_or_sign_out(self, tmp_path):
@@ -655,6 +1105,22 @@ class TestLogout:
             assert key in result, key
         assert result["authenticated"] is False
         assert isinstance(result["cleared"], bool)
+
+    @pytest.mark.parametrize("state_file,expected", [
+        ("clean", False),
+        ("locked", None),
+    ])
+    async def test_authenticated_is_false_only_where_it_is_provable(
+            self, tmp_path, state_file, expected):
+        """Both branches side by side, so neither can drift alone."""
+        target = (_LockedStateFile() if state_file == "locked"
+                  else tmp_path / "auth_state.json")
+        if state_file == "clean":
+            target.write_text("{}", encoding="utf-8")
+
+        result, _ = await _logout(state_file=target)
+
+        assert result["authenticated"] is expected
 
 
 # =====================================================================
@@ -844,10 +1310,33 @@ class TestReauth:
         result = await _reauth(mints="fresh-token")
 
         for key in ("renewed", "authenticated", "method", "stage",
-                    "checked_against", "reason", "credential"):
+                    "uses_browser", "mechanism", "checked_against", "reason",
+                    "credential"):
             assert key in result, key
         assert isinstance(result["renewed"], bool)
         assert result["credential"]["name"] == "nauk_at"
+
+    @pytest.mark.parametrize("kwargs,stage,marker", [
+        ({"mints": "fresh"}, "cache_refresh", "borrowed from the existing pool"),
+        ({"mints": None, "restart_mints": "fresh"}, "browser_restart",
+         "stopped and relaunched"),
+        ({"raises": RuntimeError("pool dead"),
+          "restart_raises": RuntimeError("profile locked")}, "none",
+         "NO stage succeeded, and both costs were still paid"),
+    ])
+    async def test_mechanism_names_the_stage_that_actually_ran(
+            self, kwargs, stage, marker):
+        """Including the failure branch, which is the one that matters: a
+        reauth where neither stage produced a token still paid for a pooled
+        navigation AND a full browser restart. Reporting only the successful
+        cost would understate exactly the case worth seeing."""
+        result = await _reauth(status=_status(True, True, "api_confirmed"),
+                               **kwargs)
+
+        assert result["stage"] == stage
+        assert result["uses_browser"] is True
+        assert marker in result["mechanism"], result["mechanism"]
+        assert "does not mean free" in result["mechanism"]
 
 
 # =====================================================================
@@ -885,6 +1374,10 @@ class TestShapeInvariants:
                     "credential", "supporting", "credential_source",
                     "durability", "renewal", "on_expiry"):
             assert key in result, key
+        for key in ("silent_renew_available", "tool", "uses_browser",
+                    "mechanism", "session_lapses_at", "session_lapses_in_days",
+                    "session_lapses_source"):
+            assert key in result["renewal"], key
         assert result["server"] == "naukri"
         assert result["authenticated"] is expected
         assert result["live_check"]["completed"] is (expected is not None)
