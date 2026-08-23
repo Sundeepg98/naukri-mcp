@@ -66,7 +66,24 @@ async def _get_alerts_list() -> dict:
     }
 
 
-async def _confirm_created(response, name: str) -> tuple:
+async def _snapshot_alert_ids():
+    """The set of alert ids that exist BEFORE a create, or None if unreadable.
+
+    Only the read-back branch of :func:`_confirm_created` needs this, but it
+    has to be taken before the POST, so every create pays one GET for it.
+    Creates are rare and a false "created" is not, which is the trade.
+    """
+    try:
+        listing = await _get_alerts_list()
+    except Exception as e:
+        logger.debug("Pre-create alert snapshot failed: %s", e)
+        return None
+    if listing.get("status") != "success":
+        return None
+    return {str(a.get("alert_id")) for a in listing.get("alerts", [])}
+
+
+async def _confirm_created(response, name: str, before_ids) -> tuple:
     """``(alert_id, confirmed_by)`` for a create POST, or ``(None, None)``.
 
     A create tool must not infer success from "the POST did not raise". A 2xx
@@ -78,13 +95,19 @@ async def _confirm_created(response, name: str) -> tuple:
 
     1. ``alert_id`` -- a server-issued id in the response (``info.searchId`` on
        the measured payload). An id Naukri minted is proof it created a row.
-    2. ``read_back`` -- the alert is in the alert list afterwards. Slower and
-       weaker (a same-named alert may pre-date this call), but it is real
-       evidence of the alert's existence, which is the caller's question.
+    2. ``read_back`` -- an alert of this name, carrying an id that was NOT
+       present before the POST, is in the list afterwards.
 
-    Neither available -> ``(None, None)``, and the caller refuses. A read-back
-    that itself fails is NOT evidence of absence, but it is not evidence of
-    presence either, so it lands in the same refusal: we do not know.
+    The read-back demands a NEW id, not merely a name match. Matching on name
+    alone would report success whenever an alert of that name already existed
+    -- a false "created" in exactly the case the caller is least able to check,
+    and the operator's live account already carries a probe-shaped name that
+    invites a re-run. Without a usable before-snapshot there is no new-vs-old
+    to test, so that branch cannot conclude either.
+
+    Neither available -> ``(None, None)``, and the caller refuses. A read that
+    itself fails is NOT evidence of absence, but it is not evidence of presence
+    either, so it lands in the same refusal: we do not know.
     """
     if isinstance(response, dict):
         info = response.get("info")
@@ -94,6 +117,12 @@ async def _confirm_created(response, name: str) -> tuple:
             if candidate is not None and str(candidate).strip():
                 return str(candidate), "alert_id"
 
+    if before_ids is None:
+        logger.warning(
+            "Alert %r: no id in the create response and no before-snapshot to "
+            "tell a new alert from one that already existed.", name)
+        return None, None
+
     try:
         listing = await _get_alerts_list()
     except Exception as e:
@@ -102,9 +131,11 @@ async def _confirm_created(response, name: str) -> tuple:
     if listing.get("status") != "success":
         return None, None
     for alert in listing.get("alerts", []):
-        if (alert.get("name") or "").strip() == name.strip():
-            found = alert.get("alert_id")
-            return (str(found) if found is not None else ""), "read_back"
+        if (alert.get("name") or "").strip() != name.strip():
+            continue
+        found = str(alert.get("alert_id"))
+        if found not in before_ids:
+            return found, "read_back"
     return None, None
 
 
@@ -450,9 +481,15 @@ async def naukri_create_alert(
         if industry_type_id is not None:
             body["industryTypeId"] = industry_type_id
 
+        # Taken BEFORE the POST so the read-back can tell a newly created alert
+        # from one of this name that already existed. Best-effort: if it fails,
+        # the read-back branch simply cannot conclude, and we refuse rather
+        # than guess.
+        before_ids = await _snapshot_alert_ids()
+
         response = await api_client.post(JOB_ALERT_API, body)
 
-        alert_id, confirmed_by = await _confirm_created(response, name)
+        alert_id, confirmed_by = await _confirm_created(response, name, before_ids)
         if alert_id is None:
             return {
                 "status": "error",

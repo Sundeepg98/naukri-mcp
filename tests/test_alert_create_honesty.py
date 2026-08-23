@@ -36,11 +36,24 @@ def _patch_post(return_value):
                  new=AsyncMock(return_value=return_value))
 
 
+def _listing(alerts):
+    return {"status": "success", "count": len(alerts), "alerts": alerts}
+
+
 def _patch_list(alerts):
+    """Same list every time it is read -- before the POST and after."""
     return patch("naukri_server.tools.alerts._get_alerts_list",
-                 new=AsyncMock(return_value={"status": "success",
-                                             "count": len(alerts),
-                                             "alerts": alerts}))
+                 new=AsyncMock(return_value=_listing(alerts)))
+
+
+def _patch_list_sequence(states):
+    """A different list per read, so before/after can differ.
+
+    The create path reads the list twice: once to snapshot the ids that
+    already exist, once to look for a new one.
+    """
+    return patch("naukri_server.tools.alerts._get_alerts_list",
+                 new=AsyncMock(side_effect=[_listing(s) for s in states]))
 
 
 class TestCreateAlertRefusesWhatItCannotShow:
@@ -113,14 +126,65 @@ class TestCreateAlertConfirmsWhatItCanShow:
         assert result.get("total_matched") == 34238
 
     @pytest.mark.asyncio
-    async def test_no_id_but_the_alert_is_in_the_list_is_a_success(self):
-        """Read-back is the second chance, so the guard is not just `if not body`."""
+    async def test_no_id_but_a_NEW_alert_is_in_the_list_is_a_success(self):
+        """Read-back is the second chance, so the guard is not just `if not body`.
+
+        The list is read twice -- once before the POST, once after -- so the
+        alert here is new: id 999 was not there a moment ago.
+        """
         from naukri_server.tools.alerts import naukri_create_alert
-        with _patch_post({}), _patch_list([{"alert_id": "999", "name": "Node Remote"}]):
+        before = [{"alert_id": "111", "name": "Something Else"}]
+        after = before + [{"alert_id": "999", "name": "Node Remote"}]
+        with _patch_post({}), _patch_list_sequence([before, after]):
             result = await naukri_create_alert(name="Node Remote", keywords="node.js")
         assert result["status"] == "success", result
         assert result["alert_id"] == "999", result
         assert result["confirmed_by"] == "read_back"
+
+    @pytest.mark.asyncio
+    async def test_a_same_named_alert_that_ALREADY_existed_is_not_a_creation(self):
+        """The false success the name-only read-back would have reported.
+
+        The list is identical before and after -- nothing was created -- but an
+        alert of this name is sitting in it. Matching on name alone would call
+        that a success. The operator's account already carries a probe-shaped
+        alert name, so this is a live shape, not a hypothetical.
+        """
+        from naukri_server.tools.alerts import naukri_create_alert
+        unchanged = [{"alert_id": "999", "name": "Node Remote"}]
+        with _patch_post({}), _patch_list_sequence([unchanged, unchanged]):
+            result = await naukri_create_alert(name="Node Remote", keywords="node.js")
+        assert result["status"] == "error", result
+        assert result["error_code"] == "API_ERROR", result
+
+    @pytest.mark.asyncio
+    async def test_no_before_snapshot_means_the_read_back_cannot_conclude(self):
+        """Without a before-list there is no new-vs-old to test, so we refuse."""
+        from naukri_server.tools.alerts import naukri_create_alert
+        calls = {"n": 0}
+
+        async def _listing():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("snapshot unavailable")
+            return {"status": "success", "count": 1,
+                    "alerts": [{"alert_id": "999", "name": "Node Remote"}]}
+
+        with _patch_post({}), patch("naukri_server.tools.alerts._get_alerts_list",
+                                    new=AsyncMock(side_effect=_listing)):
+            result = await naukri_create_alert(name="Node Remote", keywords="node.js")
+        assert result["status"] == "error", result
+
+    @pytest.mark.asyncio
+    async def test_a_server_issued_id_needs_no_read_back_at_all(self):
+        """The happy path must not depend on the list being readable."""
+        from naukri_server.tools.alerts import naukri_create_alert
+        with _patch_post(CREATED), patch(
+                "naukri_server.tools.alerts._get_alerts_list",
+                new=AsyncMock(side_effect=RuntimeError("list is down"))):
+            result = await naukri_create_alert(name="Node Remote", keywords="node.js")
+        assert result["status"] == "success", result
+        assert result["confirmed_by"] == "alert_id"
 
     @pytest.mark.asyncio
     async def test_confirmed_create_does_emit_AlertCreated(self):

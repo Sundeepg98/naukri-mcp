@@ -135,8 +135,16 @@ APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-
 # This is the ONLY create path ever observed creating an alert: the live round in
 # probing/alerts-saved-search-report.md got 200 + a server-issued searchId (90000000) here.
 # It replaced `/alertapi/v2/ssa`, which entered in 863e9a4 from WEBPACK ANALYSIS of the
-# front-end bundle, was never once watched creating anything, and read "Failed to fetch" in
-# that same live round. Do not swap it back without a receipt showing an alert appear.
+# front-end bundle and was never once watched creating anything.
+#
+# Three GETs, one transport, one minute, 2026-08-23 -- a differential with both controls:
+#     GET /alertapi/v1/cja              -> 405 Method Not Allowed, app JSON, code 4051
+#     GET /alertapi/v1/cja-does-not-exist -> 404 Not Found,        app JSON, code 4041
+#     GET /alertapi/v2/ssa              -> "Failed to fetch", no response at all
+# The service distinguishes absent from present and answers both cleanly, so the 405 on
+# v1/cja is the signature of a live route rejecting the wrong verb -- it takes POST. The
+# old path could not complete a request on the identical transport.
+# Do not swap it back without a receipt showing an alert appear.
 JOB_ALERT_API = "/alertapi/v1/cja"
 # CJA = "Custom Job Alerts" — the unified list endpoint (GET) that returns both SSA and CJA alerts
 JOB_ALERTS_LIST_API = "/alertapi/v2/user/cjas"  # GET → {list: [{alertId, name, keywords, location, functionAreaId, roleId, experience, minCTC, maxCTC, industryTypeId, alertType, email}]}
