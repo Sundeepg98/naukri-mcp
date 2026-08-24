@@ -408,21 +408,43 @@ class TestTriage:
 
     async def test_it_does_page_when_a_page_comes_back_full(self):
         """The control for the rule above: a FULL page must not end the walk,
-        or the fix would have bought correctness by never paginating."""
-        from naukri_server.tools.inbox import naukri_triage_inbox
+        or the fix would have bought correctness by never paginating.
 
-        full = [_rest_row(mailId="a%d" % i) for i in range(50)]
-        tail = [_rest_row(mailId="b%d" % i) for i in range(5)]
+        A full page is 20 rows, not 50. The endpoint caps pageSize at 20 and
+        answers HTTP 424 above it, so a 50-row page cannot occur -- the earlier
+        fixture tested this rule against a page the server can never send. It
+        passed only because the rows-requested limit and the wire pageSize are
+        separate numbers. 55 rows is therefore three pages: 20, 20, then a
+        short 15 that ends the walk.
+
+        Count INBOX calls, not every call on the mock. `_triage_inbox` also
+        reads the profile through the same `api_client.get`, and that read is
+        served from `_profile_ttl_cache` when an earlier test in this module
+        has warmed it. A bare `await_count` therefore asserted 2 or 3 depending
+        purely on test ORDER -- green in a full-file run, red in isolation.
+        Filtering by endpoint makes the count mean what the test says it means.
+        """
+        from naukri_server.tools.inbox import naukri_triage_inbox
+        from naukri_server.config import INBOX_REST_API
+
+        first = [_rest_row(mailId="a%d" % i) for i in range(20)]
+        second = [_rest_row(mailId="b%d" % i) for i in range(20)]
+        tail = [_rest_row(mailId="c%d" % i) for i in range(15)]
 
         with patch("naukri_server.tools.inbox.api_client.get",
                    new_callable=AsyncMock) as get:
             get.side_effect = [
-                _rest_response(full, total=55, unread=0),
+                _rest_response(first, total=55, unread=0),
+                _rest_response(second, total=55, unread=0),
                 _rest_response(tail, total=55, unread=0),
             ]
             out = await naukri_triage_inbox(limit=55)
 
-        assert get.await_count == 2
+        inbox_calls = [c for c in get.call_args_list
+                       if c.args and c.args[0] == INBOX_REST_API]
+        assert len(inbox_calls) == 3, (
+            "a full page must not end the walk; the pager made %d inbox call(s)"
+            % len(inbox_calls))
         assert out["returned"] == 55
 
     @pytest.mark.parametrize("bad", [-1, 101])
