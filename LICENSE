@@ -1,0 +1,31 @@
+Copyright (c) 2026 Sundeep G. All rights reserved.
+
+This software is made publicly readable as a portfolio artifact. It is NOT
+open source, and no licence to use it is granted.
+
+You may READ this source code and reference it, for example when evaluating
+the author's work.
+
+You may NOT use, copy, modify, merge, publish, distribute, sublicense, sell,
+or run this software or any derivative of it, in whole or in part, without
+prior written permission from the copyright holder.
+
+WHY THIS IS NOT PERMISSIVELY LICENSED
+-------------------------------------
+This project automates authenticated sessions on job platforms whose terms of
+service prohibit automated access. A permissive licence would amount to an
+invitation for strangers to point it at those platforms under their own
+accounts, and the consequences of that would land on the author's name and
+this repository.
+
+It is published to be READ, not deployed. If you want to run something like
+it, write your own and take your own decision about those terms.
+
+NO WARRANTY
+-----------
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
