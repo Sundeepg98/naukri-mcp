@@ -92,3 +92,9 @@ exports/sweep_*.json
 _sweep/tools.json
 _sweep/livelist.txt
 _sweep/backup-pre-sync.db
+
+# Profile snapshots taken before every profile-section write.
+# DATA_DIR-relative directory, same class as exports/ - the files hold the
+# FULL live profile read (name, phone, employment history) and must never be
+# committed. naukri_server/tools/profile_snapshot.py:_SNAPSHOT_DIR.
+profile_snapshots/
