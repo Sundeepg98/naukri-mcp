@@ -288,8 +288,8 @@ def redact(value: str) -> str:
 
 
 def _email_ok(match: re.Match, text: str, rel: str) -> bool:
-    # An address the SITE itself masked -- "s*****8@gmail.com" -- reaches the
-    # shape as "8@gmail.com" because "*" is not a local-part character. It is
+    # An address the SITE itself masked -- "q*****4@gmail.com" -- reaches the
+    # shape as "4@gmail.com" because "*" is not a local-part character. It is
     # masked at source and is not ours to fix, so it is allowed by CONTEXT
     # (a "*" immediately before the match) rather than by value.
     if match.start() > 0 and text[match.start() - 1] == "*":
@@ -694,7 +694,7 @@ PLANTED = (
 BENIGN = (
     ("email", "write to nobody@example.com or team@evil.example.org"),
     ("email", "the fixture uses jane@hireco.com and hr@betacorp.com"),
-    ("email", "profile shows s*****8@gmail.com, masked by the site"),
+    ("email", "profile shows q*****4@gmail.com, masked by the site"),
     ("phone", "the placeholder 9876543210 is not a person"),
     ("phone", 'the masked virtual number is "+910000000000"'),
     ("phone", "sha abcdefab9123456789cdefabcdefabcdefabcdef on master"),
