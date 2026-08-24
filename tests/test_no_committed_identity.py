@@ -209,6 +209,54 @@ PHONE_E164_SHAPE = re.compile(
 #: both halves so that degradation fails loudly instead of going quiet.
 WINDOWS_USER_PATH = re.compile(r"[A-Za-z]:[\\/]Users[\\/]([A-Za-z0-9._-]{2,})")
 
+#: AN ACCOUNT'S PRIMARY KEY, which is the worst class for a shape check.
+#:
+#: The other checks here hunt things that LOOK like personal data -- an email
+#: shape, a phone shape, a home path. An account id looks like none of them. It
+#: reads as an opaque hash, which is exactly why the 2026-08-23 privacy pass
+#: walked past a live 64-character ``profileId``: that pass swept for
+#: credentials and contact details, and a ``profileId`` is neither. It is the
+#: account's primary key on every write route.
+#:
+#: The naive fix is to hunt fixed-length hex, and this module already did --
+#: ``HEX32_SHAPE`` and ``HEX64_SHAPE``. MEASURED, that fix is half a fix. With
+#: only those two, planting an invented account id gave:
+#:
+#:     "profileId": "<64 hex>"   -> CAUGHT
+#:     "profileId": "<16 hex>"   -> MISSED
+#:     "profileId": "<8 hex>"    -> MISSED   (the elided form this repo uses)
+#:     "userId":    "<9 digits>" -> MISSED   (the form this repo actually had)
+#:
+#: Length is the wrong axis. **The key NAME is the signal**, so this check keys
+#: off the field name and asks only whether the value is opaque. That is what
+#: makes it robust to a length nobody predicted.
+#:
+#: It found one thing no other check here did: a real account-issued id sitting
+#: in a test fixture, which no email, phone, path or hex-length check reaches.
+ACCOUNT_KEY_VALUE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(profileId|profile_id|userId|user_id|accountId|account_id|cvid|cvId|cv_id"
+    r"|candidateId|candidate_id|memberId|member_id|resumeId|resume_id"
+    r"|applicantId|applicant_id|subscriberId|subscriber_id|alertId|alert_id"
+    r"|searchId|search_id)"
+    r"(?![A-Za-z0-9_])"
+    r"""\s*["']?\s*[:=]\s*["']?"""
+    r"([A-Za-z0-9_-]{4,})"
+)
+
+#: Values that are opaque ENOUGH to be an issued identifier rather than code.
+#: A long digit run or a long hex run; anything else next to an account key is
+#: a variable name, a type annotation or a constant, and firing on those would
+#: bury the check in noise. MEASURED: 21 (key, value) pairs fire across the
+#: repo and 20 of them are Python identifiers -- ``None``, ``await``,
+#: ``safe_get``, ``Optional``, ``PROFILE_ID``. This predicate keeps the 1.
+_OPAQUE_ID = re.compile(r"\A(?:[0-9]{5,}|[0-9a-fA-F]{8,})\Z")
+
+#: Round or sequential stand-ins that are obviously nobody's id.
+SYNTHETIC_ACCOUNT_IDS = frozenset(
+    {"12345", "123456", "1234567", "12345678", "1234567890", "99999", "00000"}
+)
+
 #: A drive path whose FIRST segment is not a generic one -- e.g. ``D:\Given``.
 #:
 #: This is a separate check from :data:`WINDOWS_USER_PATH` because that one
@@ -363,6 +411,23 @@ def _digest_ok(match: re.Match, text: str, rel: str) -> bool:
     return bool(DIGEST_CONTEXT.search(window))
 
 
+def _account_id_ok(match: re.Match, text: str, rel: str) -> bool:
+    """Allowed unless the value next to an account key is an OPAQUE id.
+
+    Note what is NOT consulted: the length. A 9-digit userId and a 64-hex
+    profileId are the same finding here, which is the whole point -- the
+    previous version of this guard covered 32 and 64 and nothing else.
+    """
+    value = match.group(2)
+    if not _OPAQUE_ID.match(value):
+        return True                       # a variable, a type, a constant
+    if value in SYNTHETIC_ACCOUNT_IDS or value.lower() in SYNTHETIC_IDS:
+        return True
+    if len(set(value)) <= 2:              # 000000, aaaaaaaa
+        return True
+    return False
+
+
 def _drive_root_ok(match: re.Match, text: str, rel: str) -> bool:
     """A drive path is fine if its first segment names a place, not a person.
 
@@ -405,6 +470,7 @@ SHAPES = (
     ("user path", WINDOWS_USER_PATH, _account_ok),
     ("user path", POSIX_HOME_PATH, _account_ok),
     ("drive root", DRIVE_ROOT_PATH, _drive_root_ok),
+    ("account id", ACCOUNT_KEY_VALUE, _account_id_ok),
     ("hex32 id", HEX32_SHAPE, _digest_ok),
     ("hex64 id", HEX64_SHAPE, _digest_ok),
     ("credential", JWT_SHAPE, _credential_ok),
