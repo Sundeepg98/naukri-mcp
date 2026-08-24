@@ -6,11 +6,12 @@ from typing import Optional
 from naukri_server.browser import browser, page_goto
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
-    NAUKRI_BASE, PROFILE_API, FULLPROFILES_API,
+    NAUKRI_BASE, PROFILE_API,
     BROWSER_OPERATION_TIMEOUT, logger,
     BROWSER_DOM_SETTLE, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD,
     BROWSER_PAGE_SETTLE,
 )
+from naukri_server.tools.profile_write import fullprofiles_write
 
 
 # ---------------------------------------------------------------------------
@@ -605,8 +606,22 @@ async def _update_profile(
             "error_code": "VALIDATION_ERROR",
         }
 
-    # The fullprofiles endpoint rejects all external API calls (405 from CDN).
-    # Only the React app's own XHR works. Use the browser UI approach:
+    # WHY THE BROWSER HERE -- and what the 405 does NOT say.
+    # The note this replaces read: the fullprofiles endpoint rejects all
+    # external API calls (405 from CDN), only the React app's own XHR works.
+    # That generalised a 405 on GET into a verdict about POST, and it is
+    # wrong. Naukri's own shipped editor bundle mnj_v320.min.js (848718
+    # bytes) writes to the fullprofiles v1 route at bundle offset 44671, as a
+    # POST carrying `X-HTTP-Method-Override: PUT`. tools/profile_write.py owns
+    # that transport; tools/profile_sections.py writes ten sections through
+    # it, and _boost_visibility below now uses it too.
+    # What the 405 actually shows: a live GET to all three fullprofiles
+    # versions returns 405 with NO `Allow` header and a byte-identical
+    # 92-byte body. It says only that GET is not allowed -- it does not even
+    # prove which versions are routed, let alone anything about POST.
+    # This function stays on the browser UI because its five fields are modal
+    # form edits (noticePeriod/currentCtc/expectedCtc share one Career
+    # Profile modal), not because the REST route is closed:
     # navigate to profile -> click edit -> modify form fields -> click save.
     async with browser.page_pool.acquire() as page:
         try:
@@ -724,7 +739,16 @@ async def _boost_visibility(randomize: bool = False) -> dict:
         logger.info("Randomized delay: %d seconds", delay)
         await asyncio.sleep(delay)
 
-    # Strategy 1: REST API (fast, no browser interaction)
+    # Strategy 1: the fullprofiles WRITE route, through the single transport
+    # chokepoint. profile_write.fullprofiles_write owns the route (v1), the
+    # `X-HTTP-Method-Override: PUT` header and the top-level `profileId`, so
+    # none of the three is re-typed here and a boost cannot drift away from
+    # the editor contract.
+    #
+    # What was here before could never have worked: it looped over ("v0",
+    # "v2") building the endpoint off FULLPROFILES_API and sent no override
+    # header. Neither version is a fullprofiles write route, so every boost
+    # fell through to the browser path below.
     try:
         profile_data = await api_client.get(
             PROFILE_API,
@@ -734,28 +758,27 @@ async def _boost_visibility(randomize: bool = False) -> dict:
         if profiles and isinstance(profiles[0], dict):
             headline = profiles[0].get("resumeHeadline", "")
             if headline:
-                for version in ("v0", "v2"):
-                    try:
-                        endpoint = FULLPROFILES_API if version == "v0" else FULLPROFILES_API.replace("/v0/", f"/{version}/")
-                        await api_client.post(endpoint, {"resumeHeadline": headline})
-                        _profile_ttl_cache.invalidate()
-                        _dashboard_ttl_cache.invalidate()
+                # A boost is a no-op RE-SAVE: the headline just read goes
+                # back unchanged. The only thing that moves is Naukri's
+                # last-modified stamp, which is what "recently active" reads.
+                await fullprofiles_write({"profile": {"resumeHeadline": headline}})
+                _profile_ttl_cache.invalidate()
+                _dashboard_ttl_cache.invalidate()
 
-                        try:
-                            from naukri_server.events import event_bus, ProfileBoosted
-                            await event_bus.emit(ProfileBoosted(method=f"rest_api_{version}"))
-                        except Exception:
-                            pass
+                try:
+                    from naukri_server.events import event_bus, ProfileBoosted
+                    await event_bus.emit(
+                        ProfileBoosted(method="rest_fullprofiles_v1"))
+                except Exception:
+                    pass
 
-                        return {
-                            "status": "success", "action": "refreshed",
-                            "method": f"rest_api_{version}",
-                            "headline_length": len(headline),
-                            "message": f"Profile refreshed via REST API ({version}). You appear as 'recently active'.",
-                        }
-                    except Exception as e:
-                        logger.debug("Profile REST refresh %s: %s", version, e)
-                        continue
+                return {
+                    "status": "success", "action": "refreshed",
+                    "method": "rest_fullprofiles_v1",
+                    "headline_length": len(headline),
+                    "message": "Profile refreshed via the fullprofiles v1 write "
+                               "route. You appear as 'recently active'.",
+                }
     except Exception as e:
         logger.warning("REST refresh failed, falling back to browser: %s", e)
 

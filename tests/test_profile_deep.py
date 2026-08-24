@@ -268,9 +268,13 @@ class TestProfileInvalidationOnUpdate:
         # Verify cache is populated (data is not None)
         assert _profile_ttl_cache._data is not None
 
-        # Now boost via REST — this should invalidate the cache
+        # Now boost via REST — this should invalidate the cache.
+        # profileId is required: the boost now goes through
+        # profile_write.fullprofiles_write, which refuses to send a body
+        # without a validated 64-character id rather than fabricating one.
         mock_api_get.return_value = {
-            "profile": [{"resumeHeadline": "My Headline"}],
+            "profile": [{"resumeHeadline": "My Headline",
+                         "profileId": "p" * 64}],
         }
         with patch("naukri_server.tools.profile.api_client.post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {}
