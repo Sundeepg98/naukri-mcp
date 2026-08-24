@@ -105,6 +105,62 @@ async def _fetch_pending_notifications() -> dict:
             [], None, error="%s: %s" % (type(e).__name__, e))
 
 
+def _unread_messages_section(d: dict) -> dict:
+    """Publish the AUTHORITATIVE unread total, not the filtered page's rows.
+
+    The inbox REST endpoint takes pageSize/pageNo/mailType and has NO unread
+    filter, so ``_fetch_inbox`` applies ``unread_only`` client-side to a page
+    it has already fetched. When the newest rows are read ones, that page
+    returns ZERO rows while the same response carries the real ``unread``
+    figure. Measured 2026-08-24: total=66, count=0, unread=11, messages=[].
+
+    The fetch SUCCEEDS, so the "a failed section is None, never a zero" guard
+    below never engages and ``errors[]`` stays silent -- the brief simply
+    published 0 while eleven recruiters waited. Reading the page's ``count``
+    as an unread total was the defect: that field is HOW MANY ROWS THIS PAGE
+    LISTED, which is a different measurement.
+
+    ``_triage_inbox`` already defends against this hazard the same way, by
+    publishing ``unread_in_inbox`` beside ``returned`` instead of collapsing
+    the two. This does likewise:
+
+      count      -- the authoritative unread total
+      listed     -- how many of them are in ``messages``
+      not_listed -- the gap, so an empty list beside a live count is EXPLAINED
+      note       -- prose naming the gap, or None when there is none
+
+    ``count`` is floored at ``listed``: a drifted ``unread`` must never make
+    the brief report fewer unread than the rows it is literally holding. A
+    payload with no ``unread`` key at all falls back to the page's own count,
+    which is the honest reading of a shape that never carried the total.
+    """
+    rows = d.get("messages") or []
+    listed = len(rows)
+    unread = d.get("unread")
+    if isinstance(unread, bool) or not isinstance(unread, int):
+        page_count = d.get("count")
+        count = (page_count
+                 if isinstance(page_count, int) and not isinstance(page_count, bool)
+                 else listed)
+        count = max(count, listed)
+    else:
+        count = max(unread, listed)
+
+    not_listed = count - listed
+    note = None
+    if not_listed > 0:
+        note = ("%d unread, could not list %d of them -- the unread-only page "
+                "came back short; call naukri_triage_inbox() to see them "
+                "(unread rows sort first)" % (count, not_listed))
+    return {
+        "count": count,
+        "listed": listed,
+        "not_listed": not_listed,
+        "note": note,
+        "messages": rows,
+    }
+
+
 
 
 @mcp.tool()
@@ -270,10 +326,7 @@ async def naukri_daily_brief(explain: bool = False) -> dict:
     brief = {
         "status": "success",
         "date": today,
-        "unread_messages": _section(inbox, lambda d: {
-            "count": d.get("count", 0),
-            "messages": d.get("messages", []),
-        }),
+        "unread_messages": _section(inbox, _unread_messages_section),
         "notifications": _section(notifs, lambda d: {
             "count": d.get("count", 0),
             "items": d.get("notifications", []),

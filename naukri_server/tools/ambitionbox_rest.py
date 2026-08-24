@@ -5,8 +5,11 @@ Provides 7 REST helper functions for AmbitionBox service gateways:
   - ab_get_competitors, ab_get_locations, ab_get_applied_jobs_insights
   - ab_get_salary_rest
 
-Uses cookies extracted from the persistent Chrome browser context,
-cached with 30-minute TTL and auto-refreshed on 401/403.
+Every request carries AB_REST_HEADERS (appid + systemid); the AB service
+gateway answers 400 "AppId or SystemId not present" without them, which is
+what made all seven helpers dead on arrival. Cookies are extracted from the
+persistent Chrome browser context, cached with 30-minute TTL and
+auto-refreshed on 401/403.
 
 Used by:
   - ambitionbox.py (_enrich_with_rest) for supplementary data
@@ -36,6 +39,41 @@ from naukri_server.config import (
 from naukri_server.domain import safe_get
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Gateway auth
+# ---------------------------------------------------------------------------
+#
+# THE AB SERVICE GATEWAY REJECTS A REQUEST THAT CARRIES NEITHER HEADER, AND
+# `_ab_rest_get` USED TO SEND NO HEADERS AT ALL -- so all seven helpers below
+# were structurally incapable of a 200. Measured 2026-08-24 against the same
+# review-distribution url ab_get_work_culture builds:
+#
+#   no headers            -> HTTP 400, 29 bytes, "AppId or SystemId not present"
+#   appid + systemid      -> HTTP 200, 687 bytes, JSON carrying reviewsCount /
+#                            workMonitorLabels / workMonitorSeries, i.e. the
+#                            exact fields the helper reads.
+#
+# PROVENANCE, STATED PLAINLY: these are NOT discovered constants. No
+# AmbitionBox appid exists anywhere in this repo, and the gateway was measured
+# to check only that the two headers are PRESENT -- it accepted these values
+# with no cookies at all. If AmbitionBox ever starts validating the values,
+# the failure now arrives as AbRestGatewayError with the gateway's own message
+# rather than as an empty enrichment, which is the point of raising it.
+AB_REST_HEADERS = {
+    "appid": "613",
+    "systemid": "ambitionbox",
+}
+
+
+class AbRestGatewayError(RuntimeError):
+    """The AB gateway refused the request itself (not the resource).
+
+    Kept distinct from ``aiohttp.ClientError`` on purpose: a gateway rejection
+    is NOT a cookie problem, so it must not fall into the retry branch below
+    and spend a real browser navigation re-fetching cookies that were never
+    the cause.
+    """
 
 # ═══════════════════════════════════════════════════════════════════════
 # Cookie management
@@ -72,7 +110,13 @@ async def _get_ab_cookies() -> dict:
 async def _ab_rest_get(url: str, params: Optional[dict] = None) -> dict:
     """GET request to an AmbitionBox REST endpoint using cached cookies.
 
-    Retries once with fresh cookies on 401/403.
+    Sends AB_REST_HEADERS -- without them the gateway answers 400 "AppId or
+    SystemId not present" and no helper in this module can ever succeed.
+
+    Retries once with fresh cookies on 401/403. A 400 is NOT retried: it is a
+    gateway rejection, cookies cannot fix it, and the retry costs a real
+    browser navigation. It raises AbRestGatewayError carrying the gateway's
+    own message instead.
     """
     global _ab_cookies, _ab_cookies_ts
     cookies = await _get_ab_cookies()
@@ -80,7 +124,20 @@ async def _ab_rest_get(url: str, params: Optional[dict] = None) -> dict:
     for attempt in range(2):
         try:
             async with aiohttp.ClientSession(cookies=cookies) as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(url, params=params,
+                                       headers=dict(AB_REST_HEADERS),
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 400:
+                        detail = ""
+                        try:
+                            detail = (await resp.text())[:200]
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "AB REST gateway rejected %s: HTTP 400 %s", url, detail)
+                        raise AbRestGatewayError(
+                            "AmbitionBox gateway rejected the request: HTTP 400 "
+                            "%s (url=%s)" % (detail, url))
                     if resp.status in (401, 403) and attempt == 0:
                         # Invalidate cookies and retry
                         _ab_cookies = {}

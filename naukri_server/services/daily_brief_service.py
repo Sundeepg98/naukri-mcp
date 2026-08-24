@@ -166,12 +166,30 @@ def build_recommended_actions(brief: dict) -> list:
         pass
 
     # High priority: unread recruiter messages
+    #
+    # `count` is the AUTHORITATIVE unread total and `listed` is how many of
+    # them the brief could actually show. They diverge whenever the inbox's
+    # client-side unread filter empties a page that still reports a live
+    # unread figure (measured 2026-08-24: count 11, listed 0). Recommending
+    # `unread_only=True` in that state sends him to the one call that just
+    # came back empty, so the gap changes both the wording AND the tool.
     inbox = (brief.get("unread_messages") or {})
-    if inbox.get("count", 0) > 0:
+    unread_count = inbox.get("count", 0)
+    if unread_count > 0:
+        not_listed = inbox.get("not_listed", 0) or 0
+        if not_listed > 0:
+            action_text = (
+                f"Respond to {unread_count} unread recruiter message(s) -- "
+                f"the unread-only page could not list {not_listed} of them"
+            )
+            tool = "naukri_triage_inbox()"
+        else:
+            action_text = f"Respond to {unread_count} unread recruiter message(s)"
+            tool = "naukri_list_inbox(unread_only=True)"
         actions.append({
             "priority": "high",
-            "action": f"Respond to {inbox['count']} unread recruiter message(s)",
-            "tool": "naukri_list_inbox(unread_only=True)",
+            "action": action_text,
+            "tool": tool,
         })
 
     # High priority: due reminders

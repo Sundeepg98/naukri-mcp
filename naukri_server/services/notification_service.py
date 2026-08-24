@@ -148,9 +148,47 @@ async def get_unified_notify() -> dict:
 
 
 async def get_notification_count() -> dict:
-    """Fetch unread notification count from API."""
+    """Fetch unread notification count from API.
+
+    A MISSING FIELD REPORTS UNKNOWN, NEVER ZERO. This read
+    ``safe_get(data, "count", default=0)`` with the anti-corruption layer's
+    ``field_name``/``warn`` arguments both omitted, so an absent or drifted
+    key became a confident ``0`` under ``status: "success"`` -- no log line,
+    no error channel, and indistinguishable from a real measurement of
+    "nothing is unread". That zero is the failure mode; ``count: None`` with
+    ``counted: False`` and a ``reason`` cannot be mistaken for a measurement.
+
+    Same shape as ``_triage_inbox``'s ``scored``/``scoring_error`` pair.
+
+    MEASURED 2026-08-24 via a read-only GET through the live server: the
+    endpoint answers HTTP 200 with body ``{"count": 8}``, so the key is
+    correct today and this is a guard against drift, not a repair of it.
+
+    Returns:
+        {status: "success", count: int|None, counted: bool, reason?: str}
+    """
     data = await api_client.get(NOTIFICATION_COUNT_API)
-    return {"status": "success", "count": safe_get(data, "count", default=0)}
+    raw = safe_get(data, "count", default=None, field_name="count",
+                   warn=True, context="notifications.count")
+
+    count = None
+    if isinstance(raw, bool):
+        count = None
+    elif isinstance(raw, int):
+        count = raw
+    elif isinstance(raw, str) and raw.strip().lstrip("-").isdigit():
+        # A gateway that stringifies its numbers has still MEASURED one.
+        count = int(raw.strip())
+
+    if count is None:
+        return {
+            "status": "success",
+            "count": None,
+            "counted": False,
+            "reason": "the count endpoint returned no usable 'count' field "
+                      "(got %s) -- unknown, not zero" % type(raw).__name__,
+        }
+    return {"status": "success", "count": count, "counted": True}
 
 
 async def mark_all_notifications_read(

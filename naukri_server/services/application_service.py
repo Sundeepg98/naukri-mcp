@@ -257,9 +257,21 @@ async def _safe_fetch_company_intel(company):
 
 
 async def _safe_fetch_mock_topics():
+    # `naukri_mock_interview(action="topics")` -- the consolidated dispatcher --
+    # was removed by the de-consolidation and this call site kept naming it,
+    # so the lazy import raised ImportError, the `except` below dressed it as
+    # an API error, and EVERY interview_prep call returned partial_success with
+    # `mock_topics` missing. The atomic replacement is
+    # `naukri_mock_interview_topics()`, which wraps the same `_get_topics` and
+    # returns the same {status, total, count, topics, roles} shape.
+    #
+    # Pinned by tests/test_interview_prep_call_sites.py, which walks all three
+    # of these helpers with `ast` and asserts every lazily imported tool name
+    # actually exists -- a wrong name here is otherwise invisible until it
+    # reaches a live call, dressed as somebody else's failure.
     try:
-        from naukri_server.tools.mock_interview import naukri_mock_interview
-        return await naukri_mock_interview(action="topics")
+        from naukri_server.tools.mock_interview import naukri_mock_interview_topics
+        return await naukri_mock_interview_topics()
     except Exception as e:
         return _fetch_error("Mock topics", e)
 

@@ -744,7 +744,31 @@ async def _enrich_with_rest(result: dict) -> dict:
     fetches work_culture, benefits, and competitors in parallel via the REST
     bridge and merges them into the result under an 'ab_rest' key.
 
-    Failures are silently swallowed — enrichment is best-effort.
+    A FAILED BRIDGE SAYS SO. Enrichment is best-effort, but "best-effort" was
+    being spent as permission to report nothing at all: the reason lived only
+    under the underscore-prefixed ``_enrichment_errors`` (which reads as an
+    internal detail) and in a ``logger.debug`` line nobody reads, while
+    ``naukri_company_intel`` still answered ``status: "success"`` with
+    ``ab_rest`` simply absent. Measured 2026-08-24 on a live read-only call:
+    all three helpers 403'd and the tool called itself a success.
+
+    So every enriched result now carries ``ab_rest_status``:
+
+        "ok"       -- every helper returned
+        "degraded" -- some returned; ``ab_rest`` holds those
+        "failed"   -- the bridge returned nothing; ``ab_rest`` is absent
+
+    plus ``ab_rest_errors`` (a readable channel, not an underscore key) and a
+    WARNING log line. ``status`` itself is deliberately NOT demoted: this data
+    is documented as supplementary, and demoting it would make
+    ``interview_prep._unpack`` discard the browser-scraped company rating and
+    sample questions over a failed supplement -- one silently-wrong answer
+    traded for another. ``ab_rest_status`` cannot be misread as a measurement,
+    which is the same shape used by ``counted`` in the notification count and
+    ``listed``/``not_listed`` in the daily brief.
+
+    A result with no ``_ab_company_id`` is left untouched: never having tried
+    is a different claim from having failed.
     """
     company_id = result.get("_ab_company_id")
     if not company_id:
@@ -765,16 +789,36 @@ async def _enrich_with_rest(result: dict) -> dict:
         for label, res in zip(labels, results):
             if isinstance(res, Exception):
                 rest_errors.append(f"{label}: {type(res).__name__}: {res}")
-                logger.debug("REST enrichment %s failed: %s", label, res)
             elif isinstance(res, dict) and res.get("status") == "success":
                 rest_data[label] = {k: v for k, v in res.items() if k != "status"}
+            else:
+                # A non-success dict used to fall through this loop without a
+                # trace, which is a third way for the section to vanish.
+                rest_errors.append("%s: %s" % (
+                    label,
+                    (res or {}).get("message", "no data") if isinstance(res, dict)
+                    else "unexpected %s" % type(res).__name__))
     except Exception as e:
-        logger.debug("REST enrichment failed entirely: %s", e)
+        rest_errors.append("enrichment: %s: %s" % (type(e).__name__, e))
 
     if rest_data:
         result["ab_rest"] = rest_data
     if rest_errors:
         result.setdefault("_enrichment_errors", []).extend(rest_errors)
+        result["ab_rest_errors"] = list(rest_errors)
+
+    if not rest_errors:
+        result["ab_rest_status"] = "ok"
+    elif rest_data:
+        result["ab_rest_status"] = "degraded"
+        logger.warning(
+            "AmbitionBox ab_rest enrichment DEGRADED for company %s: %s",
+            company_id, "; ".join(rest_errors)[:400])
+    else:
+        result["ab_rest_status"] = "failed"
+        logger.warning(
+            "AmbitionBox ab_rest bridge returned NOTHING for company %s: %s",
+            company_id, "; ".join(rest_errors)[:400])
 
     return result
 
@@ -799,7 +843,11 @@ async def naukri_company_intel(
 
     Tries AB REST bridge for supplementary data (work culture, benefits,
     competitors) when a numeric company ID can be extracted from the page.
-    REST enrichment is best-effort — failures are silent.
+    REST enrichment is best-effort but NOT quiet: when a company id was
+    found, the result carries `ab_rest_status` ("ok" | "degraded" | "failed")
+    and, on anything but "ok", `ab_rest_errors` naming what did not arrive.
+    A missing `ab_rest` key with no `ab_rest_status` beside it means no
+    company id could be extracted, so the bridge was never called.
 
     Note: AmbitionBox data is scraped, may break if site structure changes.
 
