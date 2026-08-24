@@ -12,11 +12,26 @@ a shape check, because ``Priya Raman`` and an invented ``Alex Rivera`` are the
 same shape, the same length, the same character classes. **Do not let a green
 run be read as clean.**
 
-That is not an abstract caveat here. Measured on this repo the day this file
-was written: ``naukri_server/tools/inbox.py`` carries a real third-party
-recruiter name, and this guard fires on it ZERO times, across every shape
-below. The file is silent in every list this module can produce. That single
-measurement is the whole paragraph above, demonstrated.
+That is not an abstract caveat here, and the demonstration is exact. On the day
+this file was written, ``naukri_server/tools/inbox.py`` -- production source --
+carried a real third-party recruiter's name, transcribed that same day from a
+live capture. **This guard fired on it ZERO times, across every shape below.**
+The file was silent in every list this module can produce. It was found by a
+human reading the file, and it was removed by hand.
+
+**So the class is UNCOVERED, not merely under-covered.** A fourth real name
+arriving in this repository tomorrow -- in a fixture, a docstring, a comment,
+an audit note -- would be caught by nothing here, and the suite would stay
+green while it shipped. That is stated in the present tense on purpose: it is
+a live, permanent, structural limit of shape-based checking, not a backlog item
+someone will close. The only control that covers it is a person reading field
+names and values, and the only honest thing this module can do about it is
+refuse to let a green run be mistaken for that review.
+
+:func:`test_this_guard_cannot_see_a_personal_name_and_says_so` executes the
+claim against an invented name rather than asserting it in prose, so the day
+some future check DOES reach names, that test fails and this paragraph has to
+be rewritten deliberately.
 
 THE DESIGN RULE, WHICH EVERY CHECK BELOW OBEYS
 ----------------------------------------------
