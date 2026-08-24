@@ -1,7 +1,7 @@
 # Inbox source fix -- four defects, three of them the same disease
 
 Slice: `naukri-inbox-source-fix`
-Repo: `D:\workspace\projects\job-hunting\mcp-servers\naukri`, branch `master`, HEAD `0852622`
+Repo: `mcp-servers/naukri`, branch `master`, HEAD `0852622`
 Files touched: `naukri_server/tools/inbox.py`, `tests/test_inbox_unread_and_scoring.py` (new)
 Files NOT touched: `naukri_server/validation.py` (see Defect 2 for the justification), and
 none of the profile modules or `tests/test_profile_*`.

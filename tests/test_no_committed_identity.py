@@ -209,6 +209,37 @@ PHONE_E164_SHAPE = re.compile(
 #: both halves so that degradation fails loudly instead of going quiet.
 WINDOWS_USER_PATH = re.compile(r"[A-Za-z]:[\\/]Users[\\/]([A-Za-z0-9._-]{2,})")
 
+#: A drive path whose FIRST segment is not a generic one -- e.g. ``D:\Given``.
+#:
+#: This is a separate check from :data:`WINDOWS_USER_PATH` because that one
+#: requires a literal ``Users`` segment, and a drive rooted straight at a
+#: person's name has none. That gap was not hypothetical: it published a
+#: given name 14 times across 8 files, and it survived this guard's first
+#: version -- the guard went green over a file that carried the leak, because
+#: the leak was one path segment to the left of where the check was looking.
+#:
+#: Measured before writing it: the whole repository contains 10 distinct
+#: absolute drive-path roots, of which 9 are already generic. So the allowlist
+#: below is small, auditable, and holds ONLY generic tokens -- no real value is
+#: named here, which is what keeps this an allowlist of the synthetic rather
+#: than a blocklist of the real. Widen it when a genuinely generic root fires.
+DRIVE_ROOT_PATH = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]([A-Za-z0-9_.-]{2,})")
+
+GENERIC_DRIVE_ROOTS = frozenset(
+    {
+        "users",        # handed to WINDOWS_USER_PATH, which checks the NEXT segment
+        "windows",
+        "programdata",
+        "program",      # "Program Files" truncates at the space
+        "workspace",
+        "dev-cache",
+        "temp",
+        "tmp",
+        "repo",
+        "out.csv",      # a test corpus literal
+    }
+)
+
 #: The POSIX home form. The lookbehind excludes ``:`` so a drive-letter path is
 #: counted once, by the shape above, and not twice; and it excludes word
 #: characters so the prose ``anchored/home/tail`` stops reading as a home
@@ -332,6 +363,21 @@ def _digest_ok(match: re.Match, text: str, rel: str) -> bool:
     return bool(DIGEST_CONTEXT.search(window))
 
 
+def _drive_root_ok(match: re.Match, text: str, rel: str) -> bool:
+    """A drive path is fine if its first segment names a place, not a person.
+
+    ``D:\\workspace`` says nothing about who owns the machine. ``D:\\Given``
+    says exactly who owns it, and that is the form that leaked. Ellipsis and
+    angle-bracket placeholders are documentation, not layout.
+    """
+    seg = match.group(1)
+    if seg.lower() in GENERIC_DRIVE_ROOTS:
+        return True
+    if any(tok in seg.lower() for tok in PLACEHOLDER_ACCOUNT_TOKENS):
+        return True
+    return "." * 3 in seg or "<" in seg
+
+
 def _credential_ok(match: re.Match, text: str, rel: str) -> bool:
     value = match.group(1) if match.groups() else match.group(0)
     lowered = value.lower()
@@ -358,6 +404,7 @@ SHAPES = (
     ("phone", PHONE_E164_SHAPE, _phone_ok),
     ("user path", WINDOWS_USER_PATH, _account_ok),
     ("user path", POSIX_HOME_PATH, _account_ok),
+    ("drive root", DRIVE_ROOT_PATH, _drive_root_ok),
     ("hex32 id", HEX32_SHAPE, _digest_ok),
     ("hex64 id", HEX64_SHAPE, _digest_ok),
     ("credential", JWT_SHAPE, _credential_ok),
