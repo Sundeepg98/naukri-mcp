@@ -12,6 +12,11 @@ from typing import Optional
 from naukri_server import mcp
 from naukri_server.interfaces import api_client  # noqa: F401 — tests patch this path
 from naukri_server.error_handler import handle_tool_action
+from naukri_server.tools.profile_sections import write_section
+from naukri_server.tools.profile_restore import (
+    list_profile_snapshots,
+    restore_section,
+)
 from naukri_server.utils import TtlCache
 
 # ---------------------------------------------------------------------------
@@ -135,6 +140,134 @@ async def naukri_profile_targeting() -> dict:
     and identifies empty fields that reduce ad relevance.
     """
     return await handle_tool_action(lambda: _do_targeting(), "profile.targeting")
+
+
+# ---------------------------------------------------------------------------
+# Section writes and their restore path
+#
+# `profile_sections.write_section` is the verified write layer and
+# `profile_restore` reads a snapshot back through that same gate. Both are
+# registration-only here -- no logic lives in the tool layer.
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def naukri_update_profile_section(
+    section: str,
+    fields: dict,
+    confirm: bool = False,
+) -> dict:
+    """Write ONE profile section through the verified REST write route.
+
+    NOTHING IS WRITTEN UNLESS confirm=True. The default returns the exact
+    body that would be sent, so the payload can be read before it is fired.
+
+    THE WRITE IS VERIFIED BY RE-READING THE PROFILE. A 200 from Naukri means
+    the request was accepted -- not that the field changed. So the profile is
+    read again afterwards and `verified` is reported off that second read. A
+    write that was accepted but did not persist comes back as an error naming
+    the snapshot to restore from; it is never reported as a success.
+
+    A PRE-WRITE SNAPSHOT IS ALWAYS TAKEN and its name is returned in
+    `snapshot`. List them with naukri_list_profile_snapshots and act on one
+    with naukri_restore_profile_section.
+
+    SIX COLLECTIONS ARE SENT AS WHOLE LISTS by Naukri's own editor:
+    languages, onlineProfiles, workSamples, presentations, publications and
+    patents. A payload carrying one row would DELETE every other row in the
+    section, so this tool reads the live list and merges your row into it
+    before sending -- the other rows survive. The reply also carries
+    `rows_lost` and `collateral`, which is the only way a silent deletion can
+    be seen at all: the API returns success while doing it.
+
+    TO UPDATE A ROW, PASS ITS ID FIELD. TO CREATE ONE, OMIT IT.
+
+    Args:
+        section: one of --
+            scalar blocks: summary, resumeHeadline, keySkills,
+                careerPreferences
+            one row per call (id field): employments (employmentId),
+                educations (educationId), schools (schoolId),
+                itskills (sid), projects (projectId),
+                certifications (certificationsId)
+            whole lists (id field): languages (languageId),
+                onlineProfiles (onlineProfileId), workSamples (workSampleId),
+                presentations (presentationId),
+                publications (publicationId), patents (patentId)
+        fields: the fields to set. Include the section's id field to UPDATE
+            an existing row; omit it to CREATE one. Controlled-vocabulary
+            fields must be objects like {"id": <id>, "value": <label>} -- a
+            bare string is accepted by the API and then silently ignored.
+        confirm: True writes. False (the default) previews and writes nothing.
+    """
+    return await handle_tool_action(
+        lambda: write_section(section=section, fields=fields, confirm=confirm),
+        "profile.write_section",
+    )
+
+
+@mcp.tool()
+async def naukri_list_profile_snapshots(limit: int = 20) -> dict:
+    """List the pre-write profile snapshots, newest first. METADATA ONLY.
+
+    Every confirmed section write takes a full profile snapshot first. This
+    lists them: file name, when it was taken, its label, its size on disk and
+    how many sections it holds. No profile field VALUES are returned here --
+    pass a `file` value to naukri_restore_profile_section to act on one.
+
+    Args:
+        limit: how many to return, newest first. Default 20.
+    """
+    return await handle_tool_action(
+        lambda: list_profile_snapshots(limit=limit),
+        "profile.list_snapshots",
+    )
+
+
+@mcp.tool()
+async def naukri_restore_profile_section(
+    snapshot: str,
+    section: str,
+    confirm: bool = False,
+) -> dict:
+    """Restore ONE section from a snapshot, through the same verified write.
+
+    NOTHING IS WRITTEN UNLESS confirm=True; the default returns the exact
+    body the restore would send. The restore is issued as an ordinary section
+    write, so it inherits the confirm gate, its own pre-write snapshot, the
+    post-write re-read that decides `verified`, and the collateral detector.
+
+    WHAT IT RESTORES:
+        - the scalar blocks (summary, resumeHeadline, keySkills,
+          careerPreferences) -- fully, in one write.
+        - the whole-list collections (languages, onlineProfiles, workSamples,
+          presentations, publications, patents) -- fully in one write when
+          the live list and the snapshot differ in exactly one addressable
+          row, which is the shape of undoing the write this snapshot was
+          taken for.
+
+    WHAT IT REFUSES RATHER THAN HALF-DOING:
+        - the one-row-per-call collections (employments, educations, schools,
+          itskills, projects, certifications). It returns status
+          "unsupported", names the row ids that differ, and writes NOTHING.
+          Restore those one at a time with naukri_update_profile_section,
+          passing each row's id field.
+        - any restore that would need more than one write. A partial restore
+          reported as success is worse than a refusal.
+
+    A ROW DELETED ON NAUKRI.COM CANNOT BE RECREATED WITH ITS ORIGINAL ID.
+    Re-sending it creates a NEW row with a NEW id, and anything that
+    referenced the old id still points at nothing.
+
+    Args:
+        snapshot: the `file` name from naukri_list_profile_snapshots.
+        section: which section to restore.
+        confirm: True writes. False (the default) previews and writes nothing.
+    """
+    return await handle_tool_action(
+        lambda: restore_section(snapshot=snapshot, section=section,
+                                confirm=confirm),
+        "profile.restore_section",
+    )
 
 
 # ---------------------------------------------------------------------------

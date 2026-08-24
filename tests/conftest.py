@@ -164,6 +164,48 @@ def _no_ambient_config(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Snapshot isolation - no test writes a profile snapshot into the checkout.
+#
+# Exactly the reason `agent.POLICY_STATE_PATH` is redirected above:
+# `profile_snapshot._SNAPSHOT_DIR` is `DATA_DIR / "profile_snapshots"` and
+# DATA_DIR is the repo root, so an un-isolated save dirties the working tree.
+# These files carry the FULL live profile read, which is the one artifact that
+# must never reach a commit. tests/test_no_tree_writes.py is what notices.
+#
+# It lives HERE rather than only in tests/test_profile_snapshot.py because the
+# WRITE paths now call `save_snapshot` themselves: every test that exercises
+# `profile_sections.write_section` or a restore takes a pre-write snapshot, in
+# whatever module that test happens to live.
+#
+# FUNCTION-SCOPED, not session-scoped, deliberately. `monkeypatch` and
+# `tmp_path` are function-scoped; more to the point, the snapshot tests COUNT
+# files in this directory (`test_listing_orders_newest_first`,
+# `test_prune_keeps_exactly_the_n_newest`), and one directory shared across
+# the whole session would make those depend on execution order.
+#
+# tests/test_profile_snapshot.py defines a fixture of the same name, which
+# SHADOWS this one for that module - same redirect, same target, so that
+# module behaves identically with or without it. This one covers every other
+# module.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def snapshot_home(monkeypatch, tmp_path):
+    """Redirect the profile-snapshot directory to a per-test tmp dir.
+
+    Returns the target path. Nothing is created here: `snapshot_dir()` is
+    pure and `save_snapshot` is the only thing that ever mkdirs it.
+    """
+    target = tmp_path / "profile_snapshots"
+    try:
+        from naukri_server.tools import profile_snapshot as _ps
+    except Exception:  # pragma: no cover - bare checkout without jobcore
+        return target
+    monkeypatch.setattr(_ps, "_SNAPSHOT_DIR", target)
+    return target
+
+
+# ---------------------------------------------------------------------------
 # DB isolation — point DB_PATH at a session-tmp file and create tables once.
 # Without this, any test that calls a database helper without patching it
 # (e.g. tests/test_workflows_integration.py::test_prep_step_fails_gracefully

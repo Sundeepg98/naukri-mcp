@@ -116,6 +116,7 @@ EMIT_CENSUS = {
     ("tools/inbox.py", "_mark_interested", "RecruiterEngaged"),
     ("tools/insights.py", "_cached_answers", "CachedAnswerDeleted"),
     ("tools/insights.py", "_cached_answers", "CachedAnswerUpdated"),
+    ("tools/profile_sections.py", "write_section", "ProfileUpdated"),
     ("tools/profile_update.py", "_boost_visibility", "ProfileBoosted"),
     ("tools/profile_update.py", "_update_profile", "ProfileUpdated"),
     ("tools/resume_photo.py", "_photo_delete", "PhotoDeleted"),
