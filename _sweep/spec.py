@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Sweep spec: every one of the 120 registered tools is either CALL(args) or SKIP(reason)."""
+"""Sweep spec: every one of the 125 registered tools is either CALL(args) or SKIP(reason).
+
+2026-08-24: the live surface grew from 120 to 125. The five newcomers
+(server_info, session_info, triage_inbox, logout, reauth) were classified
+against the same standard as the rest -- see the auth and inbox sections.
+"""
 
 JOB_ID = "210826815108"        # InApp / MCP Developer - real, from his applications table
 JOB_ID2 = "060426011432"       # IQVIA / Mean Stack Developer
@@ -25,8 +30,16 @@ def s(name, reason):
 
 # ---- auth -----------------------------------------------------------------
 c("naukri_auth_status")
+c("naukri_server_info")            # 2026-08-24: pure read, no network, no writes
+c("naukri_session_info", verify_live=True)   # 2026-08-24: live check is a GET
 s("naukri_login", R_OPER + " - opens a real sign-in flow")
 s("naukri_verify_otp", R_OPER + " - consumes a one-time code")
+s("naukri_logout",
+  R_WRITE + " - deletes the cached nauk_at and auth_state.json, destroying "
+  "mid-sweep the exact authenticated state this run exists to measure")
+s("naukri_reauth",
+  R_WRITE + " - mutates the cached credential and its browser_restart stage "
+  "relaunches the persistent Chrome profile; browser restarts are out of scope")
 
 # ---- search / jobs --------------------------------------------------------
 c("naukri_search_jobs", keywords="node.js developer", location="bangalore")
@@ -81,6 +94,9 @@ c("naukri_export_data", data_type="applications", export_format="json",
 
 # ---- inbox ----------------------------------------------------------------
 c("naukri_list_inbox", limit=5)
+# 2026-08-24: triage walks the same _fetch_inbox pages list_inbox uses and
+# scores each row locally -- no read_message, no upstream mark-read.
+c("naukri_triage_inbox", limit=10)
 c("naukri_read_message")          # no ids -> expect an honest VALIDATION_ERROR
 s("naukri_mark_interested", R_LEAD)
 

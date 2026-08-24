@@ -1,0 +1,3499 @@
+{
+ "live": [
+  "naukri_accept_nvite",
+  "naukri_activity_level",
+  "naukri_add_interview_round",
+  "naukri_agent_approve",
+  "naukri_agent_config",
+  "naukri_agent_decisions",
+  "naukri_agent_history",
+  "naukri_agent_reject",
+  "naukri_agent_run_now",
+  "naukri_agent_status",
+  "naukri_agent_update_config",
+  "naukri_alert_detail",
+  "naukri_answer_mock_interview",
+  "naukri_application_insights",
+  "naukri_apply",
+  "naukri_apply_top_fits",
+  "naukri_assess_fit",
+  "naukri_audit_profile",
+  "naukri_auth_status",
+  "naukri_auto_hunt",
+  "naukri_batch_apply",
+  "naukri_blocked_companies",
+  "naukri_boost_profile",
+  "naukri_bulk_fetch_jobs",
+  "naukri_cached_answers",
+  "naukri_check_email",
+  "naukri_company_intel",
+  "naukri_company_jobs",
+  "naukri_company_slug",
+  "naukri_compare_jobs",
+  "naukri_compare_offers",
+  "naukri_config",
+  "naukri_conversion_funnel",
+  "naukri_create_alert",
+  "naukri_daily_brief",
+  "naukri_dashboard",
+  "naukri_debug",
+  "naukri_delete_alert",
+  "naukri_delete_photo",
+  "naukri_disable_task",
+  "naukri_download_resume",
+  "naukri_draft_follow_up",
+  "naukri_enable_task",
+  "naukri_export_data",
+  "naukri_follow_company",
+  "naukri_follow_status",
+  "naukri_follow_up_priority",
+  "naukri_get_application",
+  "naukri_get_job",
+  "naukri_get_profile",
+  "naukri_get_recommendations",
+  "naukri_get_settings",
+  "naukri_health_check",
+  "naukri_interview_prep",
+  "naukri_job_detail_v1",
+  "naukri_kill_switch",
+  "naukri_list_alerts",
+  "naukri_list_applications",
+  "naukri_list_early_access",
+  "naukri_list_inbox",
+  "naukri_list_interview_rounds",
+  "naukri_list_notifications",
+  "naukri_list_reminders",
+  "naukri_list_saved_jobs",
+  "naukri_login",
+  "naukri_logout",
+  "naukri_mark_all_notifications_read",
+  "naukri_mark_interested",
+  "naukri_mark_notification_read",
+  "naukri_match_analytics",
+  "naukri_match_quality",
+  "naukri_mock_interview_history",
+  "naukri_mock_interview_prep",
+  "naukri_mock_interview_topics",
+  "naukri_notification_count",
+  "naukri_notification_prefs",
+  "naukri_notification_summary",
+  "naukri_photo_info",
+  "naukri_profile_prompts",
+  "naukri_profile_targeting",
+  "naukri_purge_applications",
+  "naukri_read_message",
+  "naukri_reauth",
+  "naukri_recruiter_activity",
+  "naukri_recruiter_history",
+  "naukri_report_fraud",
+  "naukri_research_company",
+  "naukri_resume_builder_status",
+  "naukri_resume_info",
+  "naukri_resume_templates",
+  "naukri_run_task_now",
+  "naukri_salary_benchmark",
+  "naukri_salary_position",
+  "naukri_save_job",
+  "naukri_scheduler_status",
+  "naukri_score_saved_jobs",
+  "naukri_search_companies",
+  "naukri_search_impressions",
+  "naukri_search_jobs",
+  "naukri_server_info",
+  "naukri_session_info",
+  "naukri_set_config",
+  "naukri_set_reminder",
+  "naukri_share_early_access",
+  "naukri_similar_jobs",
+  "naukri_skill_gap",
+  "naukri_stale_applications",
+  "naukri_start_mock_interview",
+  "naukri_status_changes",
+  "naukri_subscription_status",
+  "naukri_sync_applications",
+  "naukri_sync_saved",
+  "naukri_sync_saved_jobs",
+  "naukri_tailor_resume",
+  "naukri_task_history",
+  "naukri_taxonomy",
+  "naukri_triage_inbox",
+  "naukri_unsave_job",
+  "naukri_update_alert",
+  "naukri_update_profile",
+  "naukri_update_settings",
+  "naukri_upload_photo",
+  "naukri_upload_resume",
+  "naukri_verify_otp",
+  "naukri_visibility"
+ ],
+ "missing_from_spec": [],
+ "spec_only": [],
+ "tools_raw": [
+  {
+   "name": "naukri_login",
+   "description": "Login to Naukri via Google SSO or email/password.\n\nArgs:\n    method: \"google\" (SSO, requires manual browser interaction) or \"email\"\n    email: Naukri email \u2014 required when method=\"email\"\n    password: Naukri password \u2014 required when method=\"email\"\n\nReturns:\n    {status: \"logged_in\"|\"already_logged_in\"|\"waiting_for_user\"|\"otp_required\"|\"error\", ...}\n",
+   "inputSchema": {
+    "properties": {
+     "method": {
+      "default": "token",
+      "title": "Method",
+      "type": "string"
+     },
+     "email": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Email"
+     },
+     "password": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Password"
+     }
+    },
+    "title": "naukri_loginArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_verify_otp",
+   "description": "Submit OTP to complete Naukri login after naukri_login returns otp_required.\n\nArgs:\n    otp: 4-6 digit OTP from SMS/email\n\nReturns:\n    {status: \"logged_in\"|\"error\", ...}\n",
+   "inputSchema": {
+    "properties": {
+     "otp": {
+      "title": "Otp",
+      "type": "string"
+     }
+    },
+    "required": [
+     "otp"
+    ],
+    "title": "naukri_verify_otpArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_auth_status",
+   "description": "Check if the Naukri session is still active.\n\nThis is the preflight gate for agent loops, so it ALWAYS answers rather\nthan erroring: ``logged_in`` is always present and always a bool.\n\nReturns:\n    {status: \"success\", logged_in: bool, verified: bool, reason: str}\n\n    - logged_in: is the session usable right now?\n    - verified: did we actually DETERMINE that? ``False`` means the check\n      could not be completed (network / 5xx / unexpected error), which is\n      NOT the same claim as a proven logout -- do not treat it as one.\n    - reason: one of \"no_token\", \"api_confirmed\", \"api_denied\",\n      \"session_expired[: http NNN]\", or \"check_failed: <detail>\".\n\n    A ``logged_in: false`` with reason \"no_token\" or \"session_expired\"\n    means: call naukri_login.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_auth_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_session_info",
+   "description": "How long the Naukri session has left, and whether it works right now.\n\nAnswers the question naukri_auth_status cannot: not just \"am I in?\" but\n\"when does this lapse, what renews it, and does any of that need me?\".\n\nArgs:\n    verify_live: True (default) asks Naukri, so ``authenticated`` is a\n        measurement. False is free -- no network, no browser -- and\n        reports the on-disk facts with ``authenticated`` null.\n\nReturns:\n    {server, authenticated, checked_against, live_check, credential,\n     supporting, credential_source, durability, renewal, on_expiry}\n\n    - authenticated: true / false / **null**. Null means the live check\n      could not run and ``live_check.why_not`` says why. It is NOT a no.\n    - credential: nauk_at -- the short-lived JWT that signs REST calls.\n      Its expiry comes from the first of three sources that can answer:\n      the cached token, then auth_state.json (the token this server last\n      exported -- the ONLY one readable while Chrome holds the jar\n      locked, and often fresher than the jar row), then the jar itself.\n      ``expiry_source`` names which one answered. ``expired`` is null when\n      no expiry is knowable, never false.\n    - supporting: **nauk_rt** first. That is the refresh cookie; its\n      ``expires_in_days`` is how long silent renewal stays possible, and\n      it is the field that turns a dead session into a naukri_reauth\n      instead of a sign-in. Then nauk_sid (session) and nauk_cs (csrf).\n    - renewal.**session_lapses_at**: THE date to look at. It comes from\n      nauk_rt, not nauk_at, and it is when you must sign in by hand.\n      ``credential.expires_in_days`` can read minutes while this reads\n      months, because nauk_at re-mints itself; neither is an alarm while\n      naukri_reauth returns renewed=true. Null, never nauk_at's date,\n      when nauk_rt is unknowable.\n    - durability: the Chrome profile keeps the long-lived cookies, so a\n      server restart or a reboot re-mints nauk_at with no password.\n\n    No cookie or token VALUE is ever returned -- name, presence, format\n    and expiry only.\n",
+   "inputSchema": {
+    "properties": {
+     "verify_live": {
+      "default": true,
+      "title": "Verify Live",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_session_infoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_logout",
+   "description": "Clear the LOCALLY cached Naukri credential. Does not sign you out.\n\nRemoves the cached nauk_at from this process and deletes the exported\nauth_state.json. It does NOT delete the Chrome profile and it sends\nnothing to Naukri -- you stay signed in there, and naukri_reauth will\nusually get straight back in from the profile's nauk_rt.\n\nReturns:\n    {cleared, scope, authenticated, reason, what_is_lost, recover_by}\n\n    - cleared: was anything actually there to remove.\n    - authenticated is false ONLY where the credential is provably gone --\n      no credential left here means no authenticated request can be made,\n      which needs no call to Naukri. It is NOT a verdict from Naukri.\n    - not_removed: present only when something (a locked file) survived.\n      On that branch authenticated is **null**, not false: a credential\n      still on disk is still a credential, and claiming absence beside the\n      field naming the leftover would be a lie of the same class this\n      whole contract bans.\n\nNever raises.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_logoutArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_reauth",
+   "description": "Renew the Naukri credential silently -- no login page, no password.\n\nTwo stages, escalating: ``cache_refresh`` navigates with the profile's\nstill-valid nauk_rt so Naukri mints a fresh nauk_at; ``browser_restart``\nrelaunches the same persistent profile if that produced nothing. This is\nthe move that converted an 8.5-hour outage into a no-op on 2026-08-22.\n\nTakes no arguments and never opens a sign-in form. If both stages fail it\nsays so and names naukri_login.\n\nNOT FREE. \"Silent\" means no sign-in and no password, not no cost: this\ndrives a real browser page, because Naukri mints nauk_at in the browser\nand the REST surface is Akamai-gated with no token-mint route. Expect\nseconds and a held pool slot. ``uses_browser`` and ``mechanism`` in the\nresult say exactly what was spent, including when nothing was gained.\n\nReturns:\n    {renewed, authenticated, method, stage, uses_browser, mechanism,\n     checked_against, reason, credential}\n\n    - renewed: true ONLY after the live check confirmed the new\n      credential. A fresh token appearing is a reason to ask, never an\n      answer -- a revoked account is still handed one.\n    - authenticated: null when the live check could not complete; that is\n      not a no.\n    - On any outcome other than a proven success the previous cached\n      credential is put back exactly as it was, so a failed renew cannot\n      cost a session that was already working.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_reauthArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_search_jobs",
+   "description": "Search for jobs on Naukri.com by keywords, location, and filters.\n\nThis tool searches by keywords and filters \u2014 it does NOT use your Naukri profile.\nFor AI-recommended jobs based on your profile (no keywords needed),\nuse naukri_get_recommendations instead.\n\nArgs:\n    keywords: Job title or skills (e.g., \"python developer\", \"react\")\n    location: City name (e.g., \"Bangalore\", \"Mumbai\", \"Remote\")\n    experience: Years of experience filter (e.g., 5)\n    salary_min: Minimum CTC in LPA (e.g., 15 for 15 LPA)\n    salary_max: Maximum CTC in LPA (e.g., 50 for 50 LPA)\n    sort_by: Sort order \u2014 \"relevance\" (default), \"date\", or \"salary\"\n    freshness: Posted within N days \u2014 1, 3, 7, 15, or 30\n    work_mode: Work arrangement \u2014 \"wfh\", \"hybrid\", or \"office\"\n    job_type: Filter by job type \u2014 \"fulltime\", \"parttime\", \"contract\", \"internship\", \"temporary\"\n    company_type: Filter by company type \u2014 \"startup\", \"mnc\", \"indian_mnc\", \"corporate\"\n    industry: Industry sector (e.g., \"IT-Software\", \"Banking\", \"Healthcare\")\n    education: Minimum education \u2014 \"any_graduate\", \"b_tech\", \"mba\", \"m_tech\", \"diploma\", \"phd\"\n    role_category: Role category (e.g., \"Software Development\", \"Data Science\")\n    posted_within: Jobs posted within N days (overrides freshness if both set)\n    limit: Max jobs to return (default 20, max 50)\n    page: Page number for pagination (default 1)\n\nReturns:\n    - {status: \"success\", keywords, location, page, total, count, has_more, filters, jobs: [{job_id, title, company, salary, location, experience, is_applied, posted_date, tags, url}]}\n    - {status: \"error\", message}\n",
+   "inputSchema": {
+    "properties": {
+     "keywords": {
+      "title": "Keywords",
+      "type": "string"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Experience"
+     },
+     "salary_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Min"
+     },
+     "salary_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Max"
+     },
+     "sort_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Sort By"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Freshness"
+     },
+     "work_mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Work Mode"
+     },
+     "job_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Job Type"
+     },
+     "company_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company Type"
+     },
+     "industry": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Industry"
+     },
+     "education": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Education"
+     },
+     "role_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role Category"
+     },
+     "posted_within": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Posted Within"
+     },
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "keywords"
+    ],
+    "title": "naukri_search_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_get_recommendations",
+   "description": "Get personalized job recommendations from Naukri's algorithm based on your profile.\n\nReturns jobs matched to YOUR profile, skills, and activity \u2014 no keywords or\nfilters needed (the algorithm decides). For keyword/filter-based search,\nuse naukri_search_jobs instead.\n\nReturns 5 recommendation clusters (apply, profile, top_candidate, similar_jobs, preference)\nwith agentEligible flag.\n\nArgs:\n    limit: Max jobs to return (default 20, max 50)\n    page: Page number for pagination (default 1). Note: Naukri's recommendations API returns a single batch; pagination is applied client-side.\n\nReturns:\n    - {status: \"success\", source: \"recommendations\", total, count, page, has_more,\n       agent_eligible_exists, cluster_split_date, clusters: {type: {count, title}},\n       jobs: [{job_id, title, company, ...}]}\n    - {status: \"error\", message}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_get_recommendationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_get_job",
+   "description": "Fetch full job details -- description, skills, salary, match score, apply status.\n\nArgs:\n    job_id: Naukri job ID or full job URL\n\nReturns:\n    {status, title, company, salary, experience, location, skills, match_score, is_applied, can_apply, url, ...}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "_tool_get_jobArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_similar_jobs",
+   "description": "Find jobs similar to a given job posting.\n\nArgs:\n    job_id: Naukri job ID to find similar jobs for\n    limit: Max similar jobs to return (default 10)\n    page: Page number (default 1)\n\nReturns:\n    {status, job_id, source, total, count, jobs: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "_tool_similar_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_compare_jobs",
+   "description": "Compare 2-5 jobs side-by-side with fit scores.\n\nArgs:\n    job_ids: List of 2-5 job IDs to compare\n    timeout_seconds: Max seconds before timeout (default 120)\n    explain: attach the arithmetic behind each score -- weights, the\n        skills/experience components before bonuses, the bonus cap, the\n        verdict band, and the scoring_hash. Off by default: it is verbose.\n        This is the tool where it earns its tokens most often, because\n        \"why is that one ahead\" is the question a comparison raises.\n\nReturns:\n    {status, count, jobs, common_skills, all_skills, best_match_job_id,\n     average_fit_score}; each scored job entry also carries `explain`\n    when explain=True\n",
+   "inputSchema": {
+    "properties": {
+     "job_ids": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     },
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "job_ids"
+    ],
+    "title": "_tool_compare_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_report_fraud",
+   "description": "Report a fraudulent or suspicious job listing.\n\nArgs:\n    job_id: The job ID to report\n    reason: Description of why this job seems fraudulent\n\nReturns:\n    {status, job_id, message}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "_tool_report_fraudArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_job_detail_v1",
+   "description": "Get V1 job detail -- walk-in info, contact details, jd views/applies, closing date.\n\nArgs:\n    job_id: Naukri job ID\n\nReturns:\n    {status, job_id, title, company, is_walk_in, contact_name, jd_views, jd_applies, closing_date, ...}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "_tool_job_detail_v1Arguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_bulk_fetch_jobs",
+   "description": "Bulk fetch multiple job details in one API call (up to 20).\n\nArgs:\n    job_ids: List of 1-20 job IDs to fetch\n\nReturns:\n    {status, count, jobs: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "job_ids": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+     }
+    },
+    "required": [
+     "job_ids"
+    ],
+    "title": "_tool_bulk_fetch_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_applications",
+   "description": "List tracked job applications with filtering and pagination.\n\nArgs:\n    status: Filter by status \u2014 \"applied\", \"needs_input\", \"already_applied\", \"error\"\n    date_from: ISO date, include applications on/after this date\n    date_to: ISO date, include applications on/before this date\n    limit: Max results per page (default 50)\n    page: Page number (default 1)\n    filter_info: Source filter \u2014 1=recruiter-active, 2=naukri-synced, 3=external\n\nReturns:\n    {status, total, count, page, has_more, summary, applications: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Status"
+     },
+     "date_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Date From"
+     },
+     "date_to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Date To"
+     },
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "filter_info": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filter Info"
+     }
+    },
+    "title": "naukri_list_applicationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_get_application",
+   "description": "Get detailed status for a single application from Naukri API.\n\nArgs:\n    job_id: The Naukri job ID (e.g. \"270226007446\")\n\nReturns:\n    {status, job_id, title, company, applied_at, ...}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_get_applicationArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_purge_applications",
+   "description": "Archive and delete old applications from local tracking.\n\nTHE ONLY path that removes an application. A sync never deletes.\n\nOnly applications with a TRUSTWORTHY apply date are eligible: `applied_at`\nis the timestamp the row was recorded, not the date you applied, so rows\nthat carry no real `applied_date` from Naukri are never removed. The reply\nreports how many were protected that way, so a zero is never ambiguous.\n\nEvery removed row is copied to `applications_archive` first.\n\nArgs:\n    before_date: ISO date (YYYY-MM-DD). Remove applications APPLIED before\n        this date. Omit to use the configured retention horizon\n        (`retention.auto_purge_days`).\n    dry_run: If True (default), only preview \u2014 don't actually delete.\n\nReturns:\n    {status, purged_count, remaining_count, dry_run, sample_purged,\n     protected_no_apply_date, archived, note}\n",
+   "inputSchema": {
+    "properties": {
+     "before_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Before Date"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_purge_applicationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_stale_applications",
+   "description": "Detect stale applications that may need follow-up action.\n\nArgs:\n    days_threshold: Consider apps older than N days stale (default 14)\n    min_stale_score: Minimum staleness score 0-100 to include (default 40)\n    limit: Max results per page (default 50)\n    page: Page number (default 1)\n\nReturns:\n    {status, total_applications, total, count, page, has_more, stale_applications: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "days_threshold": {
+      "default": 14,
+      "title": "Days Threshold",
+      "type": "integer"
+     },
+     "min_stale_score": {
+      "default": 40,
+      "title": "Min Stale Score",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_stale_applicationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_follow_up_priority",
+   "description": "Cross-reference stale apps with inbox and reminders for prioritized follow-up action items.\n\nArgs:\n    days_threshold: Consider apps older than N days (default 14)\n    min_stale_score: Minimum staleness score 0-100 to include (default 40)\n    limit: Max action items to return (default 10)\n\nReturns:\n    {status, summary, stale_applications, action_items}\n",
+   "inputSchema": {
+    "properties": {
+     "days_threshold": {
+      "default": 14,
+      "title": "Days Threshold",
+      "type": "integer"
+     },
+     "min_stale_score": {
+      "default": 40,
+      "title": "Min Stale Score",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_follow_up_priorityArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_draft_follow_up",
+   "description": "Generate a follow-up message draft for a stale application.\n\nReturns a ready-to-send message with suggested subject line and days-since-applied context.\n\nArgs:\n    job_id: The Naukri job ID to draft a follow-up for\n\nReturns:\n    {status, job_id, company, title, days_since_applied, draft_message, suggested_subject}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_draft_follow_upArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_recruiter_history",
+   "description": "Aggregate per-company communication history from tracked applications.\n\nGroups by company, counts applications, tracks response status, and sorts by volume.\n\nArgs:\n    limit: How many company rows to return, most-applied first (default 20).\n        The three *_count fields always describe EVERY company you have\n        applied to, not just the rows returned here.\n\nReturns:\n    {status, total_companies, responsive_count, unresponsive_count,\n     returned, has_more, companies}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_recruiter_historyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_interview_prep",
+   "description": "Generate interview prep package for a job application.\n\nParallel-fetches company intel (reviews, interview difficulty), mock interview topics,\nand fit/skill-match assessment.\n\nArgs:\n    job_id: The Naukri job ID to prepare for\n\nReturns:\n    {status, job_id, company, title, matched_skills, missing_skills, sample_questions, company_rating}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_interview_prepArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_add_interview_round",
+   "description": "Record an interview round in YOUR PRIVATE NOTEBOOK. Nothing reaches Naukri.\n\nTHIS IS A LOCAL RECORD, NOT A CHANNEL TO NAUKRI OR TO THE RECRUITER.\nThe round is written to the local `naukri.db` and stays there. It does not\nschedule anything, does not confirm or decline a slot, does not notify the\nrecruiter, and never appears on naukri.com. The recruiter cannot see it.\n\nThat is a limit of the platform, not of this server. Naukri exposes no\njobseeker interview surface at all (measured 2026-08-23): four candidate\ninterview endpoints do not exist, against family-local controls that do; a\nlive application reports only Applied / Application Sent / Application\nViewed, with no interview state among them; and the logged-in navigation\nhas no interview tab. There is nothing to call. `tests/\ntest_interview_surface_absent.py` is the standing record -- read it before\nbuilding anything that claims to schedule.\n\nOne thing does leave the machine, and it is a READ, not a write: the round\nemits `ApplicationInterviewScheduled`, whose subscriber runs the interview\nlifecycle workflow, which fetches company interview data from AmbitionBox\nover HTTP and sets a local reminder. So \"local-only write\" is exact;\n\"makes no network call\" would not be.\n\nArgs:\n    job_id: The Naukri job ID\n    round_type: \"phone_screen\", \"technical\", \"system_design\", \"hr\", \"offer\", \"other\"\n    date: ISO date/datetime for the round (defaults to now)\n    notes: Free-text notes about the round\n    status: \"scheduled\", \"completed\", or \"cancelled\" (default \"scheduled\")\n\nReturns:\n    {status, action: \"round_added\", job_id, round_type, total_rounds, scope: \"local\"}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "round_type": {
+      "default": "other",
+      "title": "Round Type",
+      "type": "string"
+     },
+     "date": {
+      "default": "",
+      "title": "Date",
+      "type": "string"
+     },
+     "notes": {
+      "default": "",
+      "title": "Notes",
+      "type": "string"
+     },
+     "status": {
+      "default": "scheduled",
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_add_interview_roundArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_interview_rounds",
+   "description": "List interview rounds from YOUR PRIVATE NOTEBOOK. Naukri is not consulted.\n\nReads back only what `naukri_add_interview_round` wrote to the local\n`naukri.db`. This is NOT a view of interviews Naukri knows about -- Naukri\nexposes no jobseeker interview surface to read (see that tool's docstring\nand `tests/test_interview_surface_absent.py`). An empty result means you\nhave recorded nothing here; it says nothing about your real interviews.\n\nArgs:\n    job_id: Optional Naukri job ID to filter rounds for a specific job\n\nReturns:\n    {status, total_rounds, jobs_with_rounds, rounds, scope: \"local\"}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Job Id"
+     }
+    },
+    "title": "naukri_list_interview_roundsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_compare_offers",
+   "description": "Compare multiple job offers side by side.\n\nReturns application data, interview round counts, and latest round for each job.\n\nArgs:\n    job_ids: Comma-separated job IDs to compare (e.g. \"123,456,789\")\n\nReturns:\n    {status, count, offers}\n",
+   "inputSchema": {
+    "properties": {
+     "job_ids": {
+      "title": "Job Ids",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_ids"
+    ],
+    "title": "naukri_compare_offersArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_apply",
+   "description": "Apply to a single job on Naukri.\n\nIf set_reminder_days is provided and apply succeeds, a follow-up reminder is auto-created.\n\nArgs:\n    job_id: The Naukri job ID to apply to\n    answers: Dict of answers for screening questions (from a prior needs_input response)\n    set_reminder_days: Auto-create a follow-up reminder N days after successful application\n\nReturns:\n    {status: \"applied\"/\"needs_input\"/\"already_applied\"/\"error\", job_id, ...}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "answers": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Answers"
+     },
+     "set_reminder_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Set Reminder Days"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_applyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_batch_apply",
+   "description": "Search and apply to multiple jobs in bulk.\n\nIf set_reminder_days is provided, reminders are auto-created for each successful application.\n\nArgs:\n    keywords: Job title or skills (e.g. \"python developer\")\n    location: City name (e.g. \"Bangalore\", \"Remote\")\n    experience: Years of experience filter\n    salary_min: Minimum salary in lakhs\n    salary_max: Maximum salary in lakhs\n    freshness: Job age in days \u2014 1, 3, 7, 15, 30\n    limit: Max jobs to apply to (default 50)\n    work_mode: \"wfh\", \"hybrid\", \"wfo\"\n    job_type: \"fulltime\", \"parttime\", \"contract\", \"internship\", \"temporary\"\n    company_type: \"startup\", \"mnc\", \"indian_mnc\", \"corporate\"\n    sort_by: \"relevance\" or \"date\"\n    delay_ms: Delay in ms between submissions (default 500)\n    max_concurrent: DEPRECATED and IGNORED. Applies are strictly serial\n        (concurrency is an automation tell); kept only so existing callers\n        do not break\n    set_reminder_days: Auto-create follow-up reminders N days after each successful application\n    answers: Dict of answers for screening questions\n\nReturns:\n    {status, searched, filtered, applied, results: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "keywords": {
+      "title": "Keywords",
+      "type": "string"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Experience"
+     },
+     "salary_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Min"
+     },
+     "salary_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Max"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Freshness"
+     },
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "work_mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Work Mode"
+     },
+     "job_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Job Type"
+     },
+     "company_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company Type"
+     },
+     "sort_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Sort By"
+     },
+     "delay_ms": {
+      "default": 500,
+      "title": "Delay Ms",
+      "type": "integer"
+     },
+     "max_concurrent": {
+      "default": 3,
+      "title": "Max Concurrent",
+      "type": "integer"
+     },
+     "set_reminder_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Set Reminder Days"
+     },
+     "answers": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Answers"
+     }
+    },
+    "required": [
+     "keywords"
+    ],
+    "title": "naukri_batch_applyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_saved_jobs",
+   "description": "List your saved/bookmarked jobs with pagination.\n\nArgs:\n    limit: Max results per page (default 50)\n    page: Page number (default 1)\n\nReturns:\n    {status, total, count, page, has_more, saved_jobs: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 50,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_list_saved_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_save_job",
+   "description": "Save/bookmark a job for later review.\n\nArgs:\n    job_id: The Naukri job ID to save (required)\n    title: Job title for display (optional)\n    company: Company name for display (optional)\n    notes: Personal notes about this job (optional)\n    sync_to_naukri: If True, also save the job on Naukri's backend (default False)\n\nReturns:\n    {status: \"success\", action: \"saved\", job_id, total_saved, synced_remote, already_applied}\n    or {status: \"success\", action: \"already_saved\", job_id}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "company": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company"
+     },
+     "notes": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Notes"
+     },
+     "sync_to_naukri": {
+      "default": false,
+      "title": "Sync To Naukri",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_save_jobArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_unsave_job",
+   "description": "Unsave/unbookmark a previously saved job.\n\nArgs:\n    job_id: The Naukri job ID to unsave (required)\n\nReturns:\n    {status: \"success\", action: \"unsaved\", job_id}\n    or {status: \"error\", message, error_code: \"NOT_FOUND\"}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_unsave_jobArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_sync_saved_jobs",
+   "description": "Pull saved jobs from Naukri server and merge with local tracking.\n\nReturns:\n    {status, total_remote, new_added, already_local, total_local}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_sync_saved_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_get_profile",
+   "description": "Fetch full Naukri profile \u2014 skills, employment, education, CTC, etc.\n\nReturns profile data including name, skills_with_experience, employment\nhistory, education, current/expected CTC, and notice period.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_get_profileArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_update_profile",
+   "description": "Update profile fields via browser UI.\n\nArgs:\n    fields: Dict of fields to change (resumeHeadline, keySkills, noticePeriod, etc.)\n    notice_period: Shorthand \u2014 \"Serving Notice Period\", \"15 Days or less\", \"1 Month\", etc.\n    expected_ctc: Shorthand \u2014 expected CTC in lakhs (e.g., 15)\n    current_ctc: Shorthand \u2014 current CTC in lakhs (e.g., 12)\n",
+   "inputSchema": {
+    "properties": {
+     "fields": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Fields"
+     },
+     "notice_period": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Notice Period"
+     },
+     "expected_ctc": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Expected Ctc"
+     },
+     "current_ctc": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Current Ctc"
+     }
+    },
+    "title": "naukri_update_profileArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_audit_profile",
+   "description": "Audit profile completeness and get improvement suggestions.\n\nReturns completeness percentage, grade, strengths, gaps, and actionable tips.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_audit_profileArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_boost_profile",
+   "description": "Re-save headline to appear as 'recently active' in recruiter searches.\n\nArgs:\n    randomize: If True, wait random 0-300s before refreshing (avoids patterns).\n",
+   "inputSchema": {
+    "properties": {
+     "randomize": {
+      "default": false,
+      "title": "Randomize",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_boost_profileArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_dashboard",
+   "description": "Get dashboard data \u2014 profile views, recruiter activity, completeness, notifications.\n\nReturns profile_views, recruiter_activity_date, ctc_lpa, experience_years,\nand other dashboard metrics.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_dashboardArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_profile_targeting",
+   "description": "How Naukri's ad system sees your profile \u2014 35 targeting fields, completeness gaps.\n\nReturns DFP targeting profile with CTC, experience, age, gender, location,\nand identifies empty fields that reduce ad relevance.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_profile_targetingArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_debug",
+   "description": "Debug toolkit \u2014 inspect browser state, test APIs, discover endpoints.\n\nBROWSER actions (inspect page DOM, take screenshots):\n    - browser_snapshot: Get page title, URL, and visible text content\n    - browser_screenshot: Take a screenshot (saves to file, returns path)\n    - browser_scan: Scan for interactive elements (buttons, inputs, links)\n    - browser_deepscan: Deep scan including hidden elements and iframes\n    - browser_explore: Explore page structure and JavaScript data\n    - browser_notif_explore: Explore notification center elements\n\nAPI actions (test Naukri REST endpoints directly):\n    - api_fetch: GET request to a Naukri API path\n    - api_post: POST to API. Format url as \"PATH|JSON_BODY\"\n    - api_put: PUT to API. Format url as \"PATH|JSON_BODY\"\n    - api_delete: DELETE request to API path\n    - api_fetch_widget: Fetch using widget headers (appid:109)\n    - api_settings: Fetch all account settings from Naukri\n\nDISCOVERY actions (intercept network traffic to find endpoints):\n    - discover_pages: Navigate to a page and capture all JSON API responses\n    - discover_statuses: Navigate + scroll, capture ALL HTTP statuses\n    - discover_intercept: Capture outgoing POST request bodies\n    - discover_click: Click element and capture resulting API calls\n\nArgs:\n    action: See groups above (default \"browser_snapshot\")\n    url: URL or API path. Context-dependent:\n         - Browser actions: page URL to navigate to (uses current page if omitted)\n         - API actions: API path (e.g., \"/jobapi/v3/search\"). For post/put: \"PATH|{json}\"\n         - discover_click: \"CSS_SELECTOR|OPTIONAL_NAV_URL\" -- SELECTOR FIRST.\n           This read \"PAGE_URL|CSS_SELECTOR\" until 2026-08-23, which is\n           backwards: `discovery_actions.do_click_discover` splits once on\n           \"|\" and takes part 0 as the selector, part 1 as an optional URL\n           to navigate to first. Following the old order made the tool\n           try to click a URL as a selector. Omit the second half to click\n           on whatever page the pool tab is already showing.\n\nReturns:\n    - {status: \"ok\", ...action-specific data}\n    - {status: \"error\", message, error_code}\n",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "browser_snapshot",
+      "title": "Action",
+      "type": "string"
+     },
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "title": "naukri_debugArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_sync_applications",
+   "description": "Sync applied jobs from Naukri.com into local tracking.\n\nUses 3-tier fallback: REST API -> browser intercept -> HTML scrape.\nMerges with local applications, preserves local-only fields.\n\nArgs:\n    force_browser: If True, skip REST API and use browser strategies.\n    days_back: Fetch from last N days (default 365). Use smaller values\n               (e.g., 7 or 30) for faster incremental syncs.\n\nReturns:\n    {status, method, total_remote, new_added, updated, unchanged, local_only,\n     days_back, last_sync, applications: [...first 20...]}\n",
+   "inputSchema": {
+    "properties": {
+     "force_browser": {
+      "default": false,
+      "title": "Force Browser",
+      "type": "boolean"
+     },
+     "days_back": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Days Back"
+     }
+    },
+    "title": "naukri_sync_applicationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_sync_saved",
+   "description": "Sync saved/bookmarked jobs from Naukri.com into local tracking.\n\nUses 2-tier fallback: REST API -> browser intercept.\nMerges with local saved jobs list.\n\nArgs:\n    force_browser: If True, skip REST API and use browser strategy.\n\nReturns:\n    {status, method, total_remote, new_added, already_local, local_only,\n     last_sync, saved_jobs: [...first 20...]}\n",
+   "inputSchema": {
+    "properties": {
+     "force_browser": {
+      "default": false,
+      "title": "Force Browser",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_sync_savedArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_export_data",
+   "description": "Export applications, saved jobs, or search results to a file.\n\nArgs:\n    data_type: What to export \u2014 \"applications\", \"saved_jobs\", or \"search_results\".\n    export_format: Output format \u2014 \"json\" or \"csv\" (default \"json\").\n    keywords: Required when data_type is \"search_results\" \u2014 the search query.\n    output_path: Custom file path (default: exports/<type>_<date>.<ext>).\n\nReturns:\n    {status, file_path, record_count, data_type, format}\n",
+   "inputSchema": {
+    "properties": {
+     "data_type": {
+      "title": "Data Type",
+      "type": "string"
+     },
+     "export_format": {
+      "default": "json",
+      "title": "Export Format",
+      "type": "string"
+     },
+     "keywords": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Keywords"
+     },
+     "output_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Output Path"
+     }
+    },
+    "required": [
+     "data_type"
+    ],
+    "title": "naukri_export_dataArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_inbox",
+   "description": "List recruiter messages and NVite invitations from your Naukri inbox.\n\nArgs:\n    limit: Max messages per page (default 20, max 50)\n    unread_only: Only return unread messages (default False)\n    mail_type: Filter by type e.g. \"powerNvite\" (default None for all)\n    page: Page number (default 1)\n\nReturns:\n    {status, total, count, page, has_more, unread, total_power_nvite,\n     unread_power_nvite, relevant_count, has_power_nvites, messages: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "unread_only": {
+      "default": false,
+      "title": "Unread Only",
+      "type": "boolean"
+     },
+     "mail_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mail Type"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_list_inboxArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_triage_inbox",
+   "description": "Rank the whole inbox in ONE call, so choosing what to answer is cheap.\n\nThe problem this exists for: the inbox holds 62 recruiter messages. Picking\nwhich ones deserve a response used to mean reading them one at a time,\nbecause the list rows came back with an empty preview and no recruiter\nname. Both are now populated, so a single call can carry enough of each\nmessage to decide on it.\n\nEvery row is scored through the SAME engine as the rest of the family\n(`naukri_server.scoring.score_job`), so a fit score here means what it\nmeans in `naukri_score_saved_jobs` and on the Uplers server. Rows are\nordered unread first, then by fit, then most recent.\n\nWhat it deliberately does NOT do: reply. Naukri exposes no reply, compose\nor thread surface to a jobseeker -- the inbox is one-directional, and the\nonly actions the platform offers on a recruiter message are Apply and\nNot Interested (`naukri_accept_nvite`, `naukri_mark_interested`). See\n`naukri_draft_follow_up` for text to send through another channel.\n\nArgs:\n    limit: Max messages to triage (default 60, pages as needed)\n    unread_only: Only triage unread messages (default False)\n    min_fit_score: Drop rows scoring below this (0-100). Rows that could\n        not be scored are dropped by this filter rather than kept, since\n        an unscored row cannot be said to clear a bar.\n\nReturns:\n    {status, total_in_inbox, unread_in_inbox, returned, scored,\n     scoring_error, min_fit_score, needs_answers, already_applied,\n     from_consultancies, messages: [...]}\n\n    `scored` is False when the profile could not be read, and\n    `scoring_error` names why; the ranking then falls back to recency\n    rather than pretending every job is a poor match.\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 60,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "unread_only": {
+      "default": false,
+      "title": "Unread Only",
+      "type": "boolean"
+     },
+     "min_fit_score": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Min Fit Score"
+     }
+    },
+    "title": "naukri_triage_inboxArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_read_message",
+   "description": "Read full content of a specific inbox message.\n\nArgs:\n    message_id: Message ID from list results\n    vcard_id: VCard ID from list results\n    unique_id: Unique ID from list results\n\nReturns:\n    {status, message_id, subject, content, date, type, conversation_id}\n",
+   "inputSchema": {
+    "properties": {
+     "message_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Message Id"
+     },
+     "vcard_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Vcard Id"
+     },
+     "unique_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Unique Id"
+     }
+    },
+    "title": "naukri_read_messageArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mark_interested",
+   "description": "Mark a recruiter message as interested or not interested.\n\nArgs:\n    mail_id: Mail ID from list/read results\n    conversation_id: Conversation ID from read results\n    interested: True=interested, False=not interested (default True)\n\nReturns:\n    {status, mail_id, interested, message}\n",
+   "inputSchema": {
+    "properties": {
+     "mail_id": {
+      "title": "Mail Id",
+      "type": "string"
+     },
+     "conversation_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Conversation Id"
+     },
+     "interested": {
+      "default": true,
+      "title": "Interested",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "mail_id"
+    ],
+    "title": "naukri_mark_interestedArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_accept_nvite",
+   "description": "Accept a recruiter NVite by applying to the associated job.\n\nArgs:\n    nvite_job_id: Job ID from list \u2192 job_details.nvite_job_id\n    answers: Screening question answers {question_id: answer} (optional)\n    title: Job title for tracking (optional)\n    company: Company name for tracking (optional)\n\nReturns:\n    {status: \"applied\"|\"needs_input\"|\"already_applied\"|\"error\", ...}\n",
+   "inputSchema": {
+    "properties": {
+     "nvite_job_id": {
+      "title": "Nvite Job Id",
+      "type": "string"
+     },
+     "answers": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Answers"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "company": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company"
+     }
+    },
+    "required": [
+     "nvite_job_id"
+    ],
+    "title": "naukri_accept_nviteArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_notifications",
+   "description": "List Naukri notifications with optional type filtering.\n\nArgs:\n    limit: Max notifications to return (default 20, max 50).\n    page: Page number for pagination (default 1).\n    notif_type: Filter by type substring (case-insensitive). Common: \"JA\", \"RA\", \"SYSTEM\", \"APPLICATION_UPDATE\".\n\nReturns:\n    {status, total, count, notifications: [{id, title, message, type, date, is_read, url, metadata}], filtered_by?}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "notif_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Notif Type"
+     }
+    },
+    "title": "naukri_list_notificationsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_notification_count",
+   "description": "Get unread notification count.\n\nReturns:\n    {status, count}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_notification_countArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mark_notification_read",
+   "description": "Mark a single notification as read.\n\nArgs:\n    notification_id: The notification ID (required).\n    date: The notification date string (required).\n\nReturns:\n    {status, notification_id}\n",
+   "inputSchema": {
+    "properties": {
+     "notification_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Notification Id"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Date"
+     }
+    },
+    "title": "naukri_mark_notification_readArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mark_all_notifications_read",
+   "description": "Mark all unread notifications as read (paginated, up to MAX_MARK_ALL_ITERATIONS batches).\n\nReturns:\n    {status, marked_count, already_read, total_processed, errors?}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_mark_all_notifications_readArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_notification_summary",
+   "description": "Get unified notification dashboard \u2014 all categories in one call.\n\nReturns 8 categories (recoJobs, appStatus, criticalActions, rmj, FF, NL, RR, recruiterSearch)\nwith counts, latest status, and display metadata.\n\nReturns:\n    {status, source, new_count, total_count, categories, total_types, display_order}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_notification_summaryArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_get_settings",
+   "description": "Fetch all current Naukri account settings (job-search status, notifications, consent flags).\n\nReturns the raw formatted-settings structure plus consent fields (auto-apply, WhatsApp).\nFor a human-readable visibility summary, use naukri_visibility() instead.\n\nReturns:\n    {status, count, settings: [{section, id, label, value, value_label, description}],\n     naukri_auto_apply_consent, linkedin_auto_apply_consent,\n     whatsapp_apply_notification, whatsapp_profile_notification}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_get_settingsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_update_settings",
+   "description": "Modify Naukri account settings. Pass only fields you want to change.\n\njob_search_status uses browser UI (radio buttons); other fields use the REST API.\n\nArgs:\n    job_search_status: \"actively_searching\" | \"open_to_opportunities\" | \"not_active\"\n    recommended_job_frequency: \"immediately\" | \"daily\" | \"weekly\" | \"no_email\"\n    recommended_job_notification: enable/disable recommended job emails\n    recruiter_notification: enable/disable recruiter contact emails\n    promotional_notification: enable/disable promotional emails\n\nReturns:\n    {status, updated_fields, message, [browser-specific fields]}\n",
+   "inputSchema": {
+    "properties": {
+     "job_search_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Job Search Status"
+     },
+     "recommended_job_frequency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recommended Job Frequency"
+     },
+     "recommended_job_notification": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recommended Job Notification"
+     },
+     "recruiter_notification": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recruiter Notification"
+     },
+     "promotional_notification": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Promotional Notification"
+     }
+    },
+    "title": "naukri_update_settingsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_blocked_companies",
+   "description": "List companies you've blocked from contacting you.\n\nReturns:\n    {status, count, companies: [{id, name}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_blocked_companiesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_check_email",
+   "description": "Check email and mobile verification status from your profile.\n\nReturns:\n    {status, is_email_verified, is_mobile_verified, email, mobile}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_check_emailArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_visibility",
+   "description": "Show profile visibility toggles (Resdex visibility, search visibility, contact info exposure).\n\nReturns a human-readable summary of who can see your profile in recruiter searches.\n\nReturns:\n    {status, visibility: {show_profile, show_email, show_phone, ...}, hint}\n    Or {status, message, visibility: {}, api_top_keys} if data not found.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_visibilityArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_notification_prefs",
+   "description": "Show notification preferences (email, SMS, push, WhatsApp toggles).\n\nReturns:\n    {status, notification_prefs: {email_notifications, sms_notifications, ...}, hint}\n    Or {status, message, notification_prefs: {}, api_top_keys} if data not found.\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_notification_prefsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_subscription_status",
+   "description": "Get Naukri 360 subscription status, expiry, and feature flags.\n\nReturns:\n    {status, is_subscribed, expiry_date, features: {...}}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_subscription_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_alerts",
+   "description": "Get all your job alerts (saved searches that notify you of matching jobs).\n\nReturns:\n    {status, count, alerts: [{alert_id, name, keywords, location, experience,\n     min_ctc, max_ctc, ctc_unit, alert_type, function_area_id, role_id,\n     industry_type_id}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_list_alertsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_alert_detail",
+   "description": "Get details for a specific job alert.\n\nArgs:\n    alert_id: The alert ID (from naukri_list_alerts results)\n\nReturns:\n    {status, alert: {alert_id, name, keywords, location, experience,\n     min_ctc, max_ctc, ctc_unit, alert_type, function_area_id, role_id,\n     industry_type_id}}\n",
+   "inputSchema": {
+    "properties": {
+     "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "alert_id"
+    ],
+    "title": "naukri_alert_detailArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_create_alert",
+   "description": "Create a new job alert (saved search that notifies you of matching jobs).\n\nArgs:\n    name: Alert name (e.g., \"Python Remote Jobs\")\n    keywords: Search keywords (e.g., \"python developer\")\n    location: Location filter (e.g., \"Bangalore\", \"Remote\")\n    experience: Years of experience (0-30)\n    min_salary: Minimum CTC in lakhs per annum (e.g., 15 for 15 LPA)\n    max_salary: Maximum CTC in lakhs per annum (e.g., 30 for 30 LPA)\n    function_area_id: Functional area ID (from Naukri taxonomy)\n    role_id: Role ID (from Naukri taxonomy)\n    industry_type_id: Industry type ID (from Naukri taxonomy)\n\nReturns:\n    {status, alert_name, alert_id, confirmed_by, message, total_matched?, matched_jobs?: [...]}\n\n    `confirmed_by` names the evidence the alert exists: \"alert_id\" (Naukri\n    handed back a server-issued id) or \"read_back\" (it was found in the\n    alert list afterwards). With NEITHER, this returns an error -- see\n    `_confirm_created` below. It will not report a creation it cannot show.\n",
+   "inputSchema": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "keywords": {
+      "title": "Keywords",
+      "type": "string"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Experience"
+     },
+     "min_salary": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Min Salary"
+     },
+     "max_salary": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Max Salary"
+     },
+     "function_area_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Function Area Id"
+     },
+     "role_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role Id"
+     },
+     "industry_type_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Industry Type Id"
+     }
+    },
+    "required": [
+     "name",
+     "keywords"
+    ],
+    "title": "naukri_create_alertArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_update_alert",
+   "description": "Edit fields of an existing job alert. Pass only the fields you want to change.\n\nArgs:\n    alert_id: The alert ID to update (from naukri_list_alerts)\n    keywords: New search keywords\n    location: New location filter\n    experience: New experience years filter\n    min_salary: New minimum CTC in lakhs\n    new_name: Rename the alert\n\nReturns:\n    {status, alert_name, updated_fields, message}\n",
+   "inputSchema": {
+    "properties": {
+     "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+     },
+     "keywords": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Keywords"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Experience"
+     },
+     "min_salary": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Min Salary"
+     },
+     "new_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "New Name"
+     }
+    },
+    "required": [
+     "alert_id"
+    ],
+    "title": "naukri_update_alertArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_delete_alert",
+   "description": "Delete a job alert.\n\nArgs:\n    alert_id: The alert ID to delete (from naukri_list_alerts)\n\nReturns:\n    {status, alert_id, alert_name, message}\n",
+   "inputSchema": {
+    "properties": {
+     "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "alert_id"
+    ],
+    "title": "naukri_delete_alertArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_search_companies",
+   "description": "Search for companies by name or industry keyword.\n\nArgs:\n    keyword: Company name or industry keyword (e.g. \"Google\", \"fintech\")\n    page: Page number (default 1)\n    limit: Max results per page (default 10, max 50)\n\nReturns:\n    {status, keyword, page, total, count, companies: [{group_id, name, ...}]}\n",
+   "inputSchema": {
+    "properties": {
+     "keyword": {
+      "title": "Keyword",
+      "type": "string"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "keyword"
+    ],
+    "title": "naukri_search_companiesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_company_jobs",
+   "description": "Get job listings at a specific company.\n\nArgs:\n    group_id: Company group ID from search results\n    page: Page number (default 1)\n    limit: Max results per page (default 20, max 50)\n\nReturns:\n    {status, group_id, page, total, count, jobs: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "group_id": {
+      "title": "Group Id",
+      "type": "string"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "group_id"
+    ],
+    "title": "naukri_company_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_company_slug",
+   "description": "Get the AmbitionBox slug for a company. Supports batch via comma-separated group_ids.\n\nArgs:\n    group_id: Single group ID or comma-separated IDs (e.g. \"123\" or \"123,456,789\")\n\nReturns:\n    Single: {status, group_id, company_slug, company_name}\n    Batch:  {status, slugs: {group_id: slug_or_null, ...}, count}\n",
+   "inputSchema": {
+    "properties": {
+     "group_id": {
+      "title": "Group Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "group_id"
+    ],
+    "title": "naukri_company_slugArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_research_company",
+   "description": "Comprehensive company research \u2014 jobs, salary, reviews, and interview experiences.\n\nArgs:\n    keyword: Company name (e.g. \"Google\", \"Infosys\")\n    include_jobs: Include open job listings (default True)\n    include_reviews: Include AmbitionBox salary/review data (default True)\n    include_interviews: Include AmbitionBox interview experiences (default True)\n    jobs_limit: Max jobs to include (default 5)\n    timeout_seconds: Max seconds before timeout (default 120)\n\nReturns:\n    {status, company_name, slug, jobs?, salary?, reviews?, interviews?, errors?}\n",
+   "inputSchema": {
+    "properties": {
+     "keyword": {
+      "title": "Keyword",
+      "type": "string"
+     },
+     "include_jobs": {
+      "default": true,
+      "title": "Include Jobs",
+      "type": "boolean"
+     },
+     "include_reviews": {
+      "default": true,
+      "title": "Include Reviews",
+      "type": "boolean"
+     },
+     "include_interviews": {
+      "default": true,
+      "title": "Include Interviews",
+      "type": "boolean"
+     },
+     "jobs_limit": {
+      "default": 5,
+      "title": "Jobs Limit",
+      "type": "integer"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "keyword"
+    ],
+    "title": "naukri_research_companyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_follow_company",
+   "description": "Follow or unfollow companies on Naukri.\n\nArgs:\n    group_id: Single company group ID\n    group_ids: List of company group IDs for batch operations\n    action: \"follow\" or \"unfollow\" (default \"follow\")\n\nReturns:\n    {status, action, followed/unfollowed: [...ids...], errors?}\n",
+   "inputSchema": {
+    "properties": {
+     "group_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Group Id"
+     },
+     "group_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Group Ids"
+     },
+     "action": {
+      "default": "follow",
+      "title": "Action",
+      "type": "string"
+     }
+    },
+    "title": "naukri_follow_companyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_follow_status",
+   "description": "Check follow status for one or more companies.\n\nArgs:\n    group_id: Single company group ID\n    group_ids: List of company group IDs for batch check\n\nReturns:\n    Single: {status, followed: [...], not_followed: [...]}\n    Batch:  {status, total, followed_count, unfollowed_count, companies: [{group_id, name, is_followed, ...}]}\n",
+   "inputSchema": {
+    "properties": {
+     "group_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Group Id"
+     },
+     "group_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Group Ids"
+     }
+    },
+    "title": "naukri_follow_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_search_impressions",
+   "description": "Get search impression stats \u2014 how many times recruiters found your profile.\n\nArgs:\n    days: Time period \u2014 must be 7, 30, or 90 (default 7)\n    top_n: How many search keywords to return, ranked by count\n           (default 15, clamped to 200). The raw upstream map is huge and\n           repetitive \u2014 704 distinct keys in one live capture \u2014 so the tail\n           is costly and unread. `keyword_stats` reports what the cap left\n           out, so nothing is hidden silently.\n\nReturns:\n    {status, days, total_appearances_all_time, window_appearances,\n     daily_average, recruiter_actions, percentage_change, timeline,\n     top_keywords, keyword_stats}\n\n    - total_appearances_all_time: CUMULATIVE, ignores `days` entirely.\n    - window_appearances: total within the requested `days` window. The\n      timeline buckets sum to exactly this.\n    - daily_average: window_appearances / days \u2014 a real average.\n      (Before 2026-08-20 this name held the window total; see\n      tests/test_search_impressions_invariants.py.)\n    - top_keywords: {keyword: count}, normalized through the same jobcore\n      taxonomy used for fit scoring, so \"Node.js\"/\"Node\"/\"Node Js\"/\"Nodejs\"\n      are one row.\n    - keyword_stats: {distinct_raw, distinct_normalized, returned,\n      total_mentions}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 7,
+      "title": "Days",
+      "type": "integer"
+     },
+     "top_n": {
+      "default": 15,
+      "title": "Top N",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_search_impressionsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_recruiter_activity",
+   "description": "See which recruiters viewed, downloaded, or contacted you.\n\nShows individual recruiter actions with company, designation, and date.\nFilter by action type to focus on specific recruiter behaviors.\n\nArgs:\n    page: Page number (default 1)\n    limit: Items per page (default 100 = all activities)\n    filter_by: Filter by action type \u2014 \"VIEWED\", \"MOBILE_VIEWED\",\n               \"DOWNLOADED\", \"CONTACTED\", \"ADD_TO_FOLDER\". None = all.\n\nReturns:\n    {status, page, size, filter_by, total_actions, percentage_change,\n     buckets, activities: [{recruiter_name, company, action, date, ...}], has_more}\n",
+   "inputSchema": {
+    "properties": {
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 100,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "filter_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filter By"
+     }
+    },
+    "title": "naukri_recruiter_activityArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_activity_level",
+   "description": "Check your current profile activity level (HIGH/MEDIUM/LOW).\n\nShows whether your profile is actively being seen by recruiters,\nand whether your resume and profile are up to date.\n\nReturns:\n    {status, level, logged_in, resume_updated, profile_updated}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_activity_levelArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mock_interview_topics",
+   "description": "Get available mock interview topics and completion status.\n\nReturns:\n    {status, total, count, page, has_more,\n     topics: [{name, status, id, tests_done, free}], roles: [{...}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_mock_interview_topicsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mock_interview_history",
+   "description": "Get previous mock interview history, scores, and feedback.\n\nReturns:\n    {status, total, count, page, has_more, interview_count, interviews: [{...}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_mock_interview_historyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_start_mock_interview",
+   "description": "Start a JD-based mock interview session.\n\nArgs:\n    job_id: Naukri job ID to base the interview on\n\nReturns:\n    {status, test_id, topic_id, topic_name, question, company_details}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_start_mock_interviewArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_mock_interview_prep",
+   "description": "Prepare for an interview \u2014 fetches job details, company interviews/reviews, mock topics.\n\nArgs:\n    job_id: Naukri job ID\n\nReturns:\n    {status, job_id, job_summary, company_interviews, company_reviews,\n     mock_interview_topics, preparation_guide}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_mock_interview_prepArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_answer_mock_interview",
+   "description": "Submit an answer to a mock interview question.\n\nArgs:\n    test_id: Test session ID from naukri_start_mock_interview\n    topic_id: Topic ID from start\n    question_id: Question ID from the current question\n    answer: Your answer text\n\nReturns:\n    {status: \"next_question\"|\"complete\"|\"generating\", ...}\n",
+   "inputSchema": {
+    "properties": {
+     "test_id": {
+      "title": "Test Id",
+      "type": "string"
+     },
+     "topic_id": {
+      "title": "Topic Id",
+      "type": "string"
+     },
+     "question_id": {
+      "title": "Question Id",
+      "type": "string"
+     },
+     "answer": {
+      "title": "Answer",
+      "type": "string"
+     }
+    },
+    "required": [
+     "test_id",
+     "topic_id",
+     "question_id",
+     "answer"
+    ],
+    "title": "naukri_answer_mock_interviewArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_resume_info",
+   "description": "Get resume metadata \u2014 filename, upload date, download URL, cv_id.\n\nReturns:\n    {status, resume_headline, file_name, upload_date, file_size, download_url, cv_id}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_resume_infoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_upload_resume",
+   "description": "Upload a new resume to Naukri profile (PDF/DOC/DOCX, max 5MB).\n\nUses browser automation to upload the file via the profile page.\n\nArgs:\n    file_path: Local path to the resume file.\n\nReturns:\n    {status, file, size_mb, message}\n",
+   "inputSchema": {
+    "properties": {
+     "file_path": {
+      "title": "File Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "title": "naukri_upload_resumeArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_download_resume",
+   "description": "Download current resume from Naukri profile.\n\nArgs:\n    save_path: Local path to save the downloaded resume file.\n               If not provided, returns an error prompting for a path.\n\nReturns:\n    {status, file_path, file_size_bytes, message}\n",
+   "inputSchema": {
+    "properties": {
+     "save_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Save Path"
+     }
+    },
+    "title": "naukri_download_resumeArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_photo_info",
+   "description": "Get profile photo metadata \u2014 URL, format, upload date.\n\nReturns:\n    {status, has_photo, photo_url, format, status_label, upload_date, download_api}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_photo_infoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_upload_photo",
+   "description": "Upload a new profile photo to Naukri (PNG/JPG/JPEG/GIF).\n\nUses browser automation to upload the file via the profile page photo cropper.\n\nArgs:\n    file_path: Local path to the photo file.\n\nReturns:\n    {status, file, message}\n",
+   "inputSchema": {
+    "properties": {
+     "file_path": {
+      "title": "File Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "title": "naukri_upload_photoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_delete_photo",
+   "description": "Delete the current profile photo from Naukri.\n\nUses browser automation to remove the photo via the profile page photo cropper.\n\nReturns:\n    {status, message}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_delete_photoArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_early_access",
+   "description": "Browse pre-posted early access roles from top companies.\n\nEarly access roles are jobs from top companies before they go live publicly.\nUse naukri_share_early_access(job_id) to express interest instantly (no screening questions).\n\nArgs:\n    page: Page number (default 1)\n    limit: Max roles per page (default 20)\n    filter_company: Filter by company name (case-insensitive substring)\n    filter_location: Filter by location (case-insensitive substring)\n    filter_experience: Filter by max experience years (only roles where min exp <= this value)\n\nReturns:\n    {status, total, count, page, has_more, roles: [{job_id, title, company_hint,\n     location, experience, salary, job_type, tags, url}], filters_applied?}\n",
+   "inputSchema": {
+    "properties": {
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "filter_company": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filter Company"
+     },
+     "filter_location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filter Location"
+     },
+     "filter_experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Filter Experience"
+     }
+    },
+    "title": "naukri_list_early_accessArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_share_early_access",
+   "description": "Express interest in an early access role. Instant \u2014 no screening questions.\n\nArgs:\n    job_id: The early access role's job ID (from naukri_list_early_access results)\n\nReturns:\n    {status, job_id, message, quota: {daily_applied, daily_quota}}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_share_early_accessArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_resume_templates",
+   "description": "List available resume builder templates (free and pro variants with preview images).\n\nReturns:\n    {status, count, free_count, pro_count, templates: [{id, name, type, preview_url}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_resume_templatesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_resume_builder_status",
+   "description": "Get resume builder service status \u2014 AI rewrite attempts left, subscription tier, features.\n\nReturns:\n    {status, attempts_left, is_paid, show_genai_features, show_rewrite, experiment_variant}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_resume_builder_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_tailor_resume",
+   "description": "Tailor resume suggestions for a specific job (headline, skills to add, etc.).\n\nArgs:\n    job_id: Naukri job ID or URL\n    timeout_seconds: Max seconds before timeout (default 120)\n\nReturns:\n    {status, job_title, company, suggestions: {headline, skills_to_add, ...}}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_tailor_resumeArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_company_intel",
+   "description": "Unified company intelligence \u2014 salary data, employee reviews, or interview experiences from AmbitionBox.\n\nNote: Uses 'intel_type' instead of 'action' because each value selects a category of\ncompany intelligence to fetch (salary, reviews, interviews), not a CRUD operation.\nAll dispatches are read-only scrapes from AmbitionBox.\n\nTries AB REST bridge for supplementary data (work culture, benefits,\ncompetitors) when a numeric company ID can be extracted from the page.\nREST enrichment is best-effort \u2014 failures are silent.\n\nNote: AmbitionBox data is scraped, may break if site structure changes.\n\nReplaces separate salary/reviews/interviews tools. Accepts a company slug OR name.\n\nArgs:\n    company: AmbitionBox slug OR company name (e.g., \"google\" or \"Google India Pvt. Ltd.\")\n    intel_type: \"salary\" | \"reviews\" | \"interviews\"\n    designation: (salary only) Job title slug to filter (e.g., \"software-engineer\")\n    page: Page number for reviews/interviews pagination (default 1)\n\nReturns:\n    - salary:     {status, company, avg_salary, salaries: [...], ab_rest?: {...}, ...}\n    - reviews:    {status, company, overall_rating, reviews: [...], ab_rest?: {...}, ...}\n    - interviews: {status, company_name, interview_experiences: [...], ab_rest?: {...}, ...}\n    - {status: \"error\", message} on failure\n",
+   "inputSchema": {
+    "properties": {
+     "company": {
+      "title": "Company",
+      "type": "string"
+     },
+     "intel_type": {
+      "default": "salary",
+      "title": "Intel Type",
+      "type": "string"
+     },
+     "designation": {
+      "default": "",
+      "title": "Designation",
+      "type": "string"
+     },
+     "page": {
+      "default": 1,
+      "title": "Page",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "company"
+    ],
+    "title": "naukri_company_intelArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_health_check",
+   "description": "Run a comprehensive health check on all Naukri MCP integrations.\n\nTests API endpoints (login, profile, search, recommendations, dashboard)\nand optionally browser-based checks (page pool, AmbitionBox scraping).\n\nArgs:\n    include_browser: If True (default), also run browser checks (~8s extra).\n                     Set to False for a fast API-only smoke test (~2s).\n    source: \"checks\" (default) for traditional health checks, \"probes\" for\n            probe-based health check using the health probe framework.\n\nReturns:\n    - {status: \"success\", summary: {ok, warn, fail, total_ms}, checks: [{name, status, message, elapsed_ms}, ...]}\n",
+   "inputSchema": {
+    "properties": {
+     "include_browser": {
+      "default": true,
+      "title": "Include Browser",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "checks",
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "title": "naukri_health_checkArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_application_insights",
+   "description": "Analyze your application history \u2014 status breakdown, top companies, response rates.\n\nUse this to understand application velocity, which companies you've applied to most,\nand how your applications are progressing through different statuses.\n\nArgs:\n    days: Analyze applications from last N days (default 30)\n\nReturns:\n    {status, period_days, total_applications, status_breakdown, velocity, top_companies, insights}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 30,
+      "title": "Days",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_application_insightsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_salary_position",
+   "description": "Analyze salary positioning across your applied jobs.\n\nCompares salary ranges from jobs you've applied to, showing min/max/median\nand distribution. Useful for understanding your market value positioning.\n\nArgs:\n    designation: Filter by job title keyword (optional)\n\nReturns:\n    {status, total_with_salary, salary_range, distribution, insights}\n",
+   "inputSchema": {
+    "properties": {
+     "designation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Designation"
+     }
+    },
+    "title": "naukri_salary_positionArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_cached_answers",
+   "description": "Manage cached screening question answers \u2014 list, update, or delete.\n\nWhen you apply to jobs, screening question answers are cached for reuse.\nUse this to review what's cached and correct any wrong answers before they're reused.\n\nArgs:\n    action: \"list\" | \"update\" | \"delete\" (default \"list\")\n    key: Cache key for update/delete operations\n    new_answer: New answer value for update action\n\nReturns:\n    list: {status, total_cached, answers: [{key, question, answer, type, cached_at}]}\n    update: {status, key, new_answer, message}\n    delete: {status, key, message}\n",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "list",
+      "title": "Action",
+      "type": "string"
+     },
+     "key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Key"
+     },
+     "new_answer": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "New Answer"
+     }
+    },
+    "title": "naukri_cached_answersArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_match_analytics",
+   "description": "Analyze match-score distribution across recent applications.\n\nShows how well your profile matched the jobs you applied to, with per-field\nbreakdowns (skills, experience, location, etc.) to identify weak areas.\n\nArgs:\n    days: Analyze applications from last N days (default 30)\n\nReturns:\n    {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown, user_details}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 30,
+      "title": "Days",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_match_analyticsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_match_quality",
+   "description": "Aggregate apply-match quality \u2014 how well recent applications matched your profile.\n\nHigher-level summary than match_analytics, focused on overall quality trends\nrather than per-field breakdowns.\n\nArgs:\n    days: Analyze applications from last N days (default 30)\n\nReturns:\n    {status, days, total_applies, complete_match, high_match, medium_match, low_match, field_breakdown}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 30,
+      "title": "Days",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_match_qualityArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_skill_gap",
+   "description": "Analyze skill gaps between your profile and market demand.\n\nSearches jobs matching your profile or keywords, extracts required skills,\nand compares against your profile skills to find gaps and strengths.\n\nArgs:\n    keywords: Search keywords (required if use_recommendations is False)\n    use_recommendations: Use personalized recommendations (default True)\n    sample_size: Number of jobs to analyze (default 20, max 50)\n    include_assessments: Boost passed-skill frequency from assessments (default True)\n    timeout_seconds: Max seconds before timeout (default 120)\n\nReturns:\n    {status, jobs_analyzed, skill_gaps, strong_skills, assessments_used}\n",
+   "inputSchema": {
+    "properties": {
+     "keywords": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Keywords"
+     },
+     "use_recommendations": {
+      "default": true,
+      "title": "Use Recommendations",
+      "type": "boolean"
+     },
+     "sample_size": {
+      "default": 20,
+      "title": "Sample Size",
+      "type": "integer"
+     },
+     "include_assessments": {
+      "default": true,
+      "title": "Include Assessments",
+      "type": "boolean"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_skill_gapArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_salary_benchmark",
+   "description": "Benchmark your salary against market rates for a given role.\n\nSearches live job postings, extracts salary data, and compares against\nyour current salary to show positioning (percentile, above/below market).\n\nArgs:\n    keywords: Search keywords for the role (required)\n    location: City to filter (e.g., \"Bangalore\"). None = all India.\n    sample_size: Number of jobs to analyze (default 20, max 50)\n    freshness: Posted within N days (default None = no filter)\n    timeout_seconds: Max seconds before timeout (default 120)\n\nReturns:\n    {status, jobs_sampled, jobs_with_salary, salary_aggregate, your_positioning, salary_by_company}\n",
+   "inputSchema": {
+    "properties": {
+     "keywords": {
+      "default": "",
+      "title": "Keywords",
+      "type": "string"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "sample_size": {
+      "default": 20,
+      "title": "Sample Size",
+      "type": "integer"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Freshness"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_salary_benchmarkArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_taxonomy",
+   "description": "Get Naukri's job taxonomy hierarchy \u2014 37 departments, 167 role categories, 1461 roles.\n\nUse this to discover valid role IDs, department IDs, and synonyms when constructing\nsearch queries or understanding how Naukri classifies jobs. Cached for 24h.\n\nReturns:\n    {status, total_departments, total_roles, departments: [{id, label, synonyms, role_categories}]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_taxonomyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_profile_prompts",
+   "description": "Fetch pending profile completion actions from Naukri's CCS widget.\n\nIdentifies what profile sections need attention (salary breakup, preferred locations,\nresume headline, etc.) and their impact on profile visibility. Uses browser cookies.\n\nReturns:\n    {status, source, pending_count, completed_count, pending_prompts, completed_prompts, all_state_keys}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_profile_promptsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_conversion_funnel",
+   "description": "Analyze application-to-interview conversion funnel.\n\nShows status breakdown, company response rates, and dead zones (companies\nwith 3+ applications and 0 responses) to optimize where you apply next.\n\nArgs:\n    days: Analyze applications from last N days (default 30)\n\nReturns:\n    {status, days, total_applied, funnel, conversion_rate, top_responsive_companies, dead_zones}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 30,
+      "title": "Days",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_conversion_funnelArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_status_changes",
+   "description": "Detect application status changes by syncing with Naukri.\n\nCompares local application records against Naukri's server data to find\nstatus transitions (applied->viewed, viewed->shortlisted, etc.).\n\nArgs:\n    days: Sync window in days (default 30)\n\nReturns:\n    {status, total_changes, positive_changes, positive, neutral, sync_method, last_sync}\n",
+   "inputSchema": {
+    "properties": {
+     "days": {
+      "default": 30,
+      "title": "Days",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_status_changesArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_daily_brief",
+   "description": "Get your morning job-hunting dashboard in a single call.\n\nRuns 20 checks in parallel plus a post-gather conversion funnel analysis:\nunread messages, notifications, new recommendations, recruiter activity,\nprofile activity level, today's applications, dashboard stats, early access\nroles, subscription status, due reminders, stale applications, job alerts,\nprofile completeness, saved jobs count, search impressions, assessment status,\nmatch quality, unified notify summary, AmbitionBox salary insights, and\npending workflow notifications.\n\nArgs:\n    explain: attach the arithmetic behind the fit scores on the top\n        recommendations -- weights, the skills/experience components before\n        bonuses, the bonus cap, the verdict band, and the scoring_hash.\n        Off by default, and most firmly so here: this is the one call meant\n        to be read whole every morning, and the block is verbose.\n\nReturns:\n    - {status: \"success\", unread_messages, notifications, notification_summary,\n       recommendations (with clusters, agent_eligible; each scored job also\n       carries `explain` when explain=True), recruiter_activity,\n       activity_level, todays_applications, dashboard, due_reminders,\n       stale_applications, job_alerts, profile_completeness, saved_jobs,\n       search_impressions, assessments, match_quality,\n       competition_overview (total_with_data, low, medium, high, very_high,\n       average_applicants, top_competitive),\n       conversion_funnel (total_applied, conversion_rate, dead_zones),\n       pending_notifications, recommended_actions, errors}\n\n    `pending_notifications` is an ENVELOPE, not a list:\n    {delivered: [...rows this run just marked delivered...],\n     delivered_count, delivery_cap, capped, total_undelivered,\n     still_undelivered}. `delivered_count` is bounded by `delivery_cap` and\n     is NOT how many are pending -- read `total_undelivered` for that, and\n     `capped` for whether the two differ. Counts are null (never 0) if the\n     fetch failed, in which case `error` is also present.\n",
+   "inputSchema": {
+    "properties": {
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_daily_briefArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_assess_fit",
+   "description": "Assess fit for a single job \u2014 skill overlap, experience, location, salary.\n\nFetches job details and profile in parallel, scores fit (0-100).\nOptionally auto-applies when score >= min_fit_score.\n\nArgs:\n    job_id: Naukri job ID\n    apply_if_fit: Auto-apply if fit score meets threshold\n    min_fit_score: Minimum score to trigger auto-apply (0-100)\n    answers: Screening question answers for auto-apply\n    set_reminder_days: Days until follow-up reminder after applying\n    explain: attach the arithmetic behind the score -- weights, the\n        skills/experience components before bonuses, the bonus cap, the\n        verdict band, and the scoring_hash. Off by default: it is verbose,\n        and it answers \"why is this number 85\", which is not the usual\n        question.\n\nReturns:\n    {status, job_summary, fit_assessment: {overall_score, skill_match,\n     experience_match, bonuses, recommendation, explain (when explain=True)},\n     applied, naukri_match}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "apply_if_fit": {
+      "default": false,
+      "title": "Apply If Fit",
+      "type": "boolean"
+     },
+     "min_fit_score": {
+      "default": 60,
+      "title": "Min Fit Score",
+      "type": "integer"
+     },
+     "answers": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Answers"
+     },
+     "set_reminder_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Set Reminder Days"
+     },
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_assess_fitArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_score_saved_jobs",
+   "description": "Score all saved/bookmarked jobs against your profile.\n\nReturns a ranked list sorted by fit_score descending, filtered\nby min_fit_score.\n\nArgs:\n    min_fit_score: Only return jobs scoring at or above this (0-100).\n        Defaults to servers.naukri.display_min_score, which ships as 60.\n    timeout_seconds: Timeout for the bulk operation\n    explain: attach the arithmetic behind each score -- weights, the\n        skills/experience components before bonuses, the bonus cap, the\n        verdict band, and the scoring_hash. Off by default: it is one such\n        block PER ROW, so on a full saved list it costs more than the\n        ranking it explains.\n\nReturns:\n    {status, total_saved, scored_count, min_fit_score,\n     scored_jobs: [{job_id, title, company, salary, location,\n                    fit_score, fit_details, explain (when explain=True)}, ...]}\n",
+   "inputSchema": {
+    "properties": {
+     "min_fit_score": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Min Fit Score"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     },
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_score_saved_jobsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_apply_top_fits",
+   "description": "Score saved jobs and auto-apply to top matches above min_fit_score.\n\nPrioritizes agent-eligible jobs at equal scores. Optionally sets\nfollow-up reminders on successful applications.\n\nArgs:\n    min_fit_score: Minimum fit score to apply (0-100, default 70)\n    limit: Max jobs to apply to (default 10, max 20)\n    set_reminder_days: Days until follow-up reminder after applying\n    answers: Screening question answers for auto-apply\n    timeout_seconds: Timeout for the bulk operation\n    explain: attach the arithmetic behind each score -- weights, the\n        skills/experience components before bonuses, the bonus cap, the\n        verdict band, and the scoring_hash. Off by default: it is verbose.\n        This tool SUBMITS applications, so the block is worth its tokens\n        here only when the question is \"why did that one clear the bar\".\n\nReturns:\n    {status, applied, attempted, total_scored, min_fit_score,\n     results: [{job_id, title, company, fit_score, apply_status,\n                reminder_set, explain (when explain=True)}, ...]}\n",
+   "inputSchema": {
+    "properties": {
+     "min_fit_score": {
+      "default": 70,
+      "title": "Min Fit Score",
+      "type": "integer"
+     },
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "set_reminder_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Set Reminder Days"
+     },
+     "answers": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Answers"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     },
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_apply_top_fitsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_auto_hunt",
+   "description": "Automated job hunting \u2014 search, score against your profile, return ranked matches.\n\nSearches for jobs matching your criteria, then scores each against your profile\nfor skill overlap, experience match, and location/salary/work-mode bonuses.\nSkills are alias-normalized (JS = JavaScript, k8s = Kubernetes).\nReturns only jobs above the minimum fit score, ranked from best to worst match.\n\nDoes NOT auto-apply \u2014 use naukri_apply_top_fits or naukri_apply for that.\n\nArgs:\n    keywords: Job search keywords (e.g., \"Python developer\", \"data engineer\")\n    location: City or region filter (optional)\n    min_fit_score: Minimum fit score 0-100 to include in results.\n        Defaults to servers.naukri.display_min_score from the config\n        file, which ships as 60. This is a DISPLAY filter; what the\n        autonomous agent applies to is a different, higher threshold\n        that no config file can lower past its Python floor.\n    limit: Max jobs to search and score (default 20)\n    freshness: Only jobs posted in last N days (default 7)\n    work_mode: \"wfh\" (remote), \"hybrid\", \"wfo\" (office) \u2014 optional\n    experience: Filter by years of experience (optional)\n    salary_min: Minimum salary in lakhs (optional)\n    salary_max: Maximum salary in lakhs (optional)\n    timeout_seconds: Max seconds before timeout (default 120)\n    explain: attach the arithmetic behind each score -- weights, the\n        skills/experience components before bonuses, the bonus cap, the\n        verdict band, and the scoring_hash. Off by default: this tool\n        returns a whole ranking, so the block multiplies by the row count.\n        Turn it on for \"why did this one rank first\", not for the hunt.\n\nReturns:\n    - {status: \"success\", jobs_found, jobs_matched, ranked_jobs: [{job_id, title,\n       company, salary, location, work_mode, fit_score, matched_skills,\n       missing_skills, recommendation, explain (when explain=True)}]}\n    - {status: \"error\", message}\n",
+   "inputSchema": {
+    "properties": {
+     "keywords": {
+      "title": "Keywords",
+      "type": "string"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Location"
+     },
+     "min_fit_score": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Min Fit Score"
+     },
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": 7,
+      "title": "Freshness"
+     },
+     "work_mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Work Mode"
+     },
+     "experience": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Experience"
+     },
+     "salary_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Min"
+     },
+     "salary_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Salary Max"
+     },
+     "timeout_seconds": {
+      "default": 120,
+      "title": "Timeout Seconds",
+      "type": "integer"
+     },
+     "explain": {
+      "default": false,
+      "title": "Explain",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "keywords"
+    ],
+    "title": "naukri_auto_huntArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_list_reminders",
+   "description": "List all follow-up reminders with due status.\n\nShows all reminders sorted by urgency \u2014 due reminders first, then upcoming.\nOptionally enriches each reminder with live application status from Naukri.\n\nArgs:\n    include_past: Include already-due reminders (default True)\n    include_app_status: Enrich each reminder with live application\n        status (current_status, view_count, ars_score). Default True.\n\nReturns:\n    {status, total, due_count, reminders: [{job_id, title, company,\n     remind_at, note, is_due, days_until_due, created_at,\n     application_status?: {current_status, view_count, ars_score}}]}\n",
+   "inputSchema": {
+    "properties": {
+     "include_past": {
+      "default": true,
+      "title": "Include Past",
+      "type": "boolean"
+     },
+     "include_app_status": {
+      "default": true,
+      "title": "Include App Status",
+      "type": "boolean"
+     }
+    },
+    "title": "naukri_list_remindersArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_set_reminder",
+   "description": "Set or update a follow-up reminder for a job application.\n\nCreates a reminder that triggers after N days. If a reminder already\nexists for this job, it updates the due date and note.\n\nArgs:\n    job_id: The job ID to set reminder for\n    days: Remind after N days from now (default 7, range 1-365)\n    note: Optional note (e.g., \"Follow up with recruiter\")\n    title: Job title (for display)\n    company: Company name (for display)\n\nReturns:\n    {status, job_id, remind_at, note, message}\n",
+   "inputSchema": {
+    "properties": {
+     "job_id": {
+      "title": "Job Id",
+      "type": "string"
+     },
+     "days": {
+      "default": 7,
+      "title": "Days",
+      "type": "integer"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Note"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "company": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "title": "naukri_set_reminderArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_scheduler_status",
+   "description": "Show scheduler state + all task statuses + last run times.\n\nReturns:\n    {status, running, total_tasks, enabled_tasks,\n     tasks: {name: {enabled, interval, last_run}}}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_scheduler_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_enable_task",
+   "description": "Enable a previously disabled scheduled task.\n\nArgs:\n    task_name: One of sync_applications, sync_saved_jobs, daily_brief, stale_check,\n        boost_profile, reminder_check, notification_digest, api_discovery\n\nReturns:\n    {status, message} or {status: error, error_code: NOT_FOUND}\n",
+   "inputSchema": {
+    "properties": {
+     "task_name": {
+      "title": "Task Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "task_name"
+    ],
+    "title": "naukri_enable_taskArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_disable_task",
+   "description": "Disable a scheduled task from running.\n\nArgs:\n    task_name: One of sync_applications, sync_saved_jobs, daily_brief, stale_check,\n        boost_profile, reminder_check, notification_digest, api_discovery\n\nReturns:\n    {status, message} or {status: error, error_code: NOT_FOUND}\n",
+   "inputSchema": {
+    "properties": {
+     "task_name": {
+      "title": "Task Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "task_name"
+    ],
+    "title": "naukri_disable_taskArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_run_task_now",
+   "description": "Execute a scheduled task immediately, regardless of schedule.\n\nArgs:\n    task_name: One of sync_applications, sync_saved_jobs, daily_brief, stale_check,\n        boost_profile, reminder_check, notification_digest, api_discovery\n\nReturns:\n    Task execution result (depends on the task)\n",
+   "inputSchema": {
+    "properties": {
+     "task_name": {
+      "title": "Task Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "task_name"
+    ],
+    "title": "naukri_run_task_nowArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_task_history",
+   "description": "Show recent scheduled run history, optionally filtered by task name.\n\nArgs:\n    task_name: Optional task name filter (None = all tasks)\n    limit: Max records (default 20)\n\nReturns:\n    {status, total, runs: [{task_name, started_at, finished_at, status, duration_ms}]}\n",
+   "inputSchema": {
+    "properties": {
+     "task_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Task Name"
+     },
+     "limit": {
+      "default": 20,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_task_historyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_status",
+   "description": "Get agent state, last 5 runs, and config summary.\n\nReturns:\n    {status, enabled, mode, max_daily, min_fit_score, searches,\n     blocklist_companies, quiet_hours, recent_runs: [...]}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_agent_statusArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_config",
+   "description": "Get full agent configuration (searches, blocklist, mode, limits).\n\nReturns:\n    {status, config: {...full config...}}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_agent_configArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_update_config",
+   "description": "Merge JSON updates into agent config.\n\nArgs:\n    updates: JSON string of fields to update (e.g. '{\"mode\": \"auto\", \"min_fit_score\": 75}')\n\nReturns:\n    {status, message, config: {...updated...}, warnings?}\n",
+   "inputSchema": {
+    "properties": {
+     "updates": {
+      "title": "Updates",
+      "type": "string"
+     }
+    },
+    "required": [
+     "updates"
+    ],
+    "title": "naukri_agent_update_configArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_run_now",
+   "description": "Execute one agent observe\u2192decide\u2192act\u2192learn cycle immediately.\n\nArgs:\n    ctx: Optional MCP context for progress reporting\n\nReturns:\n    {status, cycle_id, applied, skipped, mode}\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_agent_run_nowArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_approve",
+   "description": "Apply to pending jobs from an approval-mode agent cycle.\n\nArgs:\n    cycle_id: The agent cycle ID with pending decisions\n\nReturns:\n    {status, applied, failed, errors}\n",
+   "inputSchema": {
+    "properties": {
+     "cycle_id": {
+      "title": "Cycle Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "cycle_id"
+    ],
+    "title": "naukri_agent_approveArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_reject",
+   "description": "Reject all pending decisions from an agent cycle.\n\nArgs:\n    cycle_id: The agent cycle ID with pending decisions\n\nReturns:\n    {status, message, rejected}\n",
+   "inputSchema": {
+    "properties": {
+     "cycle_id": {
+      "title": "Cycle Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "cycle_id"
+    ],
+    "title": "naukri_agent_rejectArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_history",
+   "description": "Get recent agent run history.\n\nArgs:\n    limit: Max records to return (default 10)\n\nReturns:\n    {status, total, runs: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "limit": {
+      "default": 10,
+      "title": "Limit",
+      "type": "integer"
+     }
+    },
+    "title": "naukri_agent_historyArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_agent_decisions",
+   "description": "Get per-job decisions for a specific agent cycle.\n\nArgs:\n    cycle_id: The agent cycle ID\n\nReturns:\n    {status, cycle_id, total, decisions: [...]}\n",
+   "inputSchema": {
+    "properties": {
+     "cycle_id": {
+      "title": "Cycle Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "cycle_id"
+    ],
+    "title": "naukri_agent_decisionsArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_kill_switch",
+   "description": "Inspect or control the global apply/auto-hunt kill-switch.\n\nThe kill-switch HALTS all apply + auto-hunt traffic when Naukri's bot\nmanager soft-blocks us, to protect the account from a lockout. It trips\nautomatically on a block-state detection (or N soft signals in a window),\nflips the autonomous agent to dry_run, and persists the tripped state across\nrestarts. Resume is operator-gated.\n\nArgs:\n    action: One of:\n        - \"status\" (default): show tripped state, reason, soft-signal count.\n        - \"resume\": clear the tripped state and re-enable apply/auto-hunt.\n        - \"trip\": manually trip the switch now (reason recommended).\n    reason: Optional human-readable reason (used with action=\"trip\").\n\nReturns:\n    {status, tripped, reason, block_kind, tripped_at, trip_count, ...}\n",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "default": "status",
+      "title": "Action",
+      "type": "string"
+     },
+     "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+     }
+    },
+    "title": "naukri_kill_switchArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_config",
+   "description": "Read the effective scoring/candidate/naukri policy and where it came from.\n\nThe numbers behind a fit score \u2014 the skills-vs-experience split, the\nbonuses, the verdict bands, the experience penalties \u2014 are values in a JSON\nfile, not literals in the code. This reports what they currently are.\n\nArgs:\n    section: \"candidate\", \"scoring\" or \"server\" to return just that block.\n        Omit for everything.\n\nReturns:\n    {status, policy_rev, policy_hash, scoring_hash, source, config_status,\n     candidate, scoring, server, provenance, unknown_keys,\n     tier_c_refusals, warnings, config_error, external_edit,\n     revision_regression, searched, not_loadable_here,\n     min_agent_fit_floor, agent_authority}\n\n    - policy_hash fingerprints {scoring, candidate} -- the whole policy.\n      scoring_hash fingerprints {scoring} alone, and is the one a stored\n      score carries, so it is what tells you whether an old score is\n      still comparable to a new one. They differ for the same policy;\n      matching the wrong one against a score is a false \"comparable\".\n    - provenance says \"file\" or \"default\" per key, so \"is that my setting\n      or the shipped value?\" is answerable without diffing.\n    - source is null when no file was found; `searched` then lists every\n      path that was tried.\n    - tier_c_refusals names any key present in the file that the file is\n      not allowed to decide. Those keep their Python values.\n    - external_edit / revision_regression are set when the file was\n      hand-edited or when a save overwrote a newer revision.\n",
+   "inputSchema": {
+    "properties": {
+     "section": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Section"
+     }
+    },
+    "title": "naukri_configArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_set_config",
+   "description": "Patch the central config file. Deep merge, compare-and-swap, tier-checked.\n\nWrites only `candidate`, `scoring` and `servers.naukri`. Dicts merge, lists\nreplace, and a `null` leaf reverts that key to its shipped default.\n\nCANNOT arm the autonomous agent: `agent.enabled`, `agent.mode`,\n`agent.min_fit_score`, `agent.searches`, `agent.per_search_limit` and\n`agent.blocklist.enabled` are not loadable from this file at all. Use\nnaukri_agent_update_config for those, and note that a Python floor still\nbounds what the agent will enqueue whatever any file says.\n\nArgs:\n    patch: JSON object of changes, e.g.\n        '{\"scoring\": {\"weights\": {\"skills\": 0.75, \"experience\": 0.25}}}'\n    base_revision: the `revision` you read from naukri_config(). If it no\n        longer matches, the write is refused as a conflict rather than\n        silently overwriting someone else's change. Omit to skip the check.\n    confirm_widen: required to LOOSEN a one-way guard \u2014 raising a daily\n        cap, adding skills (every skill added raises every score), removing\n        a blocklist entry. Tightening never needs it.\n\nReturns:\n    {status: \"ok\", revision, policy_rev, policy_hash, changed: {...}}\n    {status: \"refused\", refusals: [...], error_code: \"REFUSED\"}\n    {status: \"conflict\", revision, error_code: \"CONFLICT\"}\n    {status: \"no_config_file\", searched: [...], hint, error_code: \"NOT_FOUND\"}\n",
+   "inputSchema": {
+    "properties": {
+     "patch": {
+      "title": "Patch",
+      "type": "string"
+     },
+     "base_revision": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Base Revision"
+     },
+     "confirm_widen": {
+      "default": false,
+      "title": "Confirm Widen",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "patch"
+    ],
+    "title": "naukri_set_configArguments",
+    "type": "object"
+   }
+  },
+  {
+   "name": "naukri_server_info",
+   "description": "Report which code this running server holds. Check this FIRST, always.\n\nA fix committed to disk changes nothing for a process that is already up.\nBefore debugging any behaviour, confirm the process is not simply stale:\n\n    1. Read `build.code.commit` from this tool.\n    2. Run `git rev-parse HEAD` in the naukri checkout.\n    3. If they DIFFER, this process is running older code. Nothing further\n       you observe about its behaviour is meaningful until it is restarted\n       -- re-fixing a bug that is already fixed on disk is the exact hour\n       this tool exists to prevent. Restart the MCP server, then re-check.\n\nDo the same for `build.jobcore.commit` against the jobcore checkout. jobcore\nis installed editable from a sibling repository and moves on its own\nschedule, and the fit-scoring engine, the config loader and the path\nrenderer all live there -- so a stale jobcore is exactly as invisible as a\nstale naukri, and produces the same wasted hour.\n\n`build.code.dirty` is the other half of the answer: a clean commit match\nstill leaves uncommitted edits unaccounted for, and an edited working tree\nis running code that no commit describes. `dirty_files` gives the count so\nit can be judged rather than feared.\n\nThe stamps are resolved ONCE, at import, and frozen. That is deliberate: a\nper-call `git rev-parse` would report the commit on DISK, so a stale process\nwould confirm its own freshness -- an answer that looks like evidence and is\nfalse. `build.process.uptime_seconds` is the opposite and is recomputed on\nevery call, because a cached uptime is a lie that grows.\n\nReturns:\n    {status, server, build: {code, jobcore, process}, config, surface,\n     database}\n\n    - build.code / build.jobcore: {commit (12 chars), commit_full, branch,\n      committed_at, dirty, dirty_files, resolved_at, source, detail}.\n      `source` is \"git\" or \"unknown\"; on \"unknown\", `commit` is null and\n      `detail` says why. There is no fallback that invents a hash.\n    - build.process: {pid, started_at, uptime_seconds}. `started_at` is\n      when this module was imported, which for a stdio MCP server is\n      process start to within milliseconds.\n    - config: {source, policy_rev, policy_hash, scoring_hash}. `source` is\n      null when no config file was found. `scoring_hash` is the one a\n      stored score carries; `policy_hash` also covers `candidate`.\n    - surface: {tools, resources, prompts} counts. A null means the FastMCP\n      internal was renamed upstream, not that there are none.\n    - database: the sqlite file, relativised (never an absolute path).\n",
+   "inputSchema": {
+    "properties": {},
+    "title": "naukri_server_infoArguments",
+    "type": "object"
+   }
+  }
+ ]
+}
