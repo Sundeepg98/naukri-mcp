@@ -6,11 +6,21 @@
 against the same standard as the rest -- see the auth and inbox sections.
 """
 
-JOB_ID = "210826815108"        # InApp / MCP Developer - real, from his applications table
-JOB_ID2 = "060426011432"       # IQVIA / Mean Stack Developer
-SCRATCH = ("C:/Users/TestUser/AppData/Local/Temp/claude/"
-           "D--workspace-projects-mcp-servers/"
-           "00000000-0000-0000-0000-000000000000/scratchpad")
+import os
+import tempfile
+
+# Two live public Naukri posting ids, used so the read tools exercise a job that
+# actually resolves. Public postings, not account data. They are ALSO the
+# blocklist `mktable.redact` strips out of captured evidence, so do NOT swap them
+# for synthetic values: a redactor whose blocklist cannot appear is a check that
+# cannot fail. `redact` additionally strips ANY 12-digit posting id by shape.
+JOB_ID = "210826815108"        # MCP Developer
+JOB_ID2 = "060426011432"       # Mean Stack Developer
+
+# Scratch directory for the artefacts a CALL writes (today only the resume
+# download). Derived at run time -- set NAUKRI_SWEEP_SCRATCH to redirect it --
+# so no machine layout is baked into this file.
+SCRATCH = os.environ.get("NAUKRI_SWEEP_SCRATCH") or tempfile.gettempdir()
 
 R_LEAD = "on the never-call list - irreversible account/quota/reputation write"
 R_WRITE = "writes account or local state; not on the never-call list but unsafe to exercise"

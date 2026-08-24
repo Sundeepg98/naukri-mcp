@@ -38,23 +38,23 @@ in what gets imported. That asymmetry is the reason this exercise exists.
 
 | Matrix version | Interpreter found | Path |
 |---|---|---|
-| 3.10 | CPython 3.10.19 | `D:\dev-cache-local\uv-python\cpython-3.10.19-windows-x86_64-none\python.exe` |
+| 3.10 | CPython 3.10.19 | `%UV_PYTHON_INSTALL_DIR%\cpython-3.10.19-windows-x86_64-none\python.exe` |
 | 3.11 | CPython 3.11.14 | `%APPDATA%\uv\python\cpython-3.11.14-windows-x86_64-none\python.exe` |
-| 3.12 | CPython 3.12.12 | `D:\dev-cache-local\uv-python\cpython-3.12.12-windows-x86_64-none\python.exe` |
+| 3.12 | CPython 3.12.12 | `%UV_PYTHON_INSTALL_DIR%\cpython-3.12.12-windows-x86_64-none\python.exe` |
 
 All three matrix versions were available, so NONE was skipped. No Python
 runtime was installed. `py` is not present on this machine; the runtimes were
 located via `uv python list` plus a direct scan of the uv python roots (the
 3.11 build lives in the legacy `%APPDATA%\uv\python` dir that `uv python list`
-no longer reports, because `UV_PYTHON_INSTALL_DIR` now points at
-`D:\dev-cache-local\uv-python`).
+no longer reports, because `UV_PYTHON_INSTALL_DIR` now points at a different
+root).
 
 Platform difference from CI that cannot be removed here: CI is
 `ubuntu-latest`, these runs are `win32`. Everything else is matched.
 
 ## 4. Venv construction (outside the repo, in the scratchpad)
 
-    SCRATCH=%LOCALAPPDATA%\Temp\claude\D--workspace-projects-mcp-servers\<session-id>\scratchpad
+    SCRATCH=%LOCALAPPDATA%\Temp\claude\<project-slug>\<session-id>\scratchpad
 
     <base-python> -m venv --without-pip $SCRATCH\ci-py<VER>
     # bootstrap pip ONLY (see note), then exactly what CI runs:

@@ -46,7 +46,9 @@ def _misc_job_details(msg: dict, job_raw: dict) -> dict:
 
 
 #: Naukri appends an internal requisition tag to the recruiter's display name,
-#: e.g. "Example Recruiter_TAG_832620". It is theirs, not part of the person's name.
+#: e.g. "Example Recruiter_TAG_100200". It is theirs, not part of the person's
+#: name. (Illustrative value: a real recruiter's name and requisition id stood
+#: here until 2026-08-24 and were removed before this repo went public.)
 _RECRUITER_TAG_RE = re.compile(r"_TAG_\d+\s*$")
 
 

@@ -1,13 +1,15 @@
 """`ctc_lpa` meant two different quantities depending on which tool you asked.
 
-Measured 2026-08-22 against his live account:
+The disagreement was measured on 2026-08-22. The figures below are synthetic
+stand-ins that preserve the relationship that matters: the targeting bucket
+rounds the real CTC up to the next whole lakh, so the two differ by 0.5.
 
     naukri_get_profile.current_ctc   1250000        <- the profile field
     naukri_dashboard.ctc_lpa         "12.50"        <- rawCtc, agrees
-    naukri_profile_targeting.ctc_lpa "17.0"         <- Profile-CTC, does NOT
+    naukri_profile_targeting.ctc_lpa "13.0"         <- Profile-CTC, does NOT
 
 Two tools published the same field name for different quantities, so "what is
-his CTC" answered 12.50 or 17.0 depending on which one was asked, with nothing
+my CTC" answered 12.50 or 13.0 depending on which one was asked, with nothing
 in either response saying they were not the same thing. Half a lakh is real
 money in a salary negotiation, and this is exactly the shape that surfaces
 there rather than in a test.
@@ -22,11 +24,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-# Verbatim from his live targeting params.
+# Same field set and value shapes as a live targeting-params response;
+# the values themselves are synthetic.
 LIVE_PARAMS = {
-    "Profile-CTC": "17.0",
-    "Profile-Experience": "5.03",
-    "Profile-Location": "Bengaluru",
+    "Profile-CTC": "13.0",
+    "Profile-Experience": "4.00",
+    "Profile-Location": "Example City",
     "Profile-Company": "Acme Technology",
     "Profile-Designation": "Software Engineer, Backend",
 }
@@ -49,7 +52,7 @@ async def test_the_targeting_value_no_longer_claims_to_be_his_ctc():
     assert "ctc_lpa" not in profile, (
         "the rounded targeting bucket must not wear the same name as the real "
         "CTC that naukri_dashboard and naukri_get_profile report")
-    assert profile["targeting_ctc_bucket"] == "17.0"
+    assert profile["targeting_ctc_bucket"] == "13.0"
 
 
 @pytest.mark.asyncio
@@ -67,15 +70,15 @@ async def test_the_response_says_where_the_real_figure_lives():
 async def test_the_other_targeting_fields_are_untouched():
     """Only the colliding name changed; this tool is about targeting."""
     profile = (await _run())["profile"]
-    assert profile["experience_years"] == "5.03"
-    assert profile["location"] == "Bengaluru"
+    assert profile["experience_years"] == "4.00"
+    assert profile["location"] == "Example City"
     assert profile["company"] == "Acme Technology"
 
 
 def test_the_two_sources_are_genuinely_different_numbers():
     """CONTROL, so this file is not pinning a coincidence: 12.50 from the
-    profile's own current_ctc, 17.0 from the targeting bucket."""
-    real_ctc_rupees = 1250000            # naukri_get_profile.current_ctc, live
+    profile's own current_ctc, 13.0 from the targeting bucket."""
+    real_ctc_rupees = 1250000            # naukri_get_profile.current_ctc
     real_lpa = real_ctc_rupees / 100000
     targeting = float(LIVE_PARAMS["Profile-CTC"])
 

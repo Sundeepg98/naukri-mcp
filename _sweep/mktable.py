@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import json, os, re, sys
-HERE = r"D:\workspace\projects\job-hunting\mcp-servers\naukri\_sweep"
+HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import spec
 FV = json.load(open(os.path.join(HERE, "final_verdicts.json")))
@@ -61,8 +61,14 @@ def redact(s):
         return ""
     for j in SENSITIVE:
         s = s.replace(j, "<probe-job-id>")
+    # SENSITIVE names only the two ids the spec calls with. Captured evidence
+    # holds ~124 distinct 12-digit posting ids, so strip them by SHAPE too --
+    # the blocklist covers 2 of 124, the shape covers all of them. Token
+    # boundaries, not digit ones: a digit boundary does not stop a match inside
+    # a longer alphanumeric token.
+    s = re.sub(r"(?<![A-Za-z0-9_])\d{12}(?![A-Za-z0-9_])", "<probe-job-id>", s)
     s = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", "<email>", s)
-    s = re.sub(r"\b\d{10}\b", "<phone>", s)
+    s = re.sub(r"(?<![A-Za-z0-9_])\d{10}(?![A-Za-z0-9_])", "<phone>", s)
     return s
 
 rows = []

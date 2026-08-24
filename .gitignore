@@ -93,6 +93,51 @@ _sweep/tools.json
 _sweep/livelist.txt
 _sweep/backup-pre-sync.db
 
+# ---------------------------------------------------------------------------
+# PUBLIC-REPO HYGIENE (2026-08-24)
+#
+# This repository is world-readable. A private repo forgives a careless
+# `git add`; a public one publishes it permanently, and no later push can
+# unpublish it. Everything below is a class that has already leaked here once
+# or is one command away from doing so.
+# ---------------------------------------------------------------------------
+
+# Session and browser state in ANY shape. `chrome-profile/` and
+# `auth_state.json` are listed individually above; these are the catch-alls for
+# a directory or file some future code path invents. A session cookie in a
+# public repo is an account takeover, not a privacy problem.
+_state/
+state/
+*.session
+*.cookies
+cookies.json
+cookies.txt
+cookiejar*.json
+
+# mypy's on-disk cache. Three files under `.mypy_cache/3.13/` were TRACKED
+# until 2026-08-24. The committed copies happened to hold only an empty schema,
+# but a populated cache.db carries the absolute path of every file it analysed,
+# which is the machine layout of whoever last ran mypy.
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Live API-discovery captures. `probing/` held 22 reports built from real
+# responses for the owner's own account: name, date of birth, home address,
+# postcode, salary, employer, education, plus two named third-party recruiters.
+# It was removed from the tree and from published history on 2026-08-24.
+# Re-running a probe is fine; committing the output is not.
+probing/
+
+# e2e sweep captures. The policy above ("raw captures hold live account data;
+# harness is tracked") was already correct -- but it was written as
+# `_sweep/verdicts.json`, and the DATED variants walked straight past it.
+# `_sweep/verdicts-2026-08-22.json` reached published history carrying the
+# owner's real email address and mobile number. Glob the dates.
+_sweep/verdicts*.json
+_sweep/final_verdicts*.json
+_sweep/results*.json
+
 # Profile snapshots taken before every profile-section write.
 # DATA_DIR-relative directory, same class as exports/ - the files hold the
 # FULL live profile read (name, phone, employment history) and must never be

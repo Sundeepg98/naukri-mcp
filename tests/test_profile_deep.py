@@ -969,8 +969,8 @@ class TestDFPTargeting:
     async def test_targeting_returns_profile_fields(self, mock_get):
         mock_get.return_value = {
             "params": {
-                "Profile-CTC": 17.0, "Profile-Experience": 5.0, "Profile-Age": 27,
-                "Profile-Gender": "M", "Profile-Location": "Bengaluru",
+                "Profile-CTC": 13.0, "Profile-Experience": 4.0, "Profile-Age": 30,
+                "Profile-Gender": "U", "Profile-Location": "Example City",
                 "Profile-Company": "Acme Technology",
                 "Profile-Designation": "Software Engineer (Backend)",
                 "Profile-KeySkills": "Node.js, TypeScript",
@@ -984,19 +984,20 @@ class TestDFPTargeting:
         assert result["status"] == "success"
         # Renamed from `ctc_lpa`. Profile-CTC is Naukri's ROUNDED ad-targeting
         # bucket, and under the old name it contradicted the two tools that
-        # report his real CTC: measured live, this said 17.0 while
-        # naukri_dashboard said 12.50 and naukri_get_profile.current_ctc was
-        # 1650000. See tests/test_ctc_sources_disagree.py.
-        assert result["profile"]["targeting_ctc_bucket"] == 17.0
+        # report the real CTC: the bucket rounds up to the next whole lakh, so
+        # here it reads 13.0 while naukri_dashboard says 12.50 and
+        # naukri_get_profile.current_ctc is 1250000.
+        # See tests/test_ctc_sources_disagree.py.
+        assert result["profile"]["targeting_ctc_bucket"] == 13.0
         assert "ctc_lpa" not in result["profile"]
-        assert result["profile"]["location"] == "Bengaluru"
+        assert result["profile"]["location"] == "Example City"
         assert result["ad_slots"] == 1
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)
     async def test_targeting_identifies_gaps(self, mock_get):
         mock_get.return_value = {
-            "params": {"Profile-CTC": 17.0, "Profile-Pref-Loc": "", "Profile-PG-Course": "", "Profile-PG-Spl": ""},
+            "params": {"Profile-CTC": 13.0, "Profile-Pref-Loc": "", "Profile-PG-Course": "", "Profile-PG-Spl": ""},
             "slots": [],
         }
         from naukri_server.tools.profile import naukri_profile_targeting

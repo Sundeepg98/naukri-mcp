@@ -1,7 +1,7 @@
 # AmbitionBox endpoint census and build verdict
 
 Date: 2026-08-24
-Repo: `D:\workspace\projects\job-hunting\mcp-servers\naukri` at HEAD `c3550d3`
+Repo: `mcp-servers/naukri` at HEAD `c3550d3`
 Scope: value judgment only. No server code written, nothing committed, live server (PID 43228) untouched.
 
 ---

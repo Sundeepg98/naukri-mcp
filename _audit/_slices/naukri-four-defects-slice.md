@@ -1,6 +1,6 @@
 # Four defects, measured against the live account - 2026-08-24
 
-Slice worked from `D:\workspace\projects\job-hunting\mcp-servers\naukri` at HEAD
+Slice worked from `mcp-servers/naukri` at HEAD
 `412c3eb` (branch master, unchanged - no commit made by this slice). Zero writes
 fired against naukri.com. Live calls were read-only throughout.
 

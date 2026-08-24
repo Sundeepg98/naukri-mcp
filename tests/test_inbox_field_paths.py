@@ -25,6 +25,11 @@ MEASURED against the live account 2026-08-23, 20 of 20 rows:
     salary                  null   <- same nesting
 
 THE FIXTURE IN THIS FILE IS THE REAL SHAPE, transcribed from that capture.
+Its SHAPE is the capture's; its VALUES are not. The recruiter's name, the
+requisition tag and the four 32-hex message ids were real when transcribed and
+were replaced with synthetic values of identical shape on 2026-08-24, before
+this repository was made public. Field count, nesting and value shape -- which
+is the whole point of the fixture -- are unchanged.
 That matters: a fixture invented to match the code under test would pass
 whatever the code did. Every test here asserts TWO things -- that the new read
 finds the real value, and that the OLD read position is empty on the same
@@ -69,7 +74,7 @@ def _rest_row(**over):
         # The recruiter's name is HERE, under `vname`, with an internal
         # requisition tag Naukri appends to the display name.
         "vCardInfo": {
-            "vname": "Example Recruiter_TAG_832620",
+            "vname": "Example Recruiter_TAG_100200",
             "designation": None,
             "location": None,
             "compid": "100007",

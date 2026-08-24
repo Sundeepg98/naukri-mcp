@@ -17,12 +17,18 @@ import os
 import shutil
 import sqlite3
 import sys
+from pathlib import Path
 
-DB = r"D:\workspace\projects\job-hunting\mcp-servers\naukri\naukri.db"
+# Resolved at run time from this file's own location (scripts/ -> repo root) so
+# no machine layout is baked in. Both constants are kept as `str`, NOT `Path`:
+# they are passed to `.replace("\\", "/")` below to build the sqlite URI, and
+# `Path.replace()` is a filesystem RENAME, not a string substitution.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+DB = str(_REPO_ROOT / "naukri.db")
 # _backup/ is the repo's established home for copies of live data and is the
 # directory .gitignore already excludes. Anything else leaves a 1.3 MB copy of
-# his personal database sitting untracked-but-committable.
-BACKUP_DIR = r"D:\workspace\projects\job-hunting\mcp-servers\naukri\_backup"
+# the live database sitting untracked-but-committable.
+BACKUP_DIR = str(_REPO_ROOT / "_backup")
 
 REMINDER_IDS = ("test-tier12", "020426009351")
 JUNK_NOTES = ("Tier 12 test reminder", "CLEANUP - ignore")

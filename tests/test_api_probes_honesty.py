@@ -252,7 +252,7 @@ class TestProfileProbe:
 
         Live 2026-08-21: the probe reported "Profile API: HTTP 400" while
         naukri_health_check's own profile check -- same client, same endpoint,
-        plus expand_level=4 -- returned "Profile loaded: A. Candidate".
+        plus expand_level=4 -- returned "Profile loaded: <name>".
         """
         async def fake_get(path, params=None, **kwargs):
             if not params or "expand_level" not in params:

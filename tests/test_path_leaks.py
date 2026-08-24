@@ -1,6 +1,6 @@
 """No tool result may carry an absolute local filesystem path.
 
-A live sweep on 2026-08-20 found `D:\\Sundeep\\projects\\...` inside tool
+A live sweep on 2026-08-20 found `D:\\workspace\\projects\\...` inside tool
 results. It is wrong twice over: it publishes the machine's layout into any
 shared transcript or future public release, and it is paid for in tokens on
 every single response that carries it.
@@ -210,7 +210,7 @@ class TestTheWalkersOwnRegex:
             "port8080D:/x",
             "no path here at all",
             "ratio 3:1 and a colon: here",
-            "[Errno 13] Permission denied: 'C:\\Users\\Dell\\secret.json'",
+            "[Errno 13] Permission denied: 'C:\\Users\\TestUser\\secret.json'",
         ]
         for text in corpus:
             walker_flags = bool(DRIVE_PATH.search(text))
