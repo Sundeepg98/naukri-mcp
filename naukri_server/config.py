@@ -170,6 +170,12 @@ BATCH_FOLLOW_STATUS_API = "/cloudgateway-mynaukri/jobseeker-follow-services/v0/u
 # Profile editing & settings
 PROFILE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v2/users/self"
 FULLPROFILES_API = "/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/fullprofiles"
+# WRITE route for the profile editor. Provenance: constant `_c` at offset 44671 of
+# Naukri's shipped editor bundle mnj_v320.min.js -- every section save is POST to this
+# v1 path with header `X-HTTP-Method-Override: PUT` and `profileId` at the body's TOP
+# level. v0 (FULLPROFILES_API above) is NOT a write route for the profile editor: the
+# editor bundle contains zero references to a v0 or v2 fullprofiles path.
+FULLPROFILES_WRITE_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/fullprofiles"
 FORMATTED_SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/self/formattedsettings"
 SETTINGS_API = "/servicegateway-mynaukri/settings-services/v0/user/self/settings"
 BLOCKED_COMPANIES_API = "/servicegateway-mynaukri/settings-services/v0/user/self/blockedCompanies"

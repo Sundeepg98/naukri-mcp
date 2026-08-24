@@ -507,16 +507,22 @@ async def api_get(path: str, params: Optional[dict] = None, extra_headers: Optio
                               extra_headers=extra_headers, _attempt=_attempt)
 
 
-async def api_post(path: str, body: dict, _attempt: int = 0) -> dict:
+async def api_post(path: str, body: dict, extra_headers: Optional[dict] = None,
+                   _attempt: int = 0) -> dict:
     """POST request to Naukri API."""
-    return await _api_request("POST", path, body=body, _attempt=_attempt)
+    return await _api_request("POST", path, body=body,
+                              extra_headers=extra_headers, _attempt=_attempt)
 
 
-async def api_put(path: str, body: dict, _attempt: int = 0) -> dict:
+async def api_put(path: str, body: dict, extra_headers: Optional[dict] = None,
+                  _attempt: int = 0) -> dict:
     """PUT request to Naukri API."""
-    return await _api_request("PUT", path, body=body, _attempt=_attempt)
+    return await _api_request("PUT", path, body=body,
+                              extra_headers=extra_headers, _attempt=_attempt)
 
 
-async def api_delete(path: str, body: Optional[dict] = None, _attempt: int = 0) -> dict:
+async def api_delete(path: str, body: Optional[dict] = None,
+                     extra_headers: Optional[dict] = None, _attempt: int = 0) -> dict:
     """DELETE request to Naukri API."""
-    return await _api_request("DELETE", path, body=body, _attempt=_attempt)
+    return await _api_request("DELETE", path, body=body,
+                              extra_headers=extra_headers, _attempt=_attempt)

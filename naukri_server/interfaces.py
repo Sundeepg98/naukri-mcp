@@ -33,15 +33,16 @@ class ApiClient(ABC):
         """GET request to Naukri API."""
 
     @abstractmethod
-    async def post(self, path: str, body: dict) -> dict:
+    async def post(self, path: str, body: dict, extra_headers: Optional[dict] = None) -> dict:
         """POST request to Naukri API."""
 
     @abstractmethod
-    async def put(self, path: str, body: dict) -> dict:
+    async def put(self, path: str, body: dict, extra_headers: Optional[dict] = None) -> dict:
         """PUT request to Naukri API."""
 
     @abstractmethod
-    async def delete(self, path: str, body: Optional[dict] = None) -> dict:
+    async def delete(self, path: str, body: Optional[dict] = None,
+                     extra_headers: Optional[dict] = None) -> dict:
         """DELETE request to Naukri API."""
 
     @abstractmethod
@@ -151,17 +152,18 @@ class NaukriApiClient(ApiClient):
         from naukri_server.api import api_get
         return await api_get(path, params=params, extra_headers=extra_headers)
 
-    async def post(self, path: str, body: dict) -> dict:
+    async def post(self, path: str, body: dict, extra_headers: Optional[dict] = None) -> dict:
         from naukri_server.api import api_post
-        return await api_post(path, body=body)
+        return await api_post(path, body=body, extra_headers=extra_headers)
 
-    async def put(self, path: str, body: dict) -> dict:
+    async def put(self, path: str, body: dict, extra_headers: Optional[dict] = None) -> dict:
         from naukri_server.api import api_put
-        return await api_put(path, body=body)
+        return await api_put(path, body=body, extra_headers=extra_headers)
 
-    async def delete(self, path: str, body: Optional[dict] = None) -> dict:
+    async def delete(self, path: str, body: Optional[dict] = None,
+                     extra_headers: Optional[dict] = None) -> dict:
         from naukri_server.api import api_delete
-        return await api_delete(path, body=body)
+        return await api_delete(path, body=body, extra_headers=extra_headers)
 
     async def get_session(self) -> Any:
         from naukri_server.api import get_session

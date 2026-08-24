@@ -55,7 +55,7 @@ async def test_api_client_post_delegates_to_api_post(mock_api_post):
 
     result = await client.post("/apply", body={"job_id": "123"})
 
-    mock_api_post.assert_awaited_once_with("/apply", body={"job_id": "123"})
+    mock_api_post.assert_awaited_once_with("/apply", body={"job_id": "123"}, extra_headers=None)
     assert result == {"status": 200}
 
 
@@ -71,7 +71,7 @@ async def test_api_client_put_delegates_to_api_put(mock_api_put):
 
     result = await client.put("/profile", body={"name": "Test"})
 
-    mock_api_put.assert_awaited_once_with("/profile", body={"name": "Test"})
+    mock_api_put.assert_awaited_once_with("/profile", body={"name": "Test"}, extra_headers=None)
     assert result == {"updated": True}
 
 
@@ -87,7 +87,7 @@ async def test_api_client_delete_delegates_to_api_delete(mock_api_delete):
 
     result = await client.delete("/item/456", body={"reason": "test"})
 
-    mock_api_delete.assert_awaited_once_with("/item/456", body={"reason": "test"})
+    mock_api_delete.assert_awaited_once_with("/item/456", body={"reason": "test"}, extra_headers=None)
     assert result == {}
 
 
@@ -99,7 +99,7 @@ async def test_api_client_delete_defaults_none_body(mock_api_delete):
 
     result = await client.delete("/item/789")
 
-    mock_api_delete.assert_awaited_once_with("/item/789", body=None)
+    mock_api_delete.assert_awaited_once_with("/item/789", body=None, extra_headers=None)
     assert result == {}
 
 
