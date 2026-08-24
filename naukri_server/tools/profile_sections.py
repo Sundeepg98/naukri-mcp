@@ -71,15 +71,21 @@ class SectionSpec:
             re-derive the spec rather than trust it.
     """
 
-    __slots__ = ("kind", "envelope", "id_field", "vocab_fields",
-                 "required_on_create", "origin")
+    __slots__ = ("kind", "envelope", "id_field", "read_id_field",
+                 "vocab_fields", "required_on_create", "origin")
 
     def __init__(self, kind: str, envelope: str, id_field: Optional[str] = None,
                  vocab_fields: tuple = (), required_on_create: tuple = (),
-                 origin: str = ""):
+                 origin: str = "", read_id_field: Optional[str] = None):
         self.kind = kind
         self.envelope = envelope
         self.id_field = id_field
+        # The READ payload does not always spell the row id the way the WRITE
+        # payload does. Five whole-list collections come back keyed `id` and
+        # must go out keyed `<section>Id`; the editor does that mapping itself
+        # (e.g. `a.onlineProfileId = a.id`) and deletes `id` and `profileId`
+        # off each row before sending. Defaults to id_field where they agree.
+        self.read_id_field = read_id_field or id_field
         self.vocab_fields = vocab_fields
         self.required_on_create = required_on_create
         self.origin = origin
@@ -137,22 +143,23 @@ SECTION_SPECS = {
     ),
     "onlineProfiles": SectionSpec(
         WHOLE_LIST, "onlineProfiles", id_field="onlineProfileId",
-        origin="640662 (er)",
+        read_id_field="id", origin="640662 (er)",
     ),
     "workSamples": SectionSpec(
         WHOLE_LIST, "workSamples", id_field="workSampleId",
-        origin="656875 (pr)",
+        read_id_field="id", origin="656875 (pr)",
     ),
     "presentations": SectionSpec(
         WHOLE_LIST, "presentations", id_field="presentationId",
-        origin="668250 (Ar)",
+        read_id_field="id", origin="668250 (Ar)",
     ),
     "publications": SectionSpec(
         WHOLE_LIST, "publications", id_field="publicationId",
-        origin="681299 (Lr)",
+        read_id_field="id", origin="681299 (Lr)",
     ),
     "patents": SectionSpec(
-        WHOLE_LIST, "patents", id_field="patentId", origin="696760 (Wr)",
+        WHOLE_LIST, "patents", id_field="patentId", read_id_field="id",
+        origin="696760 (Wr)",
     ),
 }
 
@@ -229,41 +236,94 @@ async def _read_profile() -> dict:
     return await api_client.get(PROFILE_API, params={"expand_level": "4"})
 
 
-def _merge_whole_list(current_rows: list, row: dict, id_field: str,
+def _to_write_row(read_row: dict, spec: SectionSpec) -> dict:
+    """Turn a row as READ into a row as the editor SENDS it.
+
+    Five whole-list collections come back keyed ``id`` and go out keyed
+    ``<section>Id``. The editor does exactly this itself -- ``er`` at bundle
+    offset 640662 reads ``a.onlineProfileId = a.id`` and then deletes ``id``
+    and ``profileId`` off the row. Reproducing it matters twice over: without
+    the rename no live row matches the caller's id, so an update is impossible;
+    and without the strip every row goes back carrying keys the editor removes.
+
+    CONFINED ON PURPOSE. Only the five collections whose read and write
+    spellings actually differ are transformed. ``languages`` reads and writes
+    ``languageId`` alike and the bundle documents no strip for it, so its rows
+    pass through untouched -- generalising the strip to every collection would
+    be inventing a contract the evidence does not carry.
+    """
+    if spec.read_id_field == spec.id_field:
+        return dict(read_row)
+    row = dict(read_row)
+    if spec.read_id_field in row:
+        row[spec.id_field] = row[spec.read_id_field]
+    row.pop("id", None)
+    row.pop("profileId", None)
+    return row
+
+
+def _merge_whole_list(current_rows: list, row: dict, spec: SectionSpec,
                       section: str = "this collection") -> list:
     """Merge one row into the live list, preserving every other row.
 
     This is what stops a whole-list write from deleting the rest of the
     collection. A row carrying an id REPLACES the matching row in place; a row
-    without one is APPENDED.
+    without one is APPENDED. Every live row is first converted to the shape
+    the editor sends, so matching happens in one vocabulary rather than across
+    the read/write spelling gap.
     """
-    rows = [dict(r) for r in current_rows if isinstance(r, dict)]
-    target = row.get(id_field)
+    rows = [_to_write_row(r, spec) for r in current_rows if isinstance(r, dict)]
+    target = row.get(spec.id_field)
     if target is None:
         return rows + [dict(row)]
     for i, existing in enumerate(rows):
-        if existing.get(id_field) == target:
+        if existing.get(spec.id_field) == target:
             merged = dict(existing)
             merged.update(row)
             rows[i] = merged
             return rows
     raise ValueError(
         "No row in %r carries %s == %r. Pass the id of a row that exists, or "
-        "omit it to create a new one." % (section, id_field, target)
+        "omit it to create a new one. (The read payload spells this id %r, "
+        "and it is mapped for you.)"
+        % (section, spec.id_field, target, spec.read_id_field)
     )
+
+
+def _to_expected(fields: dict, spec: SectionSpec) -> dict:
+    """Restate the caller's fields in the READ spelling, for verification.
+
+    ``verify_write`` checks containment against the AFTER READ, so anything it
+    is asked to look for has to be spelled the way the read spells it. The
+    caller writes ``onlineProfileId``; the read returns ``id``. Handing the
+    write spelling to the verifier makes a check that CAN NEVER PASS -- every
+    update to the five id-mapped collections would report NOT_PERSISTED even
+    when it landed perfectly, which is worse than no check at all: it teaches
+    the reader to distrust a write that worked.
+
+    ``rows_lost`` already takes the read spelling. This is the mirror site.
+    """
+    expected = dict(fields)
+    if (spec.read_id_field != spec.id_field
+            and spec.id_field in expected):
+        expected[spec.read_id_field] = expected.pop(spec.id_field)
+    return expected
 
 
 def _build_body(spec: SectionSpec, section: str, fields: dict,
                 profile: dict) -> tuple:
     """Return ``(section_body, expected)`` for this write.
 
-    ``expected`` is what ``verify_write`` will look for in the re-read.
+    ``section_body`` is in the WRITE spelling, because it goes on the wire.
+    ``expected`` is in the READ spelling, because ``verify_write`` compares it
+    against a fresh read. Those are not the same vocabulary -- see
+    ``_to_expected``.
     """
     if spec.kind == SCALAR_BLOCK:
         return {spec.envelope: dict(fields)}, dict(fields)
 
     if spec.kind == SINGLE_ROW:
-        return {spec.envelope: [dict(fields)]}, dict(fields)
+        return {spec.envelope: [dict(fields)]}, _to_expected(fields, spec)
 
     _, current, found = resolve_section(profile, spec.envelope)
     if not found or current is None:
@@ -273,8 +333,8 @@ def _build_body(spec: SectionSpec, section: str, fields: dict,
             "Section %r read back as %s, not a list -- refusing to rebuild a "
             "whole-list payload from it." % (section, type(current).__name__)
         )
-    merged = _merge_whole_list(current, dict(fields), spec.id_field, section)
-    return {spec.envelope: merged}, dict(fields)
+    merged = _merge_whole_list(current, dict(fields), spec, section)
+    return {spec.envelope: merged}, _to_expected(fields, spec)
 
 
 async def write_section(section: str, fields: dict, confirm: bool = False,
@@ -357,8 +417,11 @@ async def write_section(section: str, fields: dict, confirm: bool = False,
 
     after = await _read_profile()
     result = verify_write(before, after, spec.envelope, expected)
-    lost = (rows_lost(before, after, spec.envelope, spec.id_field)
-            if spec.id_field else [])
+    # rows_lost compares two READ payloads, so it must use the read spelling
+    # of the row id -- five whole-list collections spell it `id` on the way in
+    # and `<section>Id` on the way out.
+    lost = (rows_lost(before, after, spec.envelope, spec.read_id_field)
+            if spec.read_id_field else [])
 
     payload = {
         "section": section, "kind": spec.kind,

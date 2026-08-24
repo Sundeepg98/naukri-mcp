@@ -108,6 +108,23 @@ Both test slices found them independently and converged:
 The two strict `xfail`s pinning defect 1 went **XPASS the moment it was fixed**, which is what forced
 the markers off rather than leaving them behind. They remain as plain regression tests.
 
+**A fourth, found in final integration review and worse than the other three.** The READ payload and
+the WRITE payload do not spell whole-list row ids the same way. The live read returns `onlineProfile`
+rows keyed **`id`** (48-char string); the editor's builder at bundle offset 640662 reads
+`a.onlineProfileId = a.id` and then DELETES `id` and `profileId` off each row. The same
+`row.id -> <section>Id` mapping is documented for `workSamples`, `presentations`, `publications` and
+`patents`. My spec table used the WRITE spelling on both sides, so `_merge_whole_list` matched the
+caller's `onlineProfileId` against rows carrying only `id`: **no row ever matched, and updating any
+of those five collections was impossible.** `SectionSpec` now carries `read_id_field` and
+`_to_write_row` does the rename-and-strip.
+
+Two things worth naming about the fix. It fails **safe** rather than destructively -- the mismatch
+raised a refusal, it did not wipe the list. And when the strip was first written unconditionally,
+three existing tests went red because it stripped `profileId` off `languages` rows too; the bundle
+documents no strip for `languages`, so the transform is now confined to the five collections whose
+spellings actually differ. The tests were right and the first version of my fix was inventing a
+contract the evidence does not carry.
+
 ---
 
 ## 5. The daily boost has never once run, and it is not the REST bug
