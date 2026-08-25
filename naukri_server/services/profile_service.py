@@ -361,6 +361,63 @@ async def _get_dashboard() -> dict:
         # --- Recommendations ---
         result["recommended_jobs_count"] = safe_get(db, "recommendedJobsCount", "totalRecommendedJobs")
 
+        # --- Properties this server ASKS FOR and used to throw away -----------
+        #
+        # `DASHBOARD_PROPERTIES` requests ten properties. SIX of them were read
+        # by nothing: incompleteSection, profileSegment, res360NotifType, campusData,
+        # campusData and aiInterviewEligibility, each with ZERO non-config
+        # references across the package. Naukri computed them, sent them, and
+        # they were dropped on the floor on every single dashboard call.
+        #
+        # That is the cheapest unmeasured gap there is. Everything else in the
+        # unmeasured bucket needs a probe against the live account; this needed
+        # nothing at all, because the bytes were already arriving. Asking for a
+        # field and discarding it is worse than not asking: it costs the same
+        # request, and it reads to the next person as though it were covered.
+        #
+        # Passed through with their shape UNINTERPRETED, deliberately. Nobody
+        # has observed these payloads, so any parsing written now would be a
+        # guess dressed as a schema -- and a wrong guess would bury the real
+        # shape exactly as thoroughly as dropping it did. `raw` is honest, and
+        # the next reader gets the actual structure to write a parser against.
+        # `aiInterviewEligibility` and `campusData` in particular name product
+        # surfaces this server has never touched.
+        extras = {}
+        for prop, key in (
+            ("incomplete_section", "incompleteSection"),
+            ("profile_segment", "profileSegment"),
+            ("res360_notif_type", "res360NotifType"),
+            ("campus_data", "campusData"),
+            ("ai_interview_eligibility", "aiInterviewEligibility"),
+            # SIXTH, and the guard found it rather than the survey: a
+            # PACKAGE-WIDE scan says `profilePerformance` is consumed nowhere.
+            # Its only mention anywhere is a comment about a JS bundle. The
+            # by-hand survey that found the five above missed it, which is why
+            # the test scans instead of trusting a list.
+            ("profile_performance", "profilePerformance"),
+        ):
+            value = safe_get(db, key)
+            if value is not None:
+                extras[prop] = value
+        # Present even when empty, so "we asked and Naukri sent nothing" is
+        # distinguishable from "we never asked" -- which is the whole
+        # distinction this block exists to restore.
+        result["requested_unparsed"] = {
+            "note": (
+                "Requested via DASHBOARD_PROPERTIES and passed through "
+                "uninterpreted. Shape unobserved -- do not rely on these keys "
+                "until someone reads one and writes a real parser."
+            ),
+            "present": sorted(extras),
+            "absent": sorted(
+                k for k in ("incomplete_section", "profile_segment",
+                            "res360_notif_type", "campus_data",
+                            "ai_interview_eligibility", "profile_performance")
+                if k not in extras
+            ),
+            "raw": extras,
+        }
+
         # --- Assessments ---
         assessments_raw = safe_get(db, "assessments", default=[])
         if assessments_raw:

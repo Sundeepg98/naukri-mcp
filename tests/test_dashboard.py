@@ -474,3 +474,103 @@ class TestDashboardHtml:
         assert resp.status_code == 500
         body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
         assert "not found" in body.lower()
+
+
+class TestPropertiesWeAskForAndUsedToDiscard:
+    """`DASHBOARD_PROPERTIES` requests ten properties; five were read by nothing.
+
+    incompleteSection, profileSegment, res360NotifType, campusData and
+    aiInterviewEligibility each had ZERO non-config references across the
+    package. Naukri computed them, sent them on every dashboard call, and they
+    were dropped.
+
+    Asking for a field and discarding it is worse than not asking: it costs the
+    same request, and it reads to the next person as though the area were
+    covered. These tests pin that the bytes now reach the caller.
+    """
+
+    PROPS = ("incomplete_section", "profile_segment", "res360_notif_type",
+             "campus_data", "ai_interview_eligibility", "profile_performance")
+
+    @staticmethod
+    async def _run(dash: dict) -> dict:
+        from naukri_server.services import profile_service as S
+        with patch.object(S, "api_client") as client:
+            client.get = AsyncMock(return_value={"dashBoard": dash})
+            return await S._get_dashboard()
+
+    @pytest.mark.asyncio
+    async def test_every_requested_property_reaches_the_caller(self):
+        sent = {
+            "incompleteSection": ["resume"], "profileSegment": "SEGMENT_X",
+            "res360NotifType": 3, "campusData": {"isCampus": False},
+            "aiInterviewEligibility": {"eligible": True, "slots": 2},
+            "profilePerformance": {"views": 12},
+        }
+        out = await self._run(dict(sent, profileViewCount=5))
+        block = out["requested_unparsed"]
+        assert sorted(block["present"]) == sorted(self.PROPS)
+        assert block["absent"] == []
+        # values arrive UNINTERPRETED -- the point is the shape survives
+        assert block["raw"]["ai_interview_eligibility"] == {"eligible": True, "slots": 2}
+        assert block["raw"]["incomplete_section"] == ["resume"]
+
+    @pytest.mark.asyncio
+    async def test_absent_is_reported_rather_than_silently_missing(self):
+        """"We asked and Naukri sent nothing" must be distinguishable from
+        "we never asked". That distinction is the entire point of the block."""
+        out = await self._run({"profileViewCount": 5})
+        block = out["requested_unparsed"]
+        assert block["present"] == []
+        assert sorted(block["absent"]) == sorted(self.PROPS)
+        assert block["raw"] == {}
+
+    @pytest.mark.asyncio
+    async def test_an_empty_structure_counts_as_PRESENT_not_absent(self):
+        """`campusData: {}` is Naukri answering, not Naukri staying silent.
+
+        Written because the obvious implementation -- a truthiness test -- gets
+        this backwards and reports an empty payload as "not sent", which is the
+        same information loss in a new place.
+        """
+        out = await self._run({"campusData": {}, "res360NotifType": 0})
+        block = out["requested_unparsed"]
+        assert "campus_data" in block["present"]
+        assert "res360_notif_type" in block["present"]
+        assert block["raw"]["campus_data"] == {}
+        assert block["raw"]["res360_notif_type"] == 0
+
+    def test_every_requested_property_is_either_parsed_or_passed_through(self):
+        """The real guard: nothing in DASHBOARD_PROPERTIES may be discarded.
+
+        This is what stops the defect recurring. Add a property to the request
+        string and forget to read it, and this fails -- which is exactly what
+        nobody noticed for six properties -- the sixth found by this guard, not by
+        the survey that preceded it.
+        """
+        import re
+        from naukri_server import config
+        import naukri_server
+
+        # SCAN THE WHOLE PACKAGE, not one module. The first version of this
+        # check read only profile_service.py and flagged userDetails,
+        # profilePerformance and photoInfo -- two of which are consumed
+        # elsewhere (insights_service.py:509, resume_photo.py:186). A guard
+        # with too narrow a FILE SET manufactures findings exactly as readily
+        # as one with too narrow a pattern misses them, and this one was shown
+        # doing it before the scope was widened.
+        root = Path(naukri_server.__file__).parent
+        blob = "\n".join(
+            f.read_text(encoding="utf-8", errors="replace")
+            for f in root.rglob("*.py")
+            if f.name != "config.py"
+        )
+        requested = [p.strip() for p in config.DASHBOARD_PROPERTIES.split(",")]
+        unread = [p for p in requested
+                  if not re.search(r'["\']%s["\']' % re.escape(p), blob)]
+        assert unread == [], (
+            "requested from Naukri and read by NOTHING in the package: %s -- "
+            "parse it, consume it, or add it to the pass-through block. "
+            "Asking for a field and discarding it costs the same request and "
+            "reads to the next person as though the area were covered." % unread
+        )

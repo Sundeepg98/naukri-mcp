@@ -686,6 +686,22 @@ async def naukri_triage_inbox(
     Not Interested (`naukri_accept_nvite`, `naukri_mark_interested`). See
     `naukri_draft_follow_up` for text to send through another channel.
 
+    THAT IS A MEASUREMENT, AND HERE IS WHERE IT LIVES:
+    `tests/test_inbox_field_paths.py::test_no_reply_or_compose_tool_is_registered`.
+    Measured 2026-08-23 -- GET on three reply paths returns 404 **against a
+    positive control**: `markInterested`, a route that does exist, answers 405
+    on the same verb, so the 404s mean absent rather than
+    wrong-method. `/conversations` and `/chat` were already 404, and opening a
+    message fires zero API calls.
+
+    The citation is spelled out because this sentence used to assert the limit
+    with no pointer, and a nearby comment credited "exhaustive endpoint
+    probing" that the probing corpus does not contain -- the real evidence was
+    in a test file all along. An unsourced claim of impossibility is
+    indistinguishable from a decision nobody re-examined, and two other
+    "impossibilities" in this server dissolved the moment somebody measured
+    them.
+
     Args:
         limit: Max messages to triage (default 60, pages as needed)
         unread_only: Only triage unread messages (default False)
