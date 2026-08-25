@@ -14,6 +14,245 @@ logger = logging.getLogger(__name__)
 # IST offset (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# ---------------------------------------------------------------------------
+# Result storage: cap the size WITHOUT ever severing the JSON
+# ---------------------------------------------------------------------------
+#
+# The old code stored `json.dumps(result)[:2000]`. A slice of a JSON document
+# is not a JSON document. Measured on the live database 2026-08-25: every one
+# of the 137 rows that hit the 2000-char cap is unparseable -- 137 of 137, a
+# perfect correlation, because the cut lands mid-string far more often than on
+# a boundary. A reminder_check row ended `..."remind_at": "2026-03-17T` and
+# raised `Unterminated string`. The row was simultaneously the largest thing in
+# the table and the only thing in it that could not be read: 2000 bytes that
+# decode to nothing.
+#
+# The replacement never cuts the document. It cuts the DATA -- dropping the
+# containers, which is where the bulk always is, and keeping the scalars, which
+# is where the meaning always is. The live shapes make that trade lopsided in
+# our favour: every task puts its counts first and its payload last, so
+# `{"status": "success", "total": 50, "due_count": 50, "reminders": [...50...]}`
+# reduces to the same three numbers plus `{"omitted": "list", "items": 50}` --
+# ~160 bytes that parse, instead of 2000 bytes that do not.
+
+RESULT_STORAGE_CAP_BYTES = 2000
+_SCALAR_STRING_CAP = 300
+
+
+def _dumps(obj) -> str:
+    """json.dumps that cannot raise -- falls back to a repr envelope."""
+    try:
+        return json.dumps(obj)
+    except (TypeError, ValueError):
+        return json.dumps({"status": "unknown", "repr": str(obj)[:_SCALAR_STRING_CAP]})
+
+
+# A dropped list of records is worth one derived fact about it. These are the
+# numeric fields the live tasks actually carry (measured off naukri.db
+# 2026-08-25: reminder_check, stale_check); anything absent is skipped in
+# silence. Table-driven so a tenth task costs a line, not a branch.
+_DIGEST_NUMERIC_FIELDS = ("days_until_due", "stale_score", "follow_up_priority")
+
+
+def _digest_records(items: list) -> dict:
+    """min/max of the known numeric fields across a list of record dicts."""
+    digest: dict = {}
+    for field in _DIGEST_NUMERIC_FIELDS:
+        values = [it[field] for it in items
+                  if isinstance(it, dict)
+                  and isinstance(it.get(field), (int, float))
+                  and not isinstance(it.get(field), bool)]
+        if values:
+            digest[f"{field}_min"] = min(values)
+            digest[f"{field}_max"] = max(values)
+    return digest
+
+
+def _describe_container(value):
+    """Replace a container with a count of what was dropped."""
+    if isinstance(value, list):
+        described = {"omitted": "list", "items": len(value)}
+        described.update(_digest_records(value))
+        return described
+    return {"omitted": "dict", "keys": len(value)}
+
+
+def salvage_json(raw: Optional[str]) -> tuple:
+    """Read a stored result blob, repairing a legacy severed document.
+
+    Returns ``(obj, state)`` where state is ``ok``, ``salvaged`` or
+    ``unreadable``. Rows written before the storage fix were cut with
+    ``[:2000]``; the cut always lands at the END, so the PREFIX is intact and
+    every task writes its scalars first. Walking back to the last comma that
+    sits outside a string and closing what is still open recovers those
+    leading counts -- which is the whole of what the row was ever worth.
+    """
+    if not raw:
+        return None, "unreadable"
+    try:
+        return json.loads(raw), "ok"
+    except (ValueError, TypeError):
+        pass
+
+    stack: list = []
+    in_string = False
+    escaped = False
+    cut_at = -1
+    cut_stack: list = []
+    for i, ch in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+        elif ch == "," and stack:
+            # A comma outside a string always follows a COMPLETE value, so
+            # this index is a safe place to end the document.
+            cut_at = i
+            cut_stack = list(stack)
+
+    if cut_at < 0:
+        return None, "unreadable"
+    closers = "".join("]" if opener == "[" else "}" for opener in reversed(cut_stack))
+    try:
+        return json.loads(raw[:cut_at] + closers), "salvaged"
+    except (ValueError, TypeError):
+        return None, "unreadable"
+
+
+# Fields that carry no signal in a one-line summary: `status` has its own
+# column, and the rest are plumbing.
+_SUMMARY_SKIP = {
+    "status", "last_sync", "truncated", "original_bytes",
+    "saga_steps", "saga_errors", "step_timings", "method",
+}
+
+
+def summarize_result_blob(raw: Optional[str], max_fields: int = 6) -> Optional[str]:
+    """One short line derived from a stored result blob, or None if empty.
+
+    This is what `naukri_task_history` returns INSTEAD of the blob. The blob
+    for a due-reminder sweep was 2000 unparseable bytes; this is
+    `total=50, due_count=50, reminders=50, oldest overdue 161d` -- about a
+    dozen tokens, and unlike the blob it can actually be read.
+    """
+    if not raw:
+        return None
+    obj, state = salvage_json(raw)
+    if state == "unreadable":
+        return f"unreadable blob ({len(raw)}B)"
+    if not isinstance(obj, dict):
+        return f"{type(obj).__name__} result"
+
+    parts: list = []
+    for key, value in obj.items():
+        if len(parts) >= max_fields:
+            break
+        if key in _SUMMARY_SKIP:
+            continue
+        if isinstance(value, bool):
+            if value:
+                parts.append(key)
+        elif isinstance(value, (int, float)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, list):
+            parts.append(f"{key}={len(value)}")
+        elif isinstance(value, dict):
+            if value.get("omitted"):
+                parts.append(f"{key}={value.get('items', value.get('keys', '?'))}")
+            else:
+                parts.append(f"{key}={len(value)} keys")
+        elif isinstance(value, str) and value:
+            parts.append(f"{key}={value[:80]}")
+
+    overdue = _overdue_note(obj)
+    if overdue:
+        parts.append(overdue)
+    if state == "salvaged":
+        parts.append("[salvaged from severed blob]")
+    if obj.get("truncated"):
+        parts.append(f"[reduced from {obj.get('original_bytes')}B]")
+    return ", ".join(str(p) for p in parts) if parts else None
+
+
+def _overdue_note(obj: dict) -> Optional[str]:
+    """`oldest overdue 161d` when the row carries a due-date digest."""
+    for value in obj.values():
+        if isinstance(value, dict) and isinstance(value.get("days_until_due_min"), (int, float)):
+            worst = value["days_until_due_min"]
+            if worst < 0:
+                return f"oldest overdue {abs(int(worst))}d"
+        elif isinstance(value, list):
+            due = [it.get("days_until_due") for it in value
+                   if isinstance(it, dict) and isinstance(it.get("days_until_due"), (int, float))]
+            if due and min(due) < 0:
+                return f"oldest overdue {abs(int(min(due)))}d"
+    return None
+
+
+def reduce_result_for_storage(result, cap: int = RESULT_STORAGE_CAP_BYTES) -> str:
+    """Serialise a task result to at most `cap` bytes of ALWAYS-VALID JSON.
+
+    Returns a string that `json.loads` accepts, unconditionally. When the
+    result does not fit, what comes back still parses and still says how much
+    was dropped -- `truncated`, `original_bytes`, and a per-field count for
+    every container removed. Never a slice of a longer document.
+    """
+    if not isinstance(result, dict):
+        result = {"status": "success", "result": result}
+
+    full = _dumps(result)
+    if len(full) <= cap:
+        return full
+
+    original_bytes = len(full)
+
+    # Pass 1 -- keep every scalar, replace every container with its count.
+    reduced: dict = {}
+    for key, value in result.items():
+        if isinstance(value, (list, dict)):
+            reduced[key] = _describe_container(value)
+        elif isinstance(value, str) and len(value) > _SCALAR_STRING_CAP:
+            # Truncating a string VALUE is safe: it stays a quoted JSON string.
+            # Truncating the DOCUMENT is what broke 137 rows.
+            reduced[key] = value[:_SCALAR_STRING_CAP] + "..."
+        else:
+            reduced[key] = value
+    reduced["truncated"] = True
+    reduced["original_bytes"] = original_bytes
+
+    candidate = _dumps(reduced)
+    if len(candidate) <= cap:
+        return candidate
+
+    # Pass 2 -- pathological width (hundreds of scalar keys). Keep only the
+    # fields that carry the verdict, and say how many were dropped.
+    keep = {k: reduced[k] for k in ("status", "message", "error", "error_code")
+            if k in reduced}
+    keep["truncated"] = True
+    keep["original_bytes"] = original_bytes
+    keep["summary"] = f"{len(result)} fields dropped; result too large to store"
+    candidate = _dumps(keep)
+    if len(candidate) <= cap:
+        return candidate
+
+    # Pass 3 -- the floor. Fixed shape, always well under any sane cap.
+    return _dumps({
+        "truncated": True,
+        "original_bytes": original_bytes,
+        "summary": "result too large to store",
+    })
+
 
 @dataclass
 class ScheduledTask:
@@ -335,13 +574,18 @@ class TaskScheduler:
 
                 duration_ms = (time.monotonic() - start_time) * 1000
                 finished_at = datetime.now(timezone.utc).isoformat()
-                result_json = json.dumps(result) if isinstance(result, dict) else str(result)
-                if isinstance(result, dict) and len(json.dumps(result)) > 2000:
-                    logger.debug("Task %s result truncated from %d to 2000 chars", task.name, len(json.dumps(result)))
+                # Reduce, never sever. `reduce_result_for_storage` returns
+                # valid JSON at or under the cap in every case, including the
+                # non-dict case the old `str(result)` branch used to store as
+                # un-parseable Python repr.
+                result_json = reduce_result_for_storage(result)
+                if len(result_json) < len(_dumps(result if isinstance(result, dict)
+                                                 else {"status": "success", "result": result})):
+                    logger.debug("Task %s result reduced to %d chars", task.name, len(result_json))
 
                 await update_scheduled_run(
                     run_id, "completed", finished_at, duration_ms,
-                    result=result_json[:2000],  # Cap result size
+                    result=result_json,
                 )
 
                 # Emit completion event
