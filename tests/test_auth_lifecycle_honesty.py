@@ -1734,3 +1734,169 @@ class TestCookieJarReader:
         rows = cookie_jar.read_jar(tmp_path, ["nauk_at", "nauk_rt"])
 
         assert [r["name"] for r in rows] == ["nauk_at"]
+
+
+class TestTheRenewalBlockCannotContradictItself:
+    """`silent_renew_available` was a hardcoded `True` until 2026-08-25.
+
+    The block's own docstring says a payload that contradicts itself about when
+    the session dies is worse than one that says it does not know. That rule was
+    obeyed by `session_lapses_at` and broken by the field two lines above it:
+    when nauk_rt is unreadable or session-scoped, the payload said "no refresh
+    date could be found" AND "silent renew is available" at the same time.
+
+    Three sibling servers are copying this block, so the honesty has to live in
+    the value rather than in the prose around it.
+    """
+
+    async def test_no_refresh_row_means_renew_is_NOT_advertised(self):
+        result, _ = await _session_info(verify_live=False, jar={})
+        renewal = result["renewal"]
+        assert renewal["session_lapses_at"] is None
+        assert renewal["silent_renew_available"] is False, (
+            "claimed silent renew with no nauk_rt to renew from"
+        )
+
+    async def test_a_session_scoped_refresh_cookie_means_the_same(self):
+        """A nauk_rt with no expiry dies with the browser session.
+
+        It is present, so a presence check would pass it -- and it still cannot
+        support a silent renew tomorrow. This is why the field keys off the
+        DATE rather than off the row existing.
+        """
+        result, _ = await _session_info(verify_live=False, jar={"nauk_rt": -1.0})
+        renewal = result["renewal"]
+        assert renewal["session_lapses_at"] is None
+        assert renewal["silent_renew_available"] is False
+        assert "SESSION cookie" in renewal["session_lapses_source"]
+
+    async def test_a_dated_refresh_cookie_still_advertises_renew(self):
+        """The negative cases must not have cost the positive one."""
+        result, _ = await _session_info(
+            verify_live=False, jar={"nauk_rt": time.time() + 188 * 86400})
+        renewal = result["renewal"]
+        assert renewal["session_lapses_at"] is not None
+        assert renewal["silent_renew_available"] is True
+        assert renewal["tool"] == "naukri_reauth"
+
+    async def test_the_two_fields_agree_in_every_case(self):
+        """The invariant, stated once rather than implied three times."""
+        for jar in ({}, {"nauk_rt": -1.0},
+                    {"nauk_rt": time.time() + 188 * 86400}):
+            result, _ = await _session_info(verify_live=False, jar=jar)
+            renewal = result["renewal"]
+            assert renewal["silent_renew_available"] is (
+                renewal["session_lapses_at"] is not None), (
+                "renewal block contradicts itself for jar=%r" % (jar,)
+            )
+
+
+class TestAuthoritativeMeansAuthoritativeAboutSomething:
+    """`expiry_is_authoritative` was a bare `True` beside `format: "absent"`.
+
+    True means "the exp inside this JWT is the real lifetime, Naukri does not
+    revoke ahead of it". With no JWT there is nothing for it to be true ABOUT,
+    and printing it next to an absent credential invites a consumer to trust a
+    date that does not exist.
+    """
+
+    async def test_absent_credential_makes_the_claim_None(self):
+        result, _ = await _session_info(verify_live=False, token=None, jar={})
+        cred = result["credential"]
+        if cred["present"] is False:
+            assert cred["format"] == "absent"
+            assert cred["expiry_is_authoritative"] is None, (
+                "asserted an authoritative expiry with no credential"
+            )
+
+    async def test_a_present_credential_keeps_the_claim(self):
+        result, _ = await _session_info(
+            verify_live=False, token=_jwt(time.time() + 3600))
+        cred = result["credential"]
+        assert cred["present"] is True
+        assert cred["expiry_is_authoritative"] is True
+
+
+class TestWhatAStrangerSeesOnFirstRun:
+    """These repos are public. Whoever clones one is not the person who built it.
+
+    A fresh clone has no Chrome profile and no session, so the first
+    authenticated tool a stranger touches is the whole first-run experience.
+    MEASURED before this class existed: a signed-out `naukri_get_profile`
+    returned `error_code: "API_ERROR"` -- not even classified as auth -- with
+    the exception class printed twice and NO tool named. Nothing in that reply
+    told a stranger what to do next.
+
+    The same 401 was also classified two ways depending on which dispatch path
+    a tool used: `api_tool` said AUTH_ERROR, `handle_tool_action` said
+    API_ERROR. A caller cannot act on a code that depends on an implementation
+    detail of the tool it called.
+    """
+
+    def test_401_classifies_as_auth_and_names_the_next_step(self):
+        from naukri_server.error_handler import classify_api_error
+        from naukri_server.api import NaukriAPIError
+
+        code, message = classify_api_error(NaukriAPIError(401, "Unauthorized"))
+        assert code == "AUTH_ERROR"
+        assert "naukri_login" in message
+        assert "naukri_auth_status" in message
+
+    def test_403_is_auth_too_and_not_a_permissions_dead_end(self):
+        """Naukri answers 403 for a lapsed session on some routes.
+
+        Reading it as a permissions problem sends the caller hunting for an
+        entitlement they already have.
+        """
+        from naukri_server.error_handler import classify_api_error
+        from naukri_server.api import NaukriAPIError
+
+        code, message = classify_api_error(NaukriAPIError(403, "Forbidden"))
+        assert code == "AUTH_ERROR"
+        assert "naukri_login" in message
+
+    def test_a_real_server_error_is_NOT_dressed_up_as_auth(self):
+        """The negative control. A classifier that calls everything AUTH_ERROR
+        is as useless as one that calls nothing."""
+        from naukri_server.error_handler import classify_api_error
+        from naukri_server.api import NaukriAPIError
+
+        code, message = classify_api_error(NaukriAPIError(500, "Server error"))
+        assert code == "API_ERROR"
+        assert "naukri_login" not in message
+
+    def test_the_next_step_mentions_silent_renewal_for_a_returning_user(self):
+        """A stranger needs naukri_login; someone whose session lapsed does not.
+
+        Naming only login would send a returning user through a sign-in form
+        they do not need -- reauth renews without one.
+        """
+        from naukri_server.error_handler import _SIGNED_OUT_NEXT_STEP
+        assert "naukri_reauth" in _SIGNED_OUT_NEXT_STEP
+
+    def test_the_message_does_not_print_the_status_twice(self):
+        from naukri_server.error_handler import classify_api_error
+        from naukri_server.api import NaukriAPIError
+
+        _, message = classify_api_error(NaukriAPIError(401, "Unauthorized"))
+        assert message.count("401") == 1, message
+
+    async def test_a_signed_out_profile_call_is_actionable_end_to_end(self):
+        """Through the real tool, not just the classifier."""
+        from unittest.mock import patch as _patch
+        from naukri_server.interfaces import api_client
+        from naukri_server.api import NaukriAPIError
+        from naukri_server.tools import profile as P
+
+        async def unauthorised(*a, **k):
+            raise NaukriAPIError(401, "Unauthorized")
+
+        fn = getattr(P.naukri_get_profile, "fn", P.naukri_get_profile)
+        with _patch.object(api_client, "get",
+                           new=AsyncMock(side_effect=unauthorised)):
+            result = await fn()
+
+        assert result["error_code"] == "AUTH_ERROR"
+        assert "naukri_login" in result["message"]
+        # and the double-print is gone
+        assert "NaukriAPIError: NaukriAPIError" not in result["message"]

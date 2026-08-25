@@ -26,7 +26,11 @@ async def test_naukri_api_error_returns_api_error():
 
     result = await handle_tool_action(_failing, "test.api_error")
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    # 401/403 now classify as AUTH_ERROR, not API_ERROR. The same status
+    # used to mean different things depending on which dispatch path a
+    # tool used; a signed-out caller got no next step. Converted, not
+    # deleted -- the case still matters, the expected code changed.
+    assert result["error_code"] == "AUTH_ERROR"
     assert result["http_status"] == 403
     assert "Forbidden" in result["message"]
 

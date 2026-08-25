@@ -30,6 +30,48 @@ _REAUTH_HINT = (
     "Naukri session expired or not logged in. Call naukri_login to re-authenticate."
 )
 
+#: What a signed-out caller is told to DO. First run of a fresh clone is the
+#: case this exists for: whoever clones this repo is not the person who built
+#: it, has no Chrome profile and no session, and the first authenticated tool
+#: they touch must name the next step rather than leave them to infer it.
+#:
+#: MEASURED 2026-08-25, before this existed: a signed-out `naukri_get_profile`
+#: returned `error_code: "API_ERROR"` -- not even classified as auth -- with
+#: the exception class printed twice and no tool named. Nothing in that reply
+#: tells a stranger what to do next.
+_SIGNED_OUT_NEXT_STEP = (
+    "Not signed in to Naukri. Run naukri_auth_status to confirm, then "
+    "naukri_login to sign in (it opens a browser window; this server never "
+    "handles a password). If you have signed in before, naukri_reauth renews "
+    "an expired credential silently, without a sign-in form."
+)
+
+#: HTTP statuses that mean "who are you", as opposed to "what you asked for
+#: went wrong". 403 is included deliberately: Naukri answers 403 for a lapsed
+#: session on some routes, and reading it as a permissions problem sends the
+#: caller looking for an entitlement they already have.
+_AUTH_STATUSES = frozenset({401, 403})
+
+
+def classify_api_error(exc) -> tuple:
+    """(error_code, message) for a NaukriAPIError. One rule, one place.
+
+    Exists because the same 401 was classified two different ways depending on
+    which dispatch path a tool happened to use: ``api_tool`` mapped it to
+    AUTH_ERROR, while :func:`handle_tool_action` returned API_ERROR
+    unconditionally. A caller cannot act on an error code that depends on an
+    implementation detail of the tool it called.
+    """
+    status = getattr(exc, "status", None)
+    if getattr(exc, "code", None) == "BOT_CHECK":
+        return "BOT_CHECK", str(exc)
+    if status in _AUTH_STATUSES:
+        # `str(exc)` already begins "HTTP <status>: ", so the status is not
+        # repeated here -- it read "HTTP 401: Unauthorized (HTTP 401)".
+        detail = str(exc) or "HTTP %s" % status
+        return "AUTH_ERROR", "%s. %s" % (detail.rstrip(". "), _SIGNED_OUT_NEXT_STEP)
+    return "API_ERROR", str(exc)
+
 
 async def handle_tool_action(handler_fn, action_name: str) -> dict:
     """Run a tool action with standardized error handling.
@@ -62,7 +104,11 @@ async def handle_tool_action(handler_fn, action_name: str) -> dict:
         except ImportError:
             return await handler_fn()
     except NaukriAPIError as e:
-        return {"status": "error", "message": str(e), "http_status": e.status, "error_code": "API_ERROR"}
+        code, message = classify_api_error(e)
+        if code == "AUTH_ERROR":
+            logger.error("Auth failure in %s (HTTP %s)", action_name, e.status)
+        return {"status": "error", "message": message,
+                "http_status": e.status, "error_code": code}
     except _AUTH_ERRORS as e:
         logger.error("Auth failure in %s (%s): %s", action_name, type(e).__name__, e)
         return {"status": "error", "message": str(e) or _REAUTH_HINT, "error_code": "AUTH_ERROR"}

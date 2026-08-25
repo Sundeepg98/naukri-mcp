@@ -1022,7 +1022,11 @@ class TestDFPTargeting:
         from naukri_server.tools.profile import naukri_profile_targeting
         result = await naukri_profile_targeting()
         assert result["status"] == "error"
-        assert result["error_code"] == "API_ERROR"
+        # 401/403 now classify as AUTH_ERROR, not API_ERROR. The same status
+        # used to mean different things depending on which dispatch path a
+        # tool used; a signed-out caller got no next step. Converted, not
+        # deleted -- the case still matters, the expected code changed.
+        assert result["error_code"] == "AUTH_ERROR"
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile_targeting.api_client.get", new_callable=AsyncMock)

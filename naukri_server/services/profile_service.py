@@ -169,8 +169,20 @@ async def _get_profile() -> dict:
         return result
     except ValueError as e:
         return {"status": "error", "message": str(e), "error_code": "API_ERROR"}
+    except NaukriAPIError as e:
+        # Do NOT swallow an auth failure into API_ERROR. This branch used to be
+        # part of the bare `except Exception` below, so a signed-out caller was
+        # told "Profile API failed" with no next step and the wrong code -- the
+        # measured first-run experience of a fresh clone.
+        from naukri_server.error_handler import classify_api_error
+
+        code, message = classify_api_error(e)
+        return {"status": "error", "message": message,
+                "http_status": e.status, "error_code": code}
     except Exception as e:
-        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e!r}", "error_code": "API_ERROR"}
+        # `{e}` rather than `{e!r}`: repr on an exception re-prints its class,
+        # so this rendered as "NaukriAPIError: NaukriAPIError('HTTP 401: ...')".
+        return {"status": "error", "message": f"Profile API failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
 
 
 async def _audit_profile() -> dict:

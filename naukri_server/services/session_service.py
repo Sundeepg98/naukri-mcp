@@ -403,7 +403,14 @@ def _credential_block(
         # self-describing and the REST layer's 401 path exists for the case
         # where it is rejected anyway. Nothing here is a guess about a
         # shorter, undocumented server-side lifetime.
-        "expiry_is_authoritative": True,
+        #
+        # None WHEN THERE IS NO CREDENTIAL, because the claim has no subject
+        # then. This was a bare `True` alongside `format: "absent"` -- reading
+        # "the expiry is authoritative" next to "there is no token" invites a
+        # consumer to trust a date that does not exist. True means "the exp in
+        # this JWT is the real lifetime"; with no JWT there is nothing for it
+        # to be true ABOUT.
+        "expiry_is_authoritative": None if present is False else True,
     }
     block.update(_expiry_facts(expires))
     if present is None:
@@ -561,8 +568,23 @@ def _renewal(supporting: list) -> dict:
             "to prevent." % _why_no_refresh_date(entry)
         )
 
+    # DERIVED, not asserted. This was the literal `True` until 2026-08-25, and
+    # it could contradict the two fields directly beneath it: when nauk_rt is
+    # unreadable or session-scoped, `session_lapses_at` is None and
+    # `session_lapses_source` explains that no refresh date could be found --
+    # while this field went on claiming silent renew was available. A payload
+    # that says "renewal is available" and "I cannot find the cookie renewal
+    # depends on" in the same breath is worse than one that says it does not
+    # know, which is the rule the rest of this function already follows.
+    #
+    # `lapses_at is None` covers both failing cases exactly: no nauk_rt row at
+    # all, and a session-scoped nauk_rt that carries no expiry. Three sibling
+    # servers are copying this block, so the honesty has to be in the value
+    # rather than in the prose around it.
+    renew_available = lapses_at is not None
+
     return {
-        "silent_renew_available": True,
+        "silent_renew_available": renew_available,
         "tool": "naukri_reauth",
         "uses_browser": True,
         "mechanism": RENEW_MECHANISM,

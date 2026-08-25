@@ -155,7 +155,11 @@ async def test_templates_naukri_api_error_caught(mock_api_get):
     from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
     result = await naukri_resume_templates()
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    # 401/403 now classify as AUTH_ERROR, not API_ERROR. The same status meant
+    # different things depending on which dispatch path a tool used, and a
+    # signed-out caller got no next step. Converted rather than deleted: the
+    # case still matters, the expected code changed.
+    assert result["error_code"] == "AUTH_ERROR"
     assert result["http_status"] == 401
 
 
@@ -227,7 +231,9 @@ async def test_status_naukri_api_error_caught(mock_api_get):
     from naukri_server.tools.resume_builder import naukri_resume_templates, naukri_resume_builder_status, naukri_tailor_resume
     result = await naukri_resume_builder_status()
     assert result["status"] == "error"
-    assert result["error_code"] == "API_ERROR"
+    # Same conversion as above: 403 is an auth condition here, not a
+    # permissions dead end.
+    assert result["error_code"] == "AUTH_ERROR"
     assert result["http_status"] == 403
 
 

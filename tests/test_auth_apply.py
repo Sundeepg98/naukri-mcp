@@ -99,7 +99,11 @@ class TestAuth:
             mock_helper.side_effect = NaukriAPIError(401, "Session expired")
             result = await naukri_auth_status()
             assert result["status"] == "error"
-            assert result["error_code"] == "API_ERROR"
+            # 401/403 now classify as AUTH_ERROR, not API_ERROR. The same status
+            # used to mean different things depending on which dispatch path a
+            # tool used; a signed-out caller got no next step. Converted, not
+            # deleted -- the case still matters, the expected code changed.
+            assert result["error_code"] == "AUTH_ERROR"
             assert result["http_status"] == 401
 
 
