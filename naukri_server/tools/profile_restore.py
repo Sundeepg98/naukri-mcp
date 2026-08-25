@@ -15,42 +15,66 @@ which is the worst possible moment to be running unverified code.
 
 WHAT THIS PATH CAN AND CANNOT DO -- stated, not papered over
 ------------------------------------------------------------
-``write_section`` sends ONE row per call for a row collection. That single
-fact decides everything below.
+``write_section`` sends ONE row per call for a row collection. That is a
+TRANSACTION SHAPE, not a limit on reach, and this module now says so with
+writes instead of with a refusal. Where it used to decline every row
+collection outright, it restores them ROW BY ROW and reports each row.
 
 ``SCALAR_BLOCK`` (summary, resumeHeadline, keySkills, careerPreferences)
-    Fully restorable in one call. The section IS a set of fields inside the
-    ``profile`` object, and the snapshot carries all of them.
-
-``WHOLE_LIST`` (languages, onlineProfiles, workSamples, presentations,
-    publications, patents)
-    The payload for these IS the entire list, so ONE call can make the live
-    list equal the snapshot list -- but only when the two lists differ in
-    exactly ONE row that exists on both sides and carries the write spec id
-    field. That is the case that matters in practice: undoing the write whose
-    pre-write snapshot this is. Anything wider -- two or more rows moved, a
-    row added since the snapshot, a row deleted since the snapshot, or a row
-    the write spec cannot address -- is reported ``unsupported`` with the row
-    ids, because ``_merge_whole_list`` builds its payload from the LIVE list
-    and can therefore neither drop a row nor add one back under its original
-    id.
+    Fully restorable in ONE call, and atomic because it is one write. The
+    section IS a set of fields inside the ``profile`` object and the snapshot
+    carries all of them.
 
 ``SINGLE_ROW`` (employments, educations, schools, itskills, projects,
-    certifications)
-    NOT restorable by this path, ever. The payload is one row, so no single
-    call can certify that the whole section came back. These return
-    ``unsupported`` naming exactly which row ids differ, and the caller
-    restores them one at a time with ``naukri_update_profile_section``,
-    passing the row id field.
+    certifications) and
+``WHOLE_LIST`` (languages, onlineProfiles, workSamples, presentations,
+    publications, patents)
+    Restored one row per ``write_section`` call, in id order. Every row that
+    differs between the live profile and the snapshot AND exists on both sides
+    is written back. The two kinds differ only in what goes on the wire --
+    a single-row section sends the one edited row, a whole-list section sends
+    the merged whole list -- and that difference is entirely
+    ``write_section``'s business, not this module's.
 
-AND THE ONE NO PATH CAN FIX: a row DELETED on naukri.com cannot be recreated
-with its original id. Re-sending it without an id creates a NEW row with a NEW
-id; anything that referenced the old one still points at nothing. A restore
-can return a row CONTENT, never its identity.
+    NOT ATOMIC, AND IT NEVER PRETENDS TO BE. N differing rows are N writes
+    with no transaction and no rollback around them. So: the run STOPS at the
+    first row that does not land; every row comes back with its own outcome;
+    and the status is ``partial`` -- never ``updated`` -- unless every planned
+    row landed and nothing was skipped.
 
-NO HALF-RESTORES. When this module cannot complete a section it writes
-nothing at all and says so. A partial restore reported as success is strictly
-worse than a refusal: it leaves the caller believing the section is whole.
+THE FOUR ROW OUTCOMES, because three would have to lie about one of them:
+    ``landed``    ``write_section`` re-read the profile and SAW the row.
+    ``not_sent``  refused before the transport. The only outcome that
+                  certifies nothing reached Naukri.
+    ``unknown``   dispatched and NOT confirmed -- a transport exception, which
+                  cannot prove the server did not apply it, or a write Naukri
+                  accepted that the re-read cannot see. Neither a success nor
+                  a "nothing happened", and it is reported as neither.
+    ``not_attempted``  never sent, because an earlier row stopped the run.
+
+WHAT IS STILL REFUSED, and why it is not a shape problem
+    - A row DELETED on naukri.com cannot be recreated with its original id.
+      Re-sending it without an id creates a NEW row with a NEW id; anything
+      that referenced the old one still points at nothing. A restore can
+      return a row's CONTENT, never its identity. Those rows are SKIPPED by
+      name, and their presence alone keeps the result off ``updated``.
+    - A row ADDED since the snapshot cannot be removed. Deleting a row is a
+      different route entirely (a per-row POST carrying
+      ``X-HTTP-Method-Override: DELETE``, see ``profile_write``) which this
+      server does not implement at all.
+    - Rows the write spec cannot address by id. Guessing a key mapping is how
+      a restore writes to the wrong row.
+
+NO SILENT HALF-RESTORES. Partial is now a thing this module DOES -- it is not
+a thing it HIDES. Every partial result names the rows that landed, the rows
+that did not, and the rows it never tried.
+
+THE SOURCE SNAPSHOT IS NEVER TOUCHED. It is read ONCE, into memory, before
+any write, and every row is restored from that in-memory copy. Each
+``write_section`` call takes its own fresh pre-write snapshot under a
+different, collision-safe filename, so an N-row restore leaves N new
+snapshots beside the source and overwrites nothing. A restore that failed at
+row 3 can be retried from the same source file, unchanged.
 """
 
 from typing import Any
@@ -60,10 +84,16 @@ from naukri_server.tools.profile_sections import (
     SCALAR_ALLOWED_FIELDS,
     SCALAR_BLOCK,
     SECTION_SPECS,
-    SINGLE_ROW,
     _read_profile,
     write_section,
 )
+# classify_section_write reads a `write_section` reply and says what actually
+# happened to it. It belongs beside `write_section` in profile_sections.py and
+# is not there only because that file is another owner's in this slice; it
+# lives in profile_update.py so the update path and the restore path grade a
+# write by the SAME rule. Two graders would eventually disagree, and the one
+# that was wrong would be reporting a write as landed when it had not.
+from naukri_server.tools.profile_update import classify_section_write
 from naukri_server.tools.profile_snapshot import (
     detect_id_field,
     diff_section,
@@ -232,8 +262,47 @@ def _row_guidance(moved: dict) -> str:
     return "; ".join(parts)
 
 
+#: Rows this path skips, and the measured reason for each. Kept as data so
+#: the preview, the result and the message all quote the SAME sentence -- a
+#: reason that drifts between the preview and the outcome is how an operator
+#: approves one thing and gets another.
+SKIP_REASONS = {
+    "deleted_on_naukri":
+        "in the snapshot and GONE from the live profile. A deleted row cannot "
+        "be recreated with its original id: re-sending it makes a NEW row with "
+        "a NEW id, so anything that referenced the old id would still point at "
+        "nothing. A restore can return a row's content, never its identity.",
+    "added_since_snapshot":
+        "added since the snapshot. Removing it needs the row-DELETE route (a "
+        "per-row POST carrying X-HTTP-Method-Override: DELETE), which this "
+        "server does not implement, so this path cannot undo it.",
+}
+
+
+def _row_plan(moved: dict) -> tuple:
+    """``(planned_row_ids, skipped)`` for a row collection.
+
+    PLANNED are the rows that exist on BOTH sides and differ -- the only rows
+    a write can put back as themselves. SKIPPED are named with their reason
+    rather than folded into a single refusal, because the two reasons are not
+    the same problem and only one of them is about this module.
+    """
+    skipped = [{"row_id": rid, "reason": "deleted_on_naukri",
+                "detail": SKIP_REASONS["deleted_on_naukri"]}
+               for rid in moved["only_snapshot"]]
+    skipped += [{"row_id": rid, "reason": "added_since_snapshot",
+                 "detail": SKIP_REASONS["added_since_snapshot"]}
+                for rid in moved["only_live"]]
+    return list(moved["changed"]), skipped
+
+
 def _restorability(spec, section: str, live: dict, snap_profile: dict):
-    """``(restorable, reason)`` -- the same test ``restore_section`` applies."""
+    """``(restorable, reason)`` -- the same test ``restore_section`` applies.
+
+    ``restorable`` means "this path will write something". It does NOT mean
+    the section will end up equal to the snapshot; a run with skipped rows is
+    restorable AND incomplete. ``preview_restore`` reports both separately.
+    """
     if spec.kind == SCALAR_BLOCK:
         fields = _scalar_fields(snap_profile, section)
         if not fields:
@@ -241,11 +310,6 @@ def _restorability(spec, section: str, live: dict, snap_profile: dict):
                            % section)
         return True, ("scalar section: all %d field(s) go back in one write"
                       % len(fields))
-
-    if spec.kind == SINGLE_ROW:
-        return False, (
-            "%r is a row collection written ONE ROW PER CALL, so no single "
-            "write can restore the whole section" % section)
 
     _, live_value, _ = resolve_section(live, section)
     _, snap_value, _ = resolve_section(snap_profile, section)
@@ -257,12 +321,21 @@ def _restorability(spec, section: str, live: dict, snap_profile: dict):
             "the rows are keyed by %r in the profile read, but the write spec "
             "targets %r -- this path will not guess a mapping between them"
             % (moved["id_field"], spec.id_field))
-    if moved["only_live"] or moved["only_snapshot"] or len(moved["changed"]) > 1:
-        return False, _row_guidance(moved)
-    if not moved["changed"]:
+
+    planned, skipped = _row_plan(moved)
+    if not planned:
+        if skipped:
+            return False, (
+                "no row can be written back: %s" % _row_guidance(moved))
         return False, "no rows differ; the section already matches the snapshot"
-    return True, ("whole-list section differing in exactly one row (%s), so "
-                  "one write restores the entire list" % moved["changed"][0])
+
+    reason = ("%d row(s) go back one write per row (%s), which is NOT atomic"
+              % (len(planned), ", ".join(planned)))
+    if skipped:
+        reason += ("; %d row(s) are SKIPPED and the section will NOT end up "
+                   "equal to the snapshot: %s"
+                   % (len(skipped), _row_guidance(moved)))
+    return True, reason
 
 
 def _section_diff(spec, section: str, live: dict, snap_profile: dict) -> dict:
@@ -327,6 +400,16 @@ async def preview_restore(snapshot: str, section: str) -> dict:
     live = await _read_profile()
     diff = _section_diff(spec, section, live, snap_profile)
     restorable, reason = _restorability(spec, section, live, snap_profile)
+
+    planned, skipped, writes = [], [], 1 if restorable else 0
+    if spec.kind != SCALAR_BLOCK:
+        _, live_value, _ = resolve_section(live, section)
+        _, snap_value, _ = resolve_section(snap_profile, section)
+        moved = _classify(_rows(live_value), _rows(snap_value), spec.id_field)
+        if moved["identified"] and moved["addressable"]:
+            planned, skipped = _row_plan(moved)
+        writes = len(planned)
+
     return {
         "status": "preview",
         "snapshot": snapshot,
@@ -336,6 +419,15 @@ async def preview_restore(snapshot: str, section: str) -> dict:
         "kind": spec.kind,
         "would_change": diff,
         "restorable": restorable,
+        # `restorable` says a write would happen. `restores_completely` says
+        # the section would END UP equal to the snapshot. They differ exactly
+        # when rows are skipped, and collapsing them is how a caller approves
+        # a restore and gets a section that is still wrong.
+        "restores_completely": bool(restorable and not skipped),
+        "writes_required": writes,
+        "atomic": spec.kind == SCALAR_BLOCK,
+        "rows_planned": planned,
+        "rows_skipped": skipped,
         "reason": reason,
         "written": False,
         "message": "Read-only. Nothing was written. `would_change` is the "
@@ -360,10 +452,22 @@ async def restore_section(snapshot: str, section: str,
             body that would be sent.
 
     Returns:
-        Whatever ``write_section`` returned -- ``preview`` / ``updated`` /
-        ``error`` -- with the restore provenance attached. Or
-        ``{status: "unsupported"}`` when this path cannot restore the section
-        completely, which names the differing row ids and writes nothing.
+        For a scalar section, or a row section where exactly ONE row differs
+        and nothing is skipped: whatever ``write_section`` returned --
+        ``preview`` / ``updated`` / ``error`` -- with the restore provenance
+        attached. That is one write, so it can honestly wear one write's
+        result.
+
+        For a row section needing MORE THAN ONE write, or with any row it
+        cannot put back: an aggregate that can never be mistaken for a single
+        atomic write -- ``{status: preview|updated|partial|error, atomic:
+        False, rows: {planned, landed, unknown, not_attempted, skipped},
+        row_results: [...]}``. ``updated`` requires every planned row to have
+        landed AND nothing to have been skipped.
+
+        ``{status: "unsupported"}`` only where no write is possible at all:
+        rows that cannot be addressed by the write spec's id, or a section
+        that already matches the snapshot.
     """
     spec, err = _spec_for(section)
     if err:
@@ -391,7 +495,11 @@ async def restore_section(snapshot: str, section: str,
                 % (snapshot, section,
                    ", ".join(sorted(SCALAR_ALLOWED_FIELDS.get(section) or []))),
                 written=False, **provenance)
-        return await _delegate(section, fields, confirm, provenance)
+        # One write, so `atomic` is True -- and it is always PRESENT, on this
+        # path and on both row paths, so a caller can branch on it without
+        # having to know which shape it got back.
+        return await _delegate(section, fields, confirm,
+                               dict(provenance, atomic=True))
 
     _, snap_value, snap_found = resolve_section(snap_profile, section)
     if not snap_found:
@@ -414,32 +522,214 @@ async def restore_section(snapshot: str, section: str,
         },
     }
 
-    if spec.kind == SINGLE_ROW:
+    if not moved["identified"]:
         return _unsupported(
-            "%r is written ONE ROW PER CALL, so this path cannot restore the "
-            "whole section atomically and will not half-restore it. NOTHING "
-            "WAS WRITTEN. What differs: %s. Restore them one at a time with "
-            "naukri_update_profile_section(section=%r, fields={%r: <row id>, "
-            "...}), taking each row values from the snapshot. A row DELETED "
-            "on naukri.com cannot be recreated with its original id -- "
-            "re-sending it creates a NEW row with a NEW id."
-            % (section, _row_guidance(moved), section, spec.id_field),
+            "The rows of %r cannot be identified by id on both sides, so no "
+            "write can target one without guessing which row it means. "
+            "NOTHING WAS WRITTEN." % section,
             provenance, detail)
 
-    restorable, reason = _restorability(spec, section, live, snap_profile)
-    if not restorable:
+    if not moved["addressable"]:
         return _unsupported(
-            "%r cannot be restored in a single write: %s. NOTHING WAS "
-            "WRITTEN. Restore the rows one at a time with "
-            "naukri_update_profile_section, and note that a row deleted on "
-            "naukri.com cannot come back with its original id."
-            % (section, reason),
+            "The rows of %r are keyed %r in the profile read but the write "
+            "spec targets %r, and this path will not invent a mapping between "
+            "them -- a wrong guess writes to the wrong row. NOTHING WAS "
+            "WRITTEN." % (section, moved["id_field"], spec.id_field),
             provenance, detail)
 
-    row_id = moved["changed"][0]
-    tagged = dict(provenance, restored_row=row_id, **detail)
-    return await _delegate(section, dict(moved["_snap_map"][row_id]), confirm,
-                           tagged)
+    planned, skipped = _row_plan(moved)
+
+    if not planned:
+        return _unsupported(
+            "Nothing in %r can be written back. %s. NOTHING WAS WRITTEN."
+            % (section, _row_guidance(moved)),
+            provenance, dict(detail, rows_skipped=skipped))
+
+    # ONE row and nothing skipped is genuinely one write, so it comes back as
+    # one write's own result -- verified, diff, collateral, rows_lost and all.
+    # Anything wider gets the aggregate shape below, which cannot be read as
+    # an atomic success.
+    if len(planned) == 1 and not skipped:
+        row_id = planned[0]
+        tagged = dict(provenance, restored_row=row_id, atomic=True, **detail)
+        return await _delegate(section, dict(moved["_snap_map"][row_id]),
+                               confirm, tagged)
+
+    return await _restore_rows(section, moved, planned, skipped, confirm,
+                               dict(provenance, **detail))
+
+
+# ---------------------------------------------------------------------------
+# 2b. Row-by-row restore -- the non-atomic path, reported as such
+# ---------------------------------------------------------------------------
+
+def _row_unit(row_id: str, result: dict) -> dict:
+    """One row's line in the report. Carries what a caller must act on."""
+    return {
+        "row_id": row_id,
+        "outcome": classify_section_write(result),
+        "status": result.get("status"),
+        "error_code": result.get("error_code"),
+        "verified": result.get("verified"),
+        "snapshot": result.get("snapshot"),
+        "would_send": result.get("would_send"),
+        "rows_lost": result.get("rows_lost"),
+        "collateral": result.get("collateral"),
+        "message": result.get("message"),
+    }
+
+
+async def _restore_rows(section: str, moved: dict, planned: list,
+                        skipped: list, confirm: bool, provenance: dict) -> dict:
+    """Restore N rows, one ``write_section`` call each, and report every one.
+
+    THIS IS NOT ATOMIC AND CANNOT BE MADE SO. There is no transaction across
+    two fullprofiles writes and no undo on naukri.com. So the contract is:
+    a fixed order, a STOP at the first row that does not land, and a per-row
+    outcome for every planned row including the ones never attempted.
+
+    The rows are read from the IN-MEMORY snapshot loaded once by the caller,
+    never re-read from disk, so the source snapshot file cannot be affected by
+    anything that happens here and a failed run can be retried from it
+    unchanged. Each ``write_section`` call takes its OWN pre-write snapshot
+    under a collision-safe name; those pile up beside the source, they do not
+    replace it.
+    """
+    # One bucket per outcome, and they are EXHAUSTIVE: every planned row lands
+    # in exactly one, asserted below. A summary that can silently drop a row --
+    # by having no bucket for `not_sent` or for a write that landed and did
+    # collateral damage -- is the same defect as a partial reported as success,
+    # just one level up: the caller counts the buckets, sees them add up to
+    # less than it asked for, and has no idea what happened to the difference.
+    units, landed, unknown, not_attempted = [], [], [], []
+    refused, with_collateral = [], []
+    stopped = False
+
+    for row_id in planned:
+        if stopped:
+            not_attempted.append(row_id)
+            units.append({
+                "row_id": row_id, "outcome": "not_attempted", "status": None,
+                "message": "Not attempted: an earlier row in this restore did "
+                           "not land, so this one was never sent.",
+            })
+            continue
+
+        row = dict(moved["_snap_map"][row_id])
+        try:
+            result = await write_section(
+                section=section, fields=row, confirm=confirm,
+                label="pre-restore-%s" % section,
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad row must not hide the rest
+            logger.warning("Restore of %s row %s raised: %s: %s",
+                           section, row_id, type(exc).__name__, exc)
+            result = {
+                "status": "error", "error_code": "API_ERROR",
+                "message": "The write for row %s raised before it could be "
+                           "verified, so whether Naukri applied it is "
+                           "UNKNOWN: %s: %s"
+                           % (row_id, type(exc).__name__, exc),
+            }
+
+        unit = _row_unit(row_id, result)
+        units.append(unit)
+        outcome = unit["outcome"]
+        if outcome in ("landed", "preview"):
+            landed.append(row_id)
+        else:
+            if outcome == "unknown":
+                unknown.append(row_id)
+            elif outcome == "not_sent":
+                refused.append(row_id)
+            elif outcome == "landed_with_collateral":
+                with_collateral.append(row_id)
+            else:  # pragma: no cover - defensive; an unnamed outcome is unknown
+                unknown.append(row_id)
+            stopped = True
+
+    rows = {
+        "planned": list(planned),
+        "landed": landed,
+        "landed_with_collateral": with_collateral,
+        "refused": refused,
+        "unknown": unknown,
+        "not_attempted": not_attempted,
+        "skipped": skipped,
+    }
+    accounted = (len(landed) + len(with_collateral) + len(refused)
+                 + len(unknown) + len(not_attempted))
+    if accounted != len(planned):  # pragma: no cover - the buckets are exhaustive
+        logger.error("Restore of %s accounted for %d of %d planned rows -- "
+                     "a row fell out of the summary", section, accounted,
+                     len(planned))
+    complete = len(landed) == len(planned) and not skipped
+
+    if not confirm:
+        return dict(provenance, **{
+            "status": "preview", "written": False, "atomic": False,
+            "restore": True, "rows": rows, "row_results": units,
+            "restores_completely": complete,
+            "message": (
+                "NOTHING WAS WRITTEN. Restoring %r takes %d separate write(s), "
+                "one per row, in the order shown -- they are NOT atomic, so a "
+                "later row can fail after an earlier one has landed. Each "
+                "`would_send` is what THAT call sends against the profile AS "
+                "IT IS NOW; the ROW CONTENT shown is exactly what gets "
+                "written, but for a whole-list section the surrounding list in "
+                "a later body will differ once an earlier row has landed, "
+                "because every call re-reads the live list when it runs.%s "
+                "Re-run with confirm=True."
+                % (section, len(planned),
+                   ("" if not skipped else
+                    " %d row(s) will be SKIPPED and the section will NOT end "
+                    "up equal to the snapshot: %s."
+                    % (len(skipped),
+                       "; ".join("%s (%s)" % (s["row_id"], s["reason"])
+                                 for s in skipped))))),
+        })
+
+    if complete:
+        return dict(provenance, **{
+            "status": "updated", "written": True, "atomic": False,
+            "restore": True, "rows": rows, "row_results": units,
+            "restores_completely": True,
+            "message": "Restored all %d differing row(s) of %r -- %s -- each "
+                       "confirmed in its own fresh read. This took %d separate "
+                       "writes and was NOT atomic; it is reported complete "
+                       "because every one of them landed."
+                       % (len(planned), section, ", ".join(landed),
+                          len(planned)),
+        })
+
+    return dict(provenance, **{
+        "status": "partial" if landed else "error",
+        "error_code": None if landed else "RESTORE_FAILED",
+        "written": bool(landed),
+        "atomic": False,
+        "restore": True,
+        "rows": rows,
+        "row_results": units,
+        "restores_completely": False,
+        "message": (
+            "PARTIAL RESTORE of %r -- do NOT read this as done. %d of %d "
+            "planned row(s) landed (%s); %d never attempted (%s); %d "
+            "dispatched and UNCONFIRMED (%s) -- an unconfirmed row is neither "
+            "done nor undone, so re-read the profile before deciding; %d "
+            "refused before the wire (%s); %d landed but moved something else "
+            "too (%s); %d skipped and unrestorable (%s). Every row carries its "
+            "own `snapshot` where a write was taken. The source snapshot is "
+            "untouched: re-run this restore against it once the blocking row "
+            "is dealt with."
+            % (section, len(landed), len(planned), ", ".join(landed) or "none",
+               len(not_attempted), ", ".join(not_attempted) or "none",
+               len(unknown), ", ".join(unknown) or "none",
+               len(refused), ", ".join(refused) or "none",
+               len(with_collateral), ", ".join(with_collateral) or "none",
+               len(skipped),
+               "; ".join("%s (%s)" % (s["row_id"], s["reason"])
+                         for s in skipped) or "none")),
+    })
 
 
 def _unsupported(message: str, provenance: dict, detail: dict) -> dict:

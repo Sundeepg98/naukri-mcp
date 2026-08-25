@@ -437,11 +437,19 @@ async def do_update(
     notice_period: Optional[str] = None,
     expected_ctc: Optional[float] = None,
     current_ctc: Optional[float] = None,
+    confirm: bool = False,
 ) -> dict:
-    """Orchestrate browser-based profile update with retry + timeout.
+    """Orchestrate a profile update with retry + timeout.
 
     The ``_update_profile`` helper is looked up via the ``tools.profile``
     module so test patches at that path are honored.
+
+    ``confirm`` is a pass-through, and it has to be: the REST fields are
+    gated inside ``_update_profile``, and a layer that dropped the flag on
+    the way down would leave a capability that can be previewed and never
+    confirmed. That is exactly what it did until 2026-08-25 -- 13 fields
+    were built, reachable only as a preview, because this signature and the
+    tool's did not carry the parameter that arms them.
     """
     import asyncio
     from naukri_server.browser import browser_retry
@@ -455,6 +463,7 @@ async def do_update(
                 notice_period=notice_period,
                 expected_ctc=expected_ctc,
                 current_ctc=current_ctc,
+                confirm=confirm,
             ),
             description="profile update",
         ),

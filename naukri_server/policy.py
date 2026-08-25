@@ -11,34 +11,55 @@ WHAT IT READS, AND WHAT IT REFUSES TO READ
 ------------------------------------------
 
 The file (``config/jobhunt.json``, discovered by walking up from THIS file)
-supplies the numbers behind a score, the shared ``candidate`` block, and
-naukri's display-side settings. It supplies **nothing that decides whether an
-application is submitted**.
+supplies the numbers behind a score, the shared ``candidate`` block, naukri's
+display-side settings, and -- since 2026-08-25 -- six keys that ARM AND AIM THE
+AUTONOMOUS APPLY LOOP.
 
-    THE INVARIANT: no sequence of config writes, from any server, may grant
-    autonomous apply authority.
+    THIS FILE MAY ARM THE AGENT. It could not until 2026-08-25, and a great
+    deal of prose in this repo still says it cannot. That prose is stale
+    wherever it survives; this docstring is the current statement.
 
-The traced escalation was five writes long — ``agent.enabled: true`` ->
-``agent.mode: "auto"`` -> ``min_fit_score: 0`` -> ``blocklist.enabled: false``
--> arbitrary ``searches[]`` — and ended at fifteen real applications a day with
-no human approval. A sixth path ran through a sibling server entirely: writing
-every canonical skill into ``candidate.skills`` drives ``|matched|/|job_skills|``
-to 100 for every job in existence, which drives this server's agent.
+    What the file may decide: ``agent.enabled``, ``agent.mode``,
+    ``agent.min_fit_score``, ``agent.searches``, ``agent.per_search_limit``,
+    ``agent.blocklist.enabled``. What it may NOT: anything else under
+    ``agent`` -- the subtree still denies by default -- and specifically
+    ``agent.max_daily_applications``, which this server does not take from
+    the shared file at any tier.
 
-So those keys are **tier C: not loadable**, and this module never asks for them.
-``naukri_server.agent.load_agent_config`` reads ``agent_config.json`` and Python
-and deliberately does not consult the config file at all — the file may DISPLAY
-what the agent is set to (:func:`report` shows it), it may not decide it.
-jobcore refuses them on its side too; two independent refusals, because the file
-is the surface a text editor reaches and a write-path guard alone is not a
-guard.
+The traced escalation that once justified refusing all six was five writes long
+-- ``agent.enabled: true`` -> ``agent.mode: "auto"`` -> ``min_fit_score: 0`` ->
+``blocklist.enabled: false`` -> arbitrary ``searches[]`` -- and ended at fifteen
+real applications a day with no human approval. That trace was correct. The
+operator overruled the conclusion, not the trace, and NOT the protections. The
+escalation now LANDS at the config layer and is NEUTRALISED in Python:
 
-The two levers that CANNOT be tier C — ``candidate.skills`` and ``scoring``,
-which are the feature he asked for by name — are bounded instead: jobcore caps
-them, :data:`MIN_AGENT_FIT_FLOOR` floors the selector in Python whatever the
-file says, and :func:`requires_approval_cycle` forces one approval cycle after
-any scoring-fingerprint change, so "policy was quietly widened" becomes "he sees
-the list".
+1. :data:`MIN_AGENT_FIT_FLOOR` (=60) floors the selector in
+   ``agent._decide`` from ANY source, and again per search, so
+   ``min_fit_score: 0`` selects nothing under 60.
+2. The kill switch is re-checked inside the auto-apply loop itself.
+3. The daily quota caps candidates before ``_act`` ever runs, and
+   ``validate_agent_config`` bounds ``max_daily_applications`` to 1-100.
+4. Everything the file offers is re-validated through
+   ``validate_agent_config`` on load; an overlay that would break the agent is
+   dropped whole rather than half-applied.
+
+A sixth path ran through a sibling server entirely and never touched the agent
+block: writing every canonical skill into ``candidate.skills`` drives
+``|matched|/|job_skills|`` to 100 for every job in existence, which drives this
+server's agent. ``candidate.skills`` and ``scoring`` CANNOT be locked away --
+they are the feature he asked for by name -- so they are bounded instead:
+jobcore caps them, and :func:`requires_approval_cycle` forces one approval
+cycle after any change to the {scoring, candidate} fingerprint, so "policy was
+quietly widened" becomes "he sees the list".
+
+Note precisely what that last guard does and does not cover: the fingerprint is
+``policy_hash``, over ``scoring`` and ``candidate``. It does NOT include
+``servers.*``, so writing ``agent.mode: "auto"`` here does not itself force an
+approval cycle. Guards 1-4 above are what bound a file-armed agent.
+
+``naukri_server.agent.load_agent_config`` is where the six are merged, and it
+documents its own precedence: the shared file wins over ``agent_config.json``
+for those six, and for nothing else.
 
 ONE CALL, ONE POLICY
 --------------------
@@ -84,32 +105,38 @@ SERVER_NAME = "naukri"
 #: refused by name — no server widens a sibling's section.
 WRITABLE_SECTIONS = ("candidate", "scoring", f"servers.{SERVER_NAME}")
 
-#: The document's own envelope. jobcore's `default_document()` writes all four,
-#: and its unknown-key census then reports them as "keys nothing reads" — so
-#: EVERY legitimate file, including the one jobcore generates itself, carries a
-#: spurious decoy warning. Filtered here rather than surfaced, because a warning
-#: that fires on correct input trains people to ignore warnings. The real fix is
-#: one line upstream in jobcore; reported, not reached into from this repo.
-ENVELOPE_KEYS = frozenset({"config_version", "revision", "updated_at", "updated_by"})
-
 #: Keys under this server's section that the FILE does not decide, whatever it
 #: contains. Listed here as well as in jobcore's schema so a reader of this
 #: package can see the boundary without leaving it.
+#:
+#: The six agent keys that used to head this tuple were REMOVED on 2026-08-25:
+#: `agent.enabled`, `agent.mode`, `agent.min_fit_score`, `agent.searches`,
+#: `agent.per_search_limit` and `agent.blocklist.enabled` are now tier B and
+#: loadable. See this module's docstring for what bounds them instead, and
+#: `agent.FILE_DECIDABLE_KEYS` for the merge.
+#:
+#: What remains is the deny-by-default subtree, which did NOT change. Anything
+#: under `agent` that jobcore's schema does not explicitly name is still tier C
+#: and still refused -- omission is how the escalation opened. The one key named
+#: below is called out because it is the daily quota, which is one of the four
+#: Python protections: a guard whose value the same file can raise is worth
+#: less than one it cannot.
 NOT_LOADABLE = (
-    "agent.enabled",
-    "agent.mode",
-    "agent.min_fit_score",
-    "agent.searches",
-    "agent.per_search_limit",
-    "agent.blocklist.enabled",
-    # …and anything else under `agent` the schema does not explicitly name:
-    # omission is how the escalation opened, so the subtree denies by default.
+    "agent.max_daily_applications",
+)
+
+#: The subtree rule, as prose for the readout. Not a key name, so deliberately
+#: not in :data:`NOT_LOADABLE` -- that tuple holds paths a caller can match.
+SUBTREE_DENY = (
+    "Anything under servers.naukri.agent that jobcore's schema does not "
+    "explicitly name is tier C and refused on both load and write."
 )
 
 __all__ = [
     "MIN_AGENT_FIT_FLOOR",
     "NOT_LOADABLE",
     "SERVER_NAME",
+    "SUBTREE_DENY",
     "WRITABLE_SECTIONS",
     "bind",
     "invalidate",
@@ -208,9 +235,14 @@ def setting(path: str, default):
     behaviour. The type of the default is enforced: a string where a number
     belongs falls back rather than propagating into arithmetic.
 
-    Deliberately NOT usable for anything the agent's apply decision depends on
-    — those keys are not loadable at all (:data:`NOT_LOADABLE`) and this
-    function reads only what the loader produced, which never contains them.
+    NOT the way to read the agent's apply settings, even though six of them
+    ARE loadable now. This function returns a bare value with no floor, no
+    clamp and no validation; the agent's settings must come from
+    :func:`naukri_server.agent.load_agent_config`, which applies the
+    precedence, routes the file's values through ``validate_agent_config``,
+    and drops an overlay that would break the agent. Asking this function for
+    the agent's selector threshold would hand a caller the raw file value and
+    bypass the Python floor entirely, so nothing in this package does.
     """
     node = server_settings()
     for part in path.split("."):
@@ -419,18 +451,34 @@ def report(section: Optional[str] = None) -> dict:
     # Passing `display` down fixes both, and deleting the post-processing is
     # the load-bearing half: two renderers would drift apart, and the second
     # one is what discarded the error.
+    # The envelope filter that used to sit here is GONE, not lost. jobcore's
+    # `default_document()` stamps four envelope keys (config_version, revision,
+    # updated_at, updated_by) and its unknown-key census used to report them as
+    # "keys nothing reads", so every correctly generated file carried a
+    # spurious warning and this module filtered them back out. jobcore fixed it
+    # upstream in 97cfa79 with a read-side exemption in its own ENVELOPE_KEYS,
+    # which is the one place it belongs; a second filter here would now be a
+    # no-op that reads like a guard. Pinned by test_config_tool.py.
     out = snap.report(SERVER_NAME, display=display_path)
-    out["unknown_keys"] = [k for k in out.get("unknown_keys", ())
-                           if k not in ENVELOPE_KEYS]
     out["server_name"] = SERVER_NAME
     out["writable_sections"] = list(WRITABLE_SECTIONS)
     out["not_loadable_here"] = [f"servers.{SERVER_NAME}.{k}" for k in NOT_LOADABLE]
+    out["subtree_deny"] = SUBTREE_DENY
     out["min_agent_fit_floor"] = MIN_AGENT_FIT_FLOOR
     out["agent_authority"] = (
-        "The autonomous apply loop is configured by agent_config.json and "
-        "naukri_agent_update_config, never by this file. A tier-C key present "
-        "in the file is refused and listed in tier_c_refusals; the Python "
-        "value is used."
+        "This file CAN arm the autonomous apply loop: agent.enabled, "
+        "agent.mode, agent.min_fit_score, agent.searches, "
+        "agent.per_search_limit and agent.blocklist.enabled are tier B and "
+        "are merged by naukri_server.agent.load_agent_config, where the file "
+        "wins over agent_config.json. What it cannot do is get past the four "
+        f"Python guards: the selector floor of {MIN_AGENT_FIT_FLOOR} (applied "
+        "per cycle AND per search), the kill switch checked inside the "
+        "auto-apply loop, the daily quota that caps candidates before any "
+        "apply runs, and validate_agent_config, which re-checks every "
+        "file-sourced value and drops the whole overlay rather than "
+        "half-apply it. agent.max_daily_applications is not taken from this "
+        "file at all, and anything under agent the schema does not name is "
+        "still tier C, refused, and listed in tier_c_refusals."
     )
     if section:
         return {"status": "success", "section": section,

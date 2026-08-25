@@ -89,8 +89,38 @@ PACKAGE_TEXT = _package_text()
 NAUKRI_KEYS = _naukri_keys()
 
 
+AGENT_PREFIX = "servers.naukri.agent."
+
+
+def _agent_keys_read_from_the_file() -> frozenset:
+    """The agent keys naukri takes from the shared file, from the horse's mouth.
+
+    `agent.FILE_DECIDABLE_KEYS` IS the merge -- `load_agent_config` iterates it
+    -- so this is the authoritative answer, not an inference about one.
+    """
+    from naukri_server.agent import FILE_DECIDABLE_KEYS
+
+    return frozenset(FILE_DECIDABLE_KEYS)
+
+
 def _is_read(path: str) -> bool:
-    """Does the package name this key, relative to its own section?"""
+    """Does naukri read this key from the config file?
+
+    Two different questions, deliberately answered two different ways.
+
+    Under the agent subtree the answer is AUTHORITATIVE, never textual. The
+    text scan is a heuristic and it lied here the moment the six became
+    loadable: `naukri_server/policy.py` names
+    "agent.max_daily_applications" in NOT_LOADABLE -- a statement that the file
+    does NOT decide it -- and a substring search read that as evidence that it
+    DOES. A census that counts a refusal as a read is worse than no census, so
+    for this subtree the check asks `FILE_DECIDABLE_KEYS` instead.
+
+    Everywhere else the text scan stands: those keys are read through
+    `setting("<tail>", default)`, so the quoted tail really is the call site.
+    """
+    if path.startswith(AGENT_PREFIX):
+        return path[len(AGENT_PREFIX):] in _agent_keys_read_from_the_file()
     tail = path[len("servers.naukri."):]
     return bool(re.search(rf'["\']{re.escape(tail)}["\']', PACKAGE_TEXT))
 
@@ -125,41 +155,139 @@ class TestEveryDeclaredReaderIsReal:
         assert not _is_read("servers.naukri.a_key_that_does_not_exist")
         assert _is_read("servers.naukri.staleness.days")
 
+    def test_the_AGENT_branch_of_the_read_check_can_fail_too(self):
+        """CONTROL for the authoritative branch, which has its own way to lie.
 
-class TestTheAgentSubtreeStaysUnread:
-    """The exemption, asserted rather than assumed.
+        It must say YES to a key in FILE_DECIDABLE_KEYS and NO to a key that
+        merely appears in the package text under the agent prefix. The second
+        half is the regression that prompted the branch:
+        `agent.max_daily_applications` is named in `policy.NOT_LOADABLE` and
+        the old substring scan called that a read.
+        """
+        assert _is_read("servers.naukri.agent.mode")
+        assert not _is_read("servers.naukri.agent.max_daily_applications")
+        assert not _is_read("servers.naukri.agent.invented_key")
+        assert re.search(r'["\']agent\.max_daily_applications["\']',
+                         PACKAGE_TEXT), (
+            "the false positive this branch exists to kill must still be "
+            "present in the package text, or this control proves nothing"
+        )
 
-    These keys are tier C. naukri must NOT grow a reader for them: reading them
-    from the file is precisely the escalation the invariant test runs.
+
+class TestTheAgentSubtreeIsNamedNotOpen:
+    """The exemption INVERTED by the 2026-08-25 ruling, asserted not assumed.
+
+    Six keys are loadable, by name, and naukri really does read them. The
+    subtree around them is not open: everything else under `agent` is still
+    tier C with no reader, and that is the half the escalation opened through.
     """
 
-    @pytest.mark.parametrize("path", [
+    SIX = [
         "servers.naukri.agent.enabled",
         "servers.naukri.agent.mode",
         "servers.naukri.agent.min_fit_score",
         "servers.naukri.agent.searches",
         "servers.naukri.agent.per_search_limit",
         "servers.naukri.agent.blocklist.enabled",
-    ])
-    def test_key_is_tier_c_and_declares_no_reader(self, path):
+    ]
+
+    @pytest.mark.parametrize("path", SIX)
+    def test_key_is_loadable_declares_naukri_and_is_really_read(self, path):
         spec = SCHEMA[path]
-        assert spec.tier == TIER_C, (path, spec.tier)
-        assert spec.readers == (), (path, spec.readers)
-        assert not spec.loadable
+        assert spec.tier != TIER_C, (path, spec.tier)
+        assert spec.loadable, path
+        assert spec.readers == ("naukri",), (path, spec.readers)
+        assert _is_read(path), (
+            f"{path} is loadable and declares naukri as its reader; "
+            f"agent.FILE_DECIDABLE_KEYS must actually name it, or it is a "
+            f"decoy with a tier"
+        )
 
-    def test_naukris_policy_module_lists_them_as_not_loadable(self):
-        from naukri_server.policy import NOT_LOADABLE
+    def test_every_key_in_the_merge_is_loadable_and_declares_naukri(self):
+        """Direction 1: naukri's merge cannot name a key the schema strips.
 
-        for tail in ("agent.enabled", "agent.mode", "agent.min_fit_score",
+        `load_agent_config` iterates FILE_DECIDABLE_KEYS and reads each one out
+        of the loaded policy. A key the loader refuses would simply never
+        appear there, and the merge would silently do nothing for it.
+        """
+        from naukri_server.agent import FILE_DECIDABLE_KEYS
+
+        for tail in FILE_DECIDABLE_KEYS:
+            path = AGENT_PREFIX + tail
+            assert path in SCHEMA, path
+            assert SCHEMA[path].loadable, path
+            assert "naukri" in SCHEMA[path].readers, path
+
+    def test_no_agent_key_is_both_merged_and_deferred(self):
+        """Direction 2: "read" and "not yet wired" are exclusive claims.
+
+        NOT_YET_WIRED is the honest form of "declared but unread". A key in
+        both lists means one of them is lying, and the deferral list is where
+        excuses would go to retire.
+        """
+        from naukri_server.agent import FILE_DECIDABLE_KEYS
+
+        both = [AGENT_PREFIX + t for t in FILE_DECIDABLE_KEYS
+                if AGENT_PREFIX + t in NOT_YET_WIRED]
+        assert not both, both
+
+    def test_every_declared_agent_key_is_merged_or_deferred_by_name(self):
+        """Direction 3: no silent gap under the agent subtree.
+
+        Every agent key that declares naukri as a reader is either in the
+        merge or on the deferral list with a reason. This is the same census
+        the class above runs, restricted to the subtree the ruling touched, so
+        the NEXT agent key added cannot arrive unaccounted for.
+        """
+        from naukri_server.agent import FILE_DECIDABLE_KEYS
+
+        declared = [p for p in _naukri_keys() if p.startswith(AGENT_PREFIX)]
+        assert declared, "census found no agent keys at all"
+        unaccounted = [
+            p for p in declared
+            if p[len(AGENT_PREFIX):] not in FILE_DECIDABLE_KEYS
+            and p not in NOT_YET_WIRED
+        ]
+        assert not unaccounted, unaccounted
+
+    @pytest.mark.parametrize("path", [
+        "servers.naukri.agent.newly_invented_switch",
+        "servers.naukri.agent.deeply.nested.thing",
+        "servers.uplers.agent.enabled",
+    ])
+    def test_everything_else_under_agent_is_still_tier_c(self, path):
+        from jobcore.policy import tier_for
+
+        assert tier_for(path) == TIER_C, path
+
+    def test_naukris_policy_module_still_names_the_daily_quota(self):
+        """The six left NOT_LOADABLE; the quota did not.
+
+        It is one of the four Python guards that replaced the tier-C boundary,
+        and a guard whose value the same file can raise is worth less than one
+        it cannot.
+        """
+        from naukri_server.agent import FILE_DECIDABLE_KEYS
+        from naukri_server.policy import NOT_LOADABLE, SUBTREE_DENY
+
+        assert "agent.max_daily_applications" in NOT_LOADABLE
+        assert "max_daily_applications" not in FILE_DECIDABLE_KEYS
+        for gone in ("agent.enabled", "agent.mode", "agent.min_fit_score",
                      "agent.searches", "agent.per_search_limit",
                      "agent.blocklist.enabled"):
-            assert tail in NOT_LOADABLE, tail
+            assert gone not in NOT_LOADABLE, gone
+        assert "deny" in SUBTREE_DENY.lower() or "refused" in SUBTREE_DENY.lower()
 
     def test_the_policy_module_never_reaches_into_the_agent_block(self):
-        """`setting()` reads the loader's output, which by construction never
-        contains a tier-C value from the file — but a future helper could reach
-        past it. This pins that nothing in the package asks the CONFIG for the
-        agent's mode."""
+        """UNCHANGED, and more load-bearing now, not less.
+
+        `setting()` returns a bare value with no floor and no validation. Six
+        agent keys are loadable today, so a helper reaching for one THROUGH
+        this module would bypass `load_agent_config` -- and with it the Python
+        floor, the precedence and `validate_agent_config`. The one legitimate
+        reader is `agent.load_agent_config`; this pins that policy.py is not a
+        second one.
+        """
         src = (PKG / "policy.py").read_text(encoding="utf-8")
         assert 'setting("agent.' not in src
         assert "setting('agent." not in src

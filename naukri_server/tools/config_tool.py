@@ -114,11 +114,34 @@ async def naukri_set_config(
     Writes only `candidate`, `scoring` and `servers.naukri`. Dicts merge, lists
     replace, and a `null` leaf reverts that key to its shipped default.
 
-    CANNOT arm the autonomous agent: `agent.enabled`, `agent.mode`,
-    `agent.min_fit_score`, `agent.searches`, `agent.per_search_limit` and
-    `agent.blocklist.enabled` are not loadable from this file at all. Use
-    naukri_agent_update_config for those, and note that a Python floor still
-    bounds what the agent will enqueue whatever any file says.
+    CAN arm the autonomous agent, as of 2026-08-25. `agent.enabled`,
+    `agent.mode`, `agent.min_fit_score`, `agent.searches`,
+    `agent.per_search_limit` and `agent.blocklist.enabled` are tier B here:
+    writable, loadable, and merged by the agent with this file winning over
+    agent_config.json. Tightening any of them is free; LOOSENING one (arming
+    it, moving the mode, lowering the selector, adding searches, raising the
+    per-search limit, switching the blocklist off) needs confirm_widen=True.
+
+    Four Python guards bound what an armed agent can then do, and no value in
+    this file moves any of them:
+
+      - MIN_AGENT_FIT_FLOOR (60) floors the apply selector on every cycle and
+        again on every per-search override, so `min_fit_score: 0` here costs
+        display noise, never applications.
+      - The kill switch is re-checked inside the auto-apply loop, so a trip
+        halts the rest of the batch.
+      - The daily quota caps candidates before a single apply runs;
+        `agent.max_daily_applications` is NOT taken from this file.
+      - Every value this file supplies is re-checked by validate_agent_config
+        (mode enum, min_fit 0-100, quota 1-100, non-empty searches). An
+        overlay that fails is dropped WHOLE, never half-applied.
+
+    One guard that does NOT cover this block, stated so it is not assumed:
+    the forced approval cycle keys on the {scoring, candidate} fingerprint, so
+    writing `agent.mode: "auto"` here does not itself force an approval cycle.
+
+    Anything else under `agent` remains tier C and is refused on both load and
+    write; use naukri_agent_update_config for those.
 
     Args:
         patch: JSON object of changes, e.g.

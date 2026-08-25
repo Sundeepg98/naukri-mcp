@@ -55,6 +55,7 @@ async def _do_update(**kw) -> dict:
         notice_period=kw.get("notice_period"),
         expected_ctc=kw.get("expected_ctc"),
         current_ctc=kw.get("current_ctc"),
+        confirm=kw.get("confirm", False),
     )
 
 
@@ -83,19 +84,44 @@ async def naukri_update_profile(
     notice_period: Optional[str] = None,
     expected_ctc: Optional[float] = None,
     current_ctc: Optional[float] = None,
+    confirm: bool = False,
 ) -> dict:
-    """Update profile fields via browser UI.
+    """Update profile fields — 18 writable fields, browser modal or REST.
+
+    NOTHING IS WRITTEN BY A REST FIELD UNLESS confirm=True. The default
+    returns the exact body that would be sent, so it can be read first. A
+    call naming ONLY the three browser-modal shorthands below behaves as it
+    always has and needs no confirm.
+
+    A MIXED CALL WRITES NOTHING WITHOUT confirm -- not the REST half and not
+    the browser half. Partial application of a request the caller has not
+    approved is worse than refusing the whole of it.
+
+    THREE FIELDS ARE BROWSER-ONLY, and that is a route rather than a refusal:
+    `noticePeriod`, `currentCtc` and `expectedCtc` are owned by no section
+    spec, so the modal is the only measured way to write them.
+
+    NINE FIELDS ARE STILL REFUSED, by measurement rather than by choice:
+    locationPrefId, experience, absoluteCtc, name, gender, maritalStatus,
+    dateOfBirth, homeTown, pinCode. Naukri's REST API accepts them and does
+    not persist them; no section spec owns any of them. The error names them
+    separately from typos so a caller can tell "wrong spelling" from "the
+    platform will not keep this".
 
     Args:
-        fields: Dict of fields to change (resumeHeadline, keySkills, noticePeriod, etc.)
-        notice_period: Shorthand — "Serving Notice Period", "15 Days or less", "1 Month", etc.
-        expected_ctc: Shorthand — expected CTC in lakhs (e.g., 15)
-        current_ctc: Shorthand — current CTC in lakhs (e.g., 12)
+        fields: Dict of fields to change. 15 scalar fields across 4 sections,
+            plus the 3 browser-modal fields.
+        notice_period: Shorthand -- "Serving Notice Period", "15 Days or less", "1 Month".
+        expected_ctc: Shorthand -- expected CTC in lakhs (e.g., 15)
+        current_ctc: Shorthand -- current CTC in lakhs (e.g., 12)
+        confirm: Required to send any REST field. False returns a preview and
+            writes nothing.
     """
     return await handle_tool_action(
         lambda: _do_update(
             fields=fields, notice_period=notice_period,
             expected_ctc=expected_ctc, current_ctc=current_ctc,
+            confirm=confirm,
         ),
         "profile.update",
     )
@@ -245,18 +271,34 @@ async def naukri_restore_profile_section(
           row, which is the shape of undoing the write this snapshot was
           taken for.
 
-    WHAT IT REFUSES RATHER THAN HALF-DOING:
-        - the one-row-per-call collections (employments, educations, schools,
-          itskills, projects, certifications). It returns status
-          "unsupported", names the row ids that differ, and writes NOTHING.
-          Restore those one at a time with naukri_update_profile_section,
-          passing each row's id field.
-        - any restore that would need more than one write. A partial restore
-          reported as success is worse than a refusal.
+    MULTI-ROW RESTORE IS BUILT, AND IT IS NOT ATOMIC. The one-row-per-call
+    collections (employments, educations, schools, itskills, projects,
+    certifications) and any restore spanning several rows are now performed
+    row by row, in id order, STOPPING at the first row that does not land.
+    That used to return "unsupported" and write nothing; the limit was the
+    transaction shape, never the platform's reach.
 
-    A ROW DELETED ON NAUKRI.COM CANNOT BE RECREATED WITH ITS ORIGINAL ID.
-    Re-sending it creates a NEW row with a NEW id, and anything that
-    referenced the old id still points at nothing.
+    BECAUSE IT IS NOT ATOMIC, THE RESULT IS PER-ROW, and four outcomes exist
+    rather than three, because three would have to lie about one of them:
+        - `landed`        -- written and verified
+        - `not_sent`      -- refused before dispatch; the ONLY outcome that
+                             certifies nothing reached Naukri
+        - `unknown`       -- dispatched, unconfirmed. A transport failure
+                             cannot prove the server did not apply it, and
+                             calling that "failed" would be a guess
+        - `not_attempted` -- after an earlier row stopped the run
+    `updated` is true only if every planned row landed AND nothing was
+    skipped. A partial restore is never reported as a success.
+
+    WHAT IT STILL REFUSES, and this is reach rather than shape:
+        - a row DELETED on naukri.com cannot come back with its identity
+          (re-sending makes a new id, and anything referencing the old one
+          still points at nothing)
+        - a row ADDED since the snapshot cannot be removed -- that needs the
+          `X-HTTP-Method-Override: DELETE` route, which this path does not
+          implement
+        Both are skipped by name, and their presence alone keeps the result
+        off `updated`.
 
     Args:
         snapshot: the `file` name from naukri_list_profile_snapshots.

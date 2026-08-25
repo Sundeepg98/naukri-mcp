@@ -11,6 +11,9 @@ from naukri_server.config import (
     BROWSER_DOM_SETTLE, BROWSER_MODAL_APPEAR, BROWSER_FORM_SAVE, BROWSER_PAGE_LOAD,
     BROWSER_PAGE_SETTLE,
 )
+from naukri_server.tools.profile_sections import (
+    SCALAR_ALLOWED_FIELDS, write_section,
+)
 from naukri_server.tools.profile_write import fullprofiles_write
 
 
@@ -92,17 +95,81 @@ async def _click_save_modal(page) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Updatable field sets
+# Updatable field sets -- TWO ROUTES BEHIND ONE FRONT DOOR
+#
+# What this tool refused, and why the refusal was stale
+# -----------------------------------------------------
+# Until this change `UPDATABLE_FIELDS` held five names and the tool rejected
+# every other field at the front door. A second refusal further down
+# ("Browser UI update not yet supported for: ...") could never fire at all:
+# it caught fields that were not browser-handled, but the front-door gate had
+# already rejected everything outside the browser-handled five, so the set it
+# tested was provably empty. The reachable refusal was the FIELD SET, not the
+# message.
+#
+# And the field set was stale against this repo's own capability.
+# ``tools/profile_write.py`` owns a working fullprofiles v1 write route and
+# ``tools/profile_sections.py`` writes SIXTEEN sections through it. Four of
+# those are scalar-field sections, and between them they own 15 writable
+# profile fields -- 13 of which this tool refused.
+#
+# THE SPLIT, and why it is not arbitrary
+# --------------------------------------
+# BROWSER_SUPPORTED_FIELDS keep the browser modal as their route of record.
+# Nothing about their behaviour changes here. Three of them -- noticePeriod,
+# currentCtc, expectedCtc -- have no alternative: no SectionSpec in
+# profile_sections.py owns them, so the browser modal is the ONLY measured
+# route this server has to those three. The other two (resumeHeadline,
+# keySkills) exist on both routes, and stay on the browser one because the
+# keySkills handler carries chip-merge and 250-char validation the REST body
+# does not, and because a working path is not worth re-routing for symmetry.
+#
+# REST_SCALAR_FIELDS is DERIVED from the section layer's own spec table rather
+# than re-typed here, so this set cannot drift away from it: add a field there
+# and this tool can write it, delete one and this tool stops offering it.
 # ---------------------------------------------------------------------------
 
-UPDATABLE_FIELDS = {
-    "resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc",
-    # These fields are accepted by the REST API but may not persist:
-    # "summary", "locationPrefId", "experience", "absoluteCtc", "absoluteExpectedCtc",
-    # "name", "gender", "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
+#: Fields whose route of record is the browser edit modal. Unchanged.
+BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
+
+#: field -> the scalar section that owns it. Derived, never re-typed.
+REST_FIELD_SECTION = {
+    field: section
+    for section, owned in SCALAR_ALLOWED_FIELDS.items()
+    for field in owned
 }
 
-BROWSER_SUPPORTED_FIELDS = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
+#: Every field reachable through the verified REST section write.
+REST_SCALAR_FIELDS = frozenset(REST_FIELD_SECTION)
+
+#: Fields whose ONLY measured route is the browser modal.
+BROWSER_ONLY_FIELDS = frozenset(BROWSER_SUPPORTED_FIELDS - REST_SCALAR_FIELDS)
+
+UPDATABLE_FIELDS = set(BROWSER_SUPPORTED_FIELDS) | set(REST_SCALAR_FIELDS)
+
+#: STILL REFUSED, on purpose. These nine were carried in this file as a
+#: commented-out list annotated "accepted by the REST API but may not
+#: persist". They are refused rather than sent, and this is the measurement
+#: behind that: no SectionSpec in tools/profile_sections.py owns any of them,
+#: and that spec table is traced field by field to Naukri's own shipped editor
+#: bundle mnj_v320.min.js with byte offsets. A field the editor never sends has
+#: no measured write route, and this module will not invent one. The note they
+#: arrived with says the rest out loud -- "accepted ... but may not persist" is
+#: exactly a write that would report success without having happened, which is
+#: the one outcome every rail in this subsystem exists to prevent.
+NO_WRITE_ROUTE_FIELDS = frozenset({
+    "locationPrefId", "experience", "absoluteCtc", "name", "gender",
+    "maritalStatus", "dateOfBirth", "homeTown", "pinCode",
+})
+
+NO_WRITE_ROUTE_REASON = (
+    "no SectionSpec in tools/profile_sections.py owns it. That spec table is "
+    "traced field by field to Naukri's shipped editor bundle mnj_v320.min.js, "
+    "so a field the editor never sends has no measured write route and this "
+    "server will not guess one. These were previously recorded here as "
+    "'accepted by the REST API but may not persist' -- accepted-but-not-"
+    "persisted is a write that reports success without happening."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -571,18 +638,204 @@ async def _open_career_profile_modal(page) -> str | None:
     return edit_clicked
 
 
+# ---------------------------------------------------------------------------
+# The REST leg: scalar sections written through the verified section layer
+# ---------------------------------------------------------------------------
+
+def _reject_unknown(unknown: set) -> dict:
+    """A VALIDATION_ERROR that says WHY, per field, not just "unknown".
+
+    Two different things get rejected here and they deserve different answers:
+    a field this server measured and DECLINED to write (see
+    ``NO_WRITE_ROUTE_FIELDS``), and a name that is simply not a profile field.
+    Collapsing both into "Unknown fields:" is what made the previous refusal
+    unreadable -- a caller could not tell a typo from a policy.
+    """
+    declined = sorted(f for f in unknown if f in NO_WRITE_ROUTE_FIELDS)
+    unrecognised = sorted(f for f in unknown if f not in NO_WRITE_ROUTE_FIELDS)
+
+    parts = []
+    if declined:
+        parts.append(
+            "Refused on purpose: %s -- %s"
+            % (", ".join(declined), NO_WRITE_ROUTE_REASON))
+    if unrecognised:
+        parts.append(
+            "Not a writable profile field: %s. Writable here: %s. Row "
+            "collections (employments, educations, schools, itskills, "
+            "projects, certifications, languages, onlineProfiles, "
+            "workSamples, presentations, publications, patents) are written "
+            "one row at a time with naukri_update_profile_section, because a "
+            "row needs its id and a flat field dict has nowhere to put one."
+            % (", ".join(unrecognised), ", ".join(sorted(UPDATABLE_FIELDS))))
+
+    return {"status": "error", "error_code": "VALIDATION_ERROR",
+            "message": " | ".join(parts)}
+
+
+def _plan_rest_writes(rest_fields: dict) -> list:
+    """Group the REST-routed fields into one write per OWNING section.
+
+    Sorted, so the order a caller sees in a preview is the order the writes
+    actually run in. Two fields of the same section travel in one write; two
+    fields of different sections cannot, because the section name is the only
+    thing that scopes a scalar write (all four scalar sections share the
+    ``profile`` envelope, and ``write_section`` refuses a stray field).
+    """
+    by_section = {}
+    for name in sorted(rest_fields):
+        by_section.setdefault(REST_FIELD_SECTION[name], {})[name] = rest_fields[name]
+    return [(section, by_section[section]) for section in sorted(by_section)]
+
+
+def classify_section_write(result: dict) -> str:
+    """Turn one ``write_section`` reply into an honest per-unit outcome.
+
+    FOUR VALUES, because three would have to lie about one of these cases:
+
+    ``landed``      ``write_section`` re-read the profile and SAW the change.
+    ``landed_with_collateral``  the intended change landed AND something else
+                    in that section moved. The snapshot in the unit is the way
+                    back; this is never reported as a plain success.
+    ``not_sent``    refused before the transport (VALIDATION_ERROR). This is
+                    the only outcome that certifies nothing reached Naukri.
+    ``unknown``     dispatched, or possibly dispatched, and NOT confirmed --
+                    a transport exception (which cannot prove the server did
+                    not apply it) or NOT_PERSISTED (accepted, then invisible
+                    in the re-read). It must never be reported as a success
+                    and must never be reported as "nothing happened" either.
+    """
+    status = result.get("status")
+    if status == "updated":
+        return "landed"
+    if status == "preview":
+        return "preview"
+    code = result.get("error_code")
+    if code == "COLLATERAL_CHANGE":
+        return "landed_with_collateral"
+    if code == "VALIDATION_ERROR":
+        return "not_sent"
+    return "unknown"
+
+
+def _unit(section: str, fields: dict, result: dict) -> dict:
+    """One row of the per-unit report. Carries what a caller must act on."""
+    return {
+        "route": "rest_section_write",
+        "section": section,
+        "fields": sorted(fields),
+        "outcome": classify_section_write(result),
+        "status": result.get("status"),
+        "error_code": result.get("error_code"),
+        "verified": result.get("verified"),
+        "snapshot": result.get("snapshot"),
+        "would_send": result.get("would_send"),
+        "collateral": result.get("collateral"),
+        "message": result.get("message"),
+    }
+
+
+async def _run_rest_writes(plan: list, confirm: bool) -> dict:
+    """Run the planned section writes SEQUENTIALLY. NOT ATOMIC.
+
+    There is no transaction across two fullprofiles writes and no rollback, so
+    this does the only honest thing available: it runs them in a fixed order,
+    STOPS at the first unit that does not land, and reports every unit by name
+    with what happened to it. Units after the stop are reported
+    ``not_attempted`` rather than silently omitted -- a caller that cannot see
+    the difference between "did not run" and "ran and failed" will eventually
+    trust a half-written profile.
+
+    Returns ``{units, landed, incomplete}``. ``incomplete`` is True the moment
+    any unit is anything but ``landed``, and the caller must not report success
+    when it is set.
+    """
+    units, landed = [], []
+    stopped = False
+
+    for section, section_fields in plan:
+        if stopped:
+            units.append({
+                "route": "rest_section_write", "section": section,
+                "fields": sorted(section_fields), "outcome": "not_attempted",
+                "status": None,
+                "message": "Not attempted: an earlier write in this call did "
+                           "not land, so this one was never sent.",
+            })
+            continue
+        try:
+            result = await write_section(
+                section=section, fields=section_fields, confirm=confirm,
+                label="pre-update-%s" % section,
+            )
+        except Exception as e:  # noqa: BLE001 - one bad unit must not hide the rest
+            logger.warning("Section write %r raised: %s: %s",
+                           section, type(e).__name__, e)
+            result = {
+                "status": "error", "error_code": "API_ERROR",
+                "message": "Section write raised before it could be verified, "
+                           "so whether Naukri applied it is UNKNOWN: %s: %s"
+                           % (type(e).__name__, e),
+            }
+        unit = _unit(section, section_fields, result)
+        units.append(unit)
+        if unit["outcome"] in ("landed", "preview"):
+            landed.append(section)
+        else:
+            stopped = True
+
+    incomplete = any(u["outcome"] not in ("landed", "preview") for u in units)
+    return {"units": units, "landed": landed, "incomplete": incomplete}
+
+
 async def _update_profile(
     fields: dict,
     notice_period: Optional[str] = None,
     expected_ctc: Optional[float] = None,
     current_ctc: Optional[float] = None,
+    confirm: bool = False,
 ) -> dict:
-    """Update Naukri profile fields via browser UI automation (internal helper).
+    """Update Naukri profile fields. Two routes, one front door.
 
-    Dispatches to field-specific handlers:
-      - _update_headline / _update_key_skills: standalone modal per field
-      - _update_notice_period / _update_current_ctc / _update_expected_ctc:
-        share the Career Profile modal (opened once, saved once)
+    THE BROWSER ROUTE (resumeHeadline, keySkills, noticePeriod, expectedCtc,
+    currentCtc) is unchanged, gate included: a call naming ONLY these five
+    behaves exactly as it always has and does not need ``confirm``. Three of
+    them have no other route -- no SectionSpec owns noticePeriod, currentCtc
+    or expectedCtc, so the modal is the only measured way to write them.
+
+    THE REST ROUTE reaches every scalar field ``tools/profile_sections.py``
+    can write (summary, and the twelve careerPreferences fields), through
+    ``write_section`` rather than around it. That means each one inherits, not
+    re-implements, the four rails: its own pre-write snapshot, the post-write
+    RE-READ that decides ``verified``, the collateral detector, and the
+    confirm gate.
+
+    ``confirm`` GATES EVERY REST FIELD. A call naming even one of them writes
+    NOTHING unless ``confirm=True`` -- not the REST part and not the browser
+    part -- and returns the exact body each write would send. The browser
+    fields cannot be shown as a body (they are DOM form edits, not a payload),
+    so the preview names them and their values instead and says so.
+
+    NOT ATOMIC, and it says so in the result. Two REST sections are two
+    writes; a REST leg plus a browser leg is two legs. There is no rollback on
+    naukri.com. So the reply carries a per-unit report and the status is
+    ``partial`` -- never ``updated`` -- whenever any unit did not land. A unit
+    that was dispatched and could not be confirmed is reported ``unknown``,
+    which is neither a success nor a "nothing happened".
+
+    Args:
+        fields: field -> value. See ``UPDATABLE_FIELDS``.
+        notice_period, expected_ctc, current_ctc: shorthands merged into
+            ``fields``.
+        confirm: required (True) to write anything when a REST field is named.
+            Ignored for a browser-only call, which keeps its original
+            behaviour.
+
+    Returns:
+        Browser-only call: the original shape -- ``{status: "updated",
+        method: "browser_ui", updated_fields, api_confirmed, message}``.
+        Any call naming a REST field: ``{status: preview|updated|partial|
+        error, atomic: False, units: [...], updated_fields, ...}``.
     """
     # Import caches here to avoid circular imports
     from naukri_server.tools.profile import _profile_ttl_cache, _dashboard_ttl_cache
@@ -599,13 +852,207 @@ async def _update_profile(
 
     unknown = set(fields.keys()) - UPDATABLE_FIELDS
     if unknown:
+        return _reject_unknown(unknown)
+
+    browser_fields = {k: v for k, v in fields.items()
+                      if k in BROWSER_SUPPORTED_FIELDS}
+    rest_fields = {k: v for k, v in fields.items()
+                   if k not in BROWSER_SUPPORTED_FIELDS}
+
+    plan = _plan_rest_writes(rest_fields)
+
+    if rest_fields and not confirm:
+        preview = await _run_rest_writes(plan, confirm=False)
+        # A preview unit that did not come back `preview` was REFUSED by the
+        # section layer -- a controlled-vocabulary field passed as a bare
+        # string, say. Saying "2 writes would run" when one of them will be
+        # rejected makes the preview a worse description of the confirmed run
+        # than it has to be, and the preview is the thing being approved.
+        blocked = [u["section"] for u in preview["units"]
+                   if u["outcome"] not in ("preview", "not_attempted")]
         return {
-            "status": "error",
-            "message": f"Unknown fields: {', '.join(sorted(unknown))}. "
-                       f"Supported: {', '.join(sorted(UPDATABLE_FIELDS))}",
-            "error_code": "VALIDATION_ERROR",
+            "status": "preview",
+            "written": False,
+            "atomic": False,
+            "confirm_required_because": sorted(rest_fields),
+            "blocked_by": blocked,
+            "would_write_everything_asked": not blocked,
+            "units": preview["units"],
+            "browser_fields_that_would_be_edited": sorted(browser_fields),
+            "browser_field_values": {k: browser_fields[k]
+                                     for k in sorted(browser_fields)},
+            "message": (
+                "NOTHING WAS WRITTEN. %d REST section write(s) would run in "
+                "the order shown, each body exactly as given in `would_send`, "
+                "and they are NOT atomic -- a later one can fail after an "
+                "earlier one has landed.%s %s Re-run with confirm=True to send "
+                "them."
+                % (len(plan),
+                   ("" if not blocked else
+                    " WARNING: %s would be REFUSED by the section layer before "
+                    "reaching Naukri (see that unit's message), and the run "
+                    "stops there, so the writes after it would not happen."
+                    % ", ".join(blocked)),
+                   ("Then %d browser field(s) would be edited through the "
+                    "profile edit modals: %s. A modal edit has no request "
+                    "body to show, so those are named here with the values "
+                    "that would be typed in, not previewed as a payload."
+                    % (len(browser_fields), ", ".join(sorted(browser_fields))))
+                   if browser_fields else
+                   "No browser fields are involved in this call.")),
         }
 
+    rest = await _run_rest_writes(plan, confirm=True) if plan else None
+    updated_fields = ([f for section, sf in plan
+                       if section in rest["landed"] for f in sorted(sf)]
+                      if rest else [])
+
+    if rest and rest["incomplete"]:
+        # Do not open a browser on top of a REST leg that did not complete.
+        return {
+            "status": "partial" if rest["landed"] else "error",
+            "error_code": None if rest["landed"] else "PARTIAL_WRITE",
+            "written": bool(rest["landed"]),
+            "atomic": False,
+            "units": rest["units"],
+            "updated_fields": updated_fields,
+            "browser_fields_not_attempted": sorted(browser_fields),
+            "message": (
+                "%d of %d section write(s) landed and the run STOPPED there; "
+                "the browser leg (%s) was not attempted. Read `units`: each "
+                "one carries its own outcome and, where a write was taken, "
+                "the `snapshot` to restore from. An `unknown` outcome means "
+                "the write was dispatched and could NOT be confirmed -- treat "
+                "it as neither done nor undone and re-read the profile."
+                % (len(rest["landed"]), len(plan),
+                   ", ".join(sorted(browser_fields)) or "none")),
+        }
+
+    # --- the browser leg, called from exactly ONE place --------------------
+    # It is one call site and the emit below is one emit site ON PURPOSE:
+    # tests/test_read_path_purity.py freezes the census of every event emitter
+    # as (file, function, event), so ProfileUpdated has to stay lexically
+    # inside a function named `_update_profile` in this module. That is why
+    # `_browser_update` returns its result and does not emit.
+    browser_result = (await _browser_update(browser_fields)
+                      if browser_fields else None)
+    if browser_result is not None and browser_result.get("status") == "updated":
+        # Invalidate on any completed browser run, exactly as the original did
+        # -- including a keySkills no-op, where updated_fields is empty.
+        _profile_ttl_cache.invalidate()
+        _dashboard_ttl_cache.invalidate()
+    if browser_result and browser_result.get("updated_fields"):
+        try:
+            from naukri_server.events import event_bus, ProfileUpdated
+            await event_bus.emit(ProfileUpdated(
+                fields=", ".join(browser_result["updated_fields"]),
+                method="browser_ui",
+            ))
+        except Exception:
+            pass
+
+    if rest is None:
+        # Browser-only call: the original shape, unchanged.
+        return browser_result
+
+    if browser_result is None:
+        _profile_ttl_cache.invalidate()
+        _dashboard_ttl_cache.invalidate()
+        return {
+            "status": "updated",
+            "method": "rest_section_write",
+            "atomic": False,
+            "units": rest["units"],
+            "updated_fields": updated_fields,
+            "message": "Wrote %d section(s) through the verified REST route "
+                       "and confirmed each one in a fresh read: %s."
+                       % (len(plan), ", ".join(updated_fields)),
+        }
+
+    browser_unit = {
+        "route": "browser_ui",
+        "fields": sorted(browser_fields),
+        "outcome": ("landed" if browser_result.get("status") == "updated"
+                    else "unknown"),
+        "status": browser_result.get("status"),
+        "error_code": browser_result.get("error_code"),
+        "updated_fields": list(browser_result.get("updated_fields") or []),
+        "message": browser_result.get("message"),
+    }
+    all_units = rest["units"] + [browser_unit]
+    updated_fields = updated_fields + browser_unit["updated_fields"]
+
+    if browser_unit["outcome"] != "landed":
+        return {
+            "status": "partial",
+            "written": True,
+            "atomic": False,
+            "units": all_units,
+            "updated_fields": updated_fields,
+            "message": (
+                "The REST leg landed (%s) and the browser leg did NOT "
+                "complete. The profile is part-way: %s. A browser modal that "
+                "fails after an earlier modal saved leaves those earlier "
+                "fields written, so `updated_fields` is what is KNOWN to have "
+                "landed, not a guess. The REST sections carry a `snapshot` "
+                "each."
+                % (", ".join(rest["landed"]),
+                   browser_result.get("message") or "no detail returned")),
+        }
+
+    return {
+        "status": "updated",
+        "method": "rest_section_write+browser_ui",
+        "atomic": False,
+        "units": all_units,
+        "updated_fields": updated_fields,
+        "api_confirmed": browser_result.get("api_confirmed"),
+        "message": "Wrote %d section(s) through the verified REST route and "
+                   "%d field(s) through the browser modals. Fields: %s."
+                   % (len(plan), len(browser_unit["updated_fields"]),
+                      ", ".join(updated_fields)),
+    }
+
+
+def _partial_browser_error(error: dict, ui_updated: list) -> dict:
+    """A browser-leg error that admits what had ALREADY been saved.
+
+    The modal sequence is a run of independent Saves. When the third one
+    fails, the first two are ON THE PROFILE -- there is no rollback and no
+    transaction. The path this replaces returned the bare handler error and
+    dropped ``ui_updated`` on the floor, so a resumeHeadline that saved
+    followed by a keySkills failure came back as a plain error with nothing in
+    it saying the headline had changed. A caller reading that error would
+    reasonably conclude the profile was untouched.
+
+    ``status`` stays ``error`` so no existing caller's branch changes;
+    ``updated_fields`` and ``partial`` are added beside it.
+    """
+    if not ui_updated:
+        return error
+    out = dict(error)
+    out["partial"] = True
+    out["updated_fields"] = list(ui_updated)
+    out["message"] = (
+        "%s -- BUT %d field(s) had ALREADY been saved before this failed and "
+        "are on the profile now: %s. Each browser modal saves on its own; "
+        "there is no rollback."
+        % (error.get("message", "Browser update failed"),
+           len(ui_updated), ", ".join(ui_updated)))
+    return out
+
+
+async def _browser_update(fields: dict) -> dict:
+    """The browser-modal leg. Behaviour unchanged from before the REST split.
+
+    Split out of ``_update_profile`` so a REST failure never opens a browser
+    tab, and so the modal path keeps exactly one caller. The ONE thing that
+    changed: when a handler fails partway, the error now carries
+    ``updated_fields`` naming the modals that had ALREADY saved. It used to
+    return the bare handler error and drop that list, so a headline that saved
+    followed by a keySkills failure reported a plain error and nothing said the
+    headline had changed.
+    """
     # WHY THE BROWSER HERE -- and what the 405 does NOT say.
     # The note this replaces read: the fullprofiles endpoint rejects all
     # external API calls (405 from CDN), only the React app's own XHR works.
@@ -613,16 +1060,28 @@ async def _update_profile(
     # wrong. Naukri's own shipped editor bundle mnj_v320.min.js (848718
     # bytes) writes to the fullprofiles v1 route at bundle offset 44671, as a
     # POST carrying `X-HTTP-Method-Override: PUT`. tools/profile_write.py owns
-    # that transport; tools/profile_sections.py writes ten sections through
-    # it, and _boost_visibility below now uses it too.
+    # that transport; tools/profile_sections.py writes SIXTEEN sections
+    # through it (its own module docstring still says ten -- counted off
+    # SECTION_SPECS: 4 scalar + 6 single-row + 6 whole-list), and
+    # _boost_visibility below uses it too.
     # What the 405 actually shows: a live GET to all three fullprofiles
     # versions returns 405 with NO `Allow` header and a byte-identical
     # 92-byte body. It says only that GET is not allowed -- it does not even
     # prove which versions are routed, let alone anything about POST.
-    # This function stays on the browser UI because its five fields are modal
-    # form edits (noticePeriod/currentCtc/expectedCtc share one Career
-    # Profile modal), not because the REST route is closed:
+    # These five fields stay on the browser UI because they are modal form
+    # edits (noticePeriod/currentCtc/expectedCtc share one Career Profile
+    # modal) and because THREE OF THEM HAVE NO REST ROUTE AT ALL: no
+    # SectionSpec owns noticePeriod, currentCtc or expectedCtc. Not because
+    # the REST route is closed -- _update_profile now uses it for every scalar
+    # field the section layer can write.
     # navigate to profile -> click edit -> modify form fields -> click save.
+    #
+    # Track which fields were updated via UI. Declared OUTSIDE the try so the
+    # catch-all at the bottom can still report what had already saved: a modal
+    # sequence that throws halfway has written the modals it already saved,
+    # and an error that drops that list teaches the caller the profile is
+    # untouched when it is not.
+    ui_updated = []
     async with browser.page_pool.acquire() as page:
         try:
             await page_goto(page, f"{NAUKRI_BASE}/mnjuser/profile")
@@ -631,8 +1090,6 @@ async def _update_profile(
             if "/nlogin" in page.url:
                 return {"status": "error", "message": "Not logged in. Call naukri_login first.", "error_code": "AUTH_ERROR"}
 
-            # Track which fields were updated via UI
-            ui_updated = []
             api_confirmed = {}
 
             async def on_response(response):
@@ -649,7 +1106,7 @@ async def _update_profile(
                     handler = _STANDALONE_HANDLERS[field_name]
                     result = await handler(page, fields[field_name])
                     if result.get("status") == "error":
-                        return result
+                        return _partial_browser_error(result, ui_updated)
                     if result.get("status") == "success":
                         # keySkills handler tracks whether anything actually changed
                         if field_name == "keySkills" and not result.get("changed", True):
@@ -665,57 +1122,43 @@ async def _update_profile(
                 if career_fields:
                     edit_clicked = await _open_career_profile_modal(page)
                     if not edit_clicked:
-                        return {
+                        return _partial_browser_error({
                             "status": "error",
                             "message": "Could not find edit button for Career Profile section "
                                        "(needed for noticePeriod/expectedCtc/currentCtc)",
                             "error_code": "BROWSER_ERROR",
-                        }
+                        }, ui_updated)
                     await asyncio.sleep(BROWSER_MODAL_APPEAR)
 
+                    # The three career fields SHARE one modal and one Save, so
+                    # nothing they set is written until that Save lands. They
+                    # are therefore staged, not appended -- appending them here
+                    # would name a field as updated on a run where the Save
+                    # below never happened.
+                    staged = []
                     for field_name in ("noticePeriod", "currentCtc", "expectedCtc"):
                         if field_name not in career_fields:
                             continue
                         handler = _CAREER_FIELD_HANDLERS[field_name]
                         result = await handler(page, career_fields[field_name])
                         if result.get("status") == "error":
-                            return result
+                            return _partial_browser_error(result, ui_updated)
                         if result.get("status") == "success":
-                            ui_updated.append(field_name)
+                            staged.append(field_name)
 
                     # Click save on the Career Profile modal (shared save)
                     save_result = await _click_save_modal(page)
                     if not save_result:
-                        return {"status": "error", "message": "Career Profile modal opened but Save button not found", "error_code": "NOT_FOUND"}
+                        return _partial_browser_error(
+                            {"status": "error",
+                             "message": "Career Profile modal opened but Save button not found",
+                             "error_code": "NOT_FOUND"},
+                            ui_updated)
                     await asyncio.sleep(BROWSER_FORM_SAVE)
-
-                # Check for any remaining unsupported fields
-                all_browser_handled = {"resumeHeadline", "keySkills", "noticePeriod", "expectedCtc", "currentCtc"}
-                unsupported = [k for k in fields.keys() if k not in all_browser_handled]
-                if unsupported and not ui_updated:
-                    return {
-                        "status": "error",
-                        "message": f"Browser UI update not yet supported for: {', '.join(unsupported)}. "
-                                   f"Currently supported: {', '.join(sorted(all_browser_handled))}",
-                        "error_code": "VALIDATION_ERROR",
-                    }
+                    ui_updated.extend(staged)
 
             finally:
                 page.remove_listener("response", on_response)
-
-            _profile_ttl_cache.invalidate()
-            _dashboard_ttl_cache.invalidate()
-
-            # Emit ProfileUpdated event
-            if ui_updated:
-                try:
-                    from naukri_server.events import event_bus, ProfileUpdated
-                    await event_bus.emit(ProfileUpdated(
-                        fields=", ".join(ui_updated),
-                        method="browser_ui",
-                    ))
-                except Exception:
-                    pass
 
             return {
                 "status": "updated",
@@ -725,7 +1168,11 @@ async def _update_profile(
                 "message": f"Profile updated via browser UI. Fields: {', '.join(ui_updated)}",
             }
         except Exception as e:
-            return {"status": "error", "message": f"Profile update failed: {type(e).__name__}: {e}", "error_code": "API_ERROR"}
+            return _partial_browser_error(
+                {"status": "error",
+                 "message": f"Profile update failed: {type(e).__name__}: {e}",
+                 "error_code": "API_ERROR"},
+                ui_updated)
 
 
 async def _boost_visibility(randomize: bool = False) -> dict:

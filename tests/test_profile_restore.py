@@ -49,6 +49,19 @@ def _employment(row_id, org, designation="Engineer"):
             "organization": org, "designation": designation}
 
 
+def _education(row_id, course, institute=None):
+    """An education row. `entityInstitute` is a CONTROLLED-VOCABULARY field:
+    the editor sends `{"id": .., "value": ..}` and the section layer refuses a
+    bare string, because the API accepts one and then ignores it. Passing a
+    string here is how a test produces a row that is refused BEFORE the wire.
+    """
+    row = {"educationId": row_id, "profileId": PROFILE_ID,
+           "course": course, "yearOfCompletion": "2016"}
+    if institute is not None:
+        row["entityInstitute"] = institute
+    return row
+
+
 def _profile(summary=CANARY, headline="Old headline",
              languages=None, employments=None):
     """A profile in the READ shape the API actually returns.
@@ -78,16 +91,36 @@ class FakeNaukri:
 
     `writes` is the point of the class: every "nothing was written" assertion
     is made against this list, not against a returned status.
+
+    TWO FAILURE INJECTORS, because a row-by-row restore has to be shown
+    surviving the two ways a write goes wrong, and they are NOT the same:
+
+    `raise_on_write`  the transport throws. The server may or may not have
+                      applied it, so the honest outcome is `unknown`.
+    `swallow_write`   the write returns 200 and changes NOTHING. This is the
+                      case the whole verify-by-re-read rail exists for, and it
+                      must also come back `unknown` -- never a success.
     """
 
     def __init__(self, profile):
         self.profile = deepcopy(profile)
         self.writes = []
+        #: 1-based index of the write that should throw. None = never.
+        self.raise_on_write = None
+        #: 1-based index of the write that is accepted and then discarded.
+        self.swallow_write = None
 
     async def get(self, url, params=None):
         return deepcopy(self.profile)
 
     async def write(self, body, profile_id=None):
+        attempt = len(self.writes) + 1
+        if self.raise_on_write == attempt:
+            self.writes.append(deepcopy(body))
+            raise RuntimeError("transport exploded on write %d" % attempt)
+        if self.swallow_write == attempt:
+            self.writes.append(deepcopy(body))
+            return {"status": "success"}  # accepted, applied to nothing
         self.writes.append(deepcopy(body))
         for key, value in body.items():
             if key == "profile":
@@ -230,27 +263,56 @@ class TestScalarRestoreRoutesThroughTheWriteGate:
 
 
 # ---------------------------------------------------------------------------
-# CONTROL 3 - a one-row-per-call collection refuses, and names the rows
+# CONTROL 3 - a one-row-per-call collection is RESTORED, row by row
+#
+# This class used to assert the opposite: that every row collection refused.
+# That refusal was a transaction SHAPE ("write_section sends one row per
+# call"), not a limit on what the write route could reach, and the ruling of
+# 2026-08-25 is that a shape limit gets built, not declined. What survives
+# from the old contract is the part that was never about shape: a row deleted
+# on naukri.com still cannot come back with its identity, and that is still
+# refused BY NAME.
 # ---------------------------------------------------------------------------
 
-class TestRowCollectionsAreRefusedByName:
-    async def test_it_reports_unsupported_and_names_the_differing_ids(self,
-                                                                      fake):
+class TestRowCollectionsAreRestoredRowByRow:
+    async def test_one_differing_row_is_written_back(self, fake):
         snap = await _snapshot_of(_profile())
         fake.profile["employments"][0]["organization"] = "NewCorp"
 
         out = await pr.restore_section(snap, "employments", confirm=True)
 
-        assert out["status"] == "unsupported"
-        assert out["differing_rows"]["changed"] == ["E1"]
-        assert out["differing_rows"]["id_field"] == "employmentId"
-        assert "E1" in out["message"]
-        assert "naukri_update_profile_section" in out["message"]
-        assert "employmentId" in out["message"]
-        assert fake.writes == []
+        assert out["status"] == "updated", out
+        assert out["restored_row"] == "E1"
+        assert out["atomic"] is True, (
+            "one differing row IS one write, and may say so")
+        assert len(fake.writes) == 1
+        assert fake.writes[0]["employments"] == [_employment("E1", "OldCorp")]
+        assert fake.profile["employments"][0]["organization"] == "OldCorp"
+        assert fake.profile["employments"][1]["organization"] == "OtherCorp", (
+            "a single-row write must not disturb its neighbours")
 
-    async def test_it_names_a_row_that_was_deleted_and_says_it_cannot_return(
-            self, fake):
+    async def test_two_differing_rows_are_two_writes_and_both_land(self, fake):
+        snap = await _snapshot_of(_profile())
+        fake.profile["employments"][0]["organization"] = "NewCorp"
+        fake.profile["employments"][1]["designation"] = "Something"
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+
+        assert out["status"] == "updated", out
+        assert out["atomic"] is False, (
+            "two writes are not atomic and the reply must never imply they are")
+        assert out["rows"]["landed"] == ["E1", "E2"]
+        assert out["rows"]["not_attempted"] == []
+        assert out["rows"]["unknown"] == []
+        assert out["rows"]["skipped"] == []
+        assert out["restores_completely"] is True
+        assert len(fake.writes) == 2, fake.writes
+        assert fake.profile["employments"][0]["organization"] == "OldCorp"
+        assert fake.profile["employments"][1]["designation"] == "Engineer"
+
+    async def test_a_row_deleted_on_naukri_is_still_refused_by_name(self, fake):
+        """The one refusal that is NOT a shape problem. A restore can return a
+        row's content; it can never return the row's identity."""
         snap = await _snapshot_of(_profile())
         fake.profile["employments"] = [_employment("E2", "OtherCorp")]
 
@@ -259,15 +321,39 @@ class TestRowCollectionsAreRefusedByName:
         assert out["status"] == "unsupported"
         assert out["differing_rows"]["only_in_snapshot"] == ["E1"]
         assert "original id" in out["message"]
-        assert fake.writes == []
+        assert fake.writes == [], (
+            "nothing else differs, so there is nothing to write and nothing "
+            "may be written")
+
+    async def test_a_deleted_row_alongside_a_restorable_one_is_partial(self,
+                                                                       fake):
+        """The mixed case, and the one that must NEVER say `updated`: E2 goes
+        back, E1 cannot, so the section does not end up matching the snapshot
+        and the reply has to say so in both places."""
+        snap = await _snapshot_of(_profile())
+        fake.profile["employments"] = [
+            _employment("E2", "ChangedCorp"), _employment("E3", "NewJoiner")]
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+
+        assert out["status"] == "partial", out
+        assert out["restores_completely"] is False
+        assert out["rows"]["landed"] == ["E2"]
+        skipped = {s["row_id"]: s["reason"] for s in out["rows"]["skipped"]}
+        assert skipped == {"E1": "deleted_on_naukri",
+                           "E3": "added_since_snapshot"}, skipped
+        assert len(fake.writes) == 1
+        assert fake.profile["employments"][0]["organization"] == "OtherCorp"
 
     @pytest.mark.parametrize("section", [
         "employments", "educations", "schools", "itskills", "projects",
         "certifications",
     ])
-    async def test_every_single_row_section_refuses(self, fake, section):
-        """All six, not just the one with a fixture. A section that quietly
-        became restorable would be a silent half-restore."""
+    async def test_no_single_row_section_writes_when_nothing_differs(
+            self, fake, section):
+        """All six. `no rows differ` must never become `wrote nothing and
+        called it updated` - a restore that reports success for a section it
+        never touched is the same lie as a half-restore."""
         snap = await _snapshot_of(_profile())
         out = await pr.restore_section(snap, section, confirm=True)
         assert out["status"] in ("unsupported", "error"), out
@@ -277,37 +363,156 @@ class TestRowCollectionsAreRefusedByName:
 
 
 # ---------------------------------------------------------------------------
-# CONTROL 4 - the refusal is TOTAL: zero transport calls, confirm or not
+# CONTROL 4 - a refusal is TOTAL, and a PARTIAL never wears a success
+#
+# Two different promises now live here, and both are measured against
+# `fake.writes` rather than a status string, because a status string is
+# exactly what a broken version would still return.
 # ---------------------------------------------------------------------------
 
-class TestAnUnsupportedRestoreNeverReachesTheTransport:
-    async def test_a_row_collection_writes_nothing_even_when_confirmed(self,
-                                                                       fake):
-        snap = await _snapshot_of(_profile())
-        fake.profile["employments"][0]["organization"] = "NewCorp"
-        fake.profile["employments"][1]["designation"] = "Something"
-
-        out = await pr.restore_section(snap, "employments", confirm=True)
-
-        assert out["status"] == "unsupported"
-        assert out["written"] is False
-        assert fake.writes == [], (
-            "a half-restore is worse than a refusal: the transport must be "
-            "untouched, not called once and abandoned")
-        assert fake.profile["employments"][0]["organization"] == "NewCorp"
-
-    async def test_a_whole_list_needing_two_writes_writes_nothing(self, fake):
-        """A whole-list section is restorable in ONE call only when one row
-        differs. Two rows would need two writes, so it refuses instead."""
+class TestARefusalIsTotalAndAPartialIsNeverASuccess:
+    async def test_a_whole_list_with_two_differing_rows_restores_both(self,
+                                                                      fake):
+        """A whole-list payload IS the whole list, so each call re-reads the
+        live list and merges its one row into it. Two rows are two calls, and
+        the second must not undo the first."""
         snap = await _snapshot_of(_profile())
         fake.profile["languages"][0]["proficiency"] = "Beginner"
         fake.profile["languages"][1]["proficiency"] = "Beginner"
 
         out = await pr.restore_section(snap, "languages", confirm=True)
 
-        assert out["status"] == "unsupported"
-        assert out["differing_rows"]["changed"] == ["L1", "L2"]
-        assert fake.writes == []
+        assert out["status"] == "updated", out
+        assert out["atomic"] is False
+        assert out["rows"]["landed"] == ["L1", "L2"]
+        assert len(fake.writes) == 2, fake.writes
+        assert [r["proficiency"] for r in fake.profile["languages"]] == [
+            "Expert", "Expert"]
+
+    async def test_a_row_that_fails_stops_the_run_and_the_reply_says_which(
+            self, fake):
+        """THE CASE THE RULING NAMED. Row 2 of 3 explodes: the caller must be
+        able to read off exactly which row landed, which one did not, and
+        which was never tried - and the whole thing must not say `updated`."""
+        snap = await _snapshot_of(_profile(employments=[
+            _employment("E1", "A"), _employment("E2", "B"),
+            _employment("E3", "C")]))
+        # The LIVE profile has to carry the same three rows, or E3 reads as
+        # deleted-on-naukri and gets skipped instead of never-attempted.
+        fake.profile["employments"] = [
+            _employment("E1", "CLOBBERED"), _employment("E2", "CLOBBERED"),
+            _employment("E3", "CLOBBERED")]
+        fake.raise_on_write = 2
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+
+        assert out["status"] == "partial", out
+        assert out["status"] != "updated"
+        assert out["restores_completely"] is False
+        assert out["rows"]["landed"] == ["E1"]
+        assert out["rows"]["unknown"] == ["E2"], (
+            "a transport exception cannot prove the server did not apply it")
+        assert out["rows"]["not_attempted"] == ["E3"], (
+            "a row never sent must be distinguishable from a row that failed")
+
+        by_id = {u["row_id"]: u for u in out["row_results"]}
+        assert by_id["E1"]["outcome"] == "landed"
+        assert by_id["E1"]["snapshot"], "a taken write names its snapshot"
+        assert by_id["E2"]["outcome"] == "unknown"
+        assert by_id["E3"]["outcome"] == "not_attempted"
+        for row_id in ("E1", "E2", "E3"):
+            assert row_id in out["message"]
+
+        # And the profile itself agrees with the report.
+        live = {r["employmentId"]: r["organization"]
+                for r in fake.profile["employments"]}
+        assert live["E1"] == "A"
+        assert live["E3"] == "CLOBBERED"
+
+    @pytest.mark.parametrize("failure,bucket", [
+        ("raise", "unknown"),
+        ("swallow", "unknown"),
+    ])
+    async def test_every_planned_row_lands_in_exactly_one_bucket(
+            self, fake, failure, bucket):
+        """The summary must ACCOUNT for every planned row. A bucket set that
+        can drop one lets a caller add up landed + unknown + not_attempted,
+        get less than it asked for, and have no idea where the rest went."""
+        snap = await _snapshot_of(_profile(employments=[
+            _employment("E1", "A"), _employment("E2", "B"),
+            _employment("E3", "C")]))
+        fake.profile["employments"] = [
+            _employment("E1", "X"), _employment("E2", "Y"),
+            _employment("E3", "Z")]
+        setattr(fake, "raise_on_write" if failure == "raise"
+                else "swallow_write", 2)
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+        rows = out["rows"]
+
+        accounted = []
+        for key in ("landed", "landed_with_collateral", "refused", "unknown",
+                    "not_attempted"):
+            accounted += rows[key]
+        assert sorted(accounted) == sorted(rows["planned"]), rows
+        assert len(accounted) == len(set(accounted)), (
+            "a row appeared in two buckets: %r" % accounted)
+        assert "E2" in rows[bucket]
+
+    async def test_a_row_refused_before_the_wire_gets_its_own_bucket(self,
+                                                                     fake):
+        """`refused` is NOT `unknown`. A row the section layer rejected never
+        reached Naukri, and that is the ONE outcome that certifies nothing was
+        written - folding it in with the dispatched-and-unconfirmed rows would
+        throw away the only certainty in the report."""
+        # ED1 carries the vocabulary field as a bare string, so write_section
+        # refuses it. ED2 differs too and must therefore never be attempted.
+        snap = await _snapshot_of(
+            dict(_profile(), educations=[
+                _education("ED1", "BTech", institute="MIT"),
+                _education("ED2", "MTech")]),
+            "edu")
+        fake.profile["educations"] = [
+            _education("ED1", "CHANGED", institute="MIT"),
+            _education("ED2", "CHANGED")]
+
+        out = await pr.restore_section(snap, "educations", confirm=True)
+        rows = out["rows"]
+
+        assert out["status"] == "error", out
+        assert rows["refused"] == ["ED1"], rows
+        assert rows["unknown"] == [], (
+            "a refusal is not an unknown: it certifies nothing was sent")
+        assert rows["not_attempted"] == ["ED2"]
+        assert rows["landed"] == []
+        assert fake.writes == [], (
+            "a row refused before the transport must not reach it")
+
+        accounted = []
+        for key in ("landed", "landed_with_collateral", "refused", "unknown",
+                    "not_attempted"):
+            accounted += rows[key]
+        assert sorted(accounted) == sorted(rows["planned"])
+
+    async def test_an_accepted_but_unpersisted_write_is_unknown_not_success(
+            self, fake):
+        """A 200 that changed nothing is the exact failure the verify-by-
+        re-read rail exists for. It must surface as `unknown`, which is
+        neither 'done' nor 'nothing happened'."""
+        snap = await _snapshot_of(_profile())
+        fake.profile["employments"][0]["organization"] = "NewCorp"
+        fake.profile["employments"][1]["designation"] = "Something"
+        fake.swallow_write = 1
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+
+        assert out["status"] == "error", out
+        assert out["error_code"] == "RESTORE_FAILED"
+        assert out["written"] is False
+        assert out["rows"]["landed"] == []
+        assert out["rows"]["unknown"] == ["E1"]
+        assert out["rows"]["not_attempted"] == ["E2"]
+        assert len(fake.writes) == 1, "the run must STOP, not plough on"
 
     async def test_a_whole_list_missing_a_row_writes_nothing(self, fake):
         """`_merge_whole_list` builds its payload from the LIVE list, so a row
@@ -366,6 +571,96 @@ class TestConfirmFalseWritesNothing:
             "the payload for a whole-list section is the WHOLE list")
         assert fake.writes == []
         assert fake.profile["languages"][0]["proficiency"] == "Beginner"
+
+    async def test_a_MULTI_ROW_restore_writes_nothing_without_confirm(self,
+                                                                      fake):
+        """The gate on the path this slice BUILT. The row-by-row restore is
+        new, so its confirm gate is new, and a new write path that fires
+        without consent is exactly what the gate exists to stop."""
+        snap = await _snapshot_of(_profile())
+        fake.profile["employments"][0]["organization"] = "NewCorp"
+        fake.profile["employments"][1]["designation"] = "Something"
+
+        out = await pr.restore_section(snap, "employments")
+
+        assert out["status"] == "preview"
+        assert out["written"] is False
+        assert out["atomic"] is False
+        assert out["rows"]["planned"] == ["E1", "E2"]
+        assert fake.writes == [], (
+            "the gate is measured at the transport, not read off the status")
+        assert fake.profile["employments"][0]["organization"] == "NewCorp"
+
+        # The preview is the thing the operator approves against, so it has to
+        # carry the bodies - and say the quiet part about the ones after the
+        # first.
+        bodies = [u["would_send"] for u in out["row_results"]]
+        assert bodies == [
+            {"employments": [_employment("E1", "OldCorp")]},
+            {"employments": [_employment("E2", "OtherCorp")]},
+        ], bodies
+        assert "NOT atomic" in out["message"]
+        assert "confirm=True" in out["message"]
+
+    async def test_a_preview_with_skipped_rows_says_it_will_not_complete(
+            self, fake):
+        snap = await _snapshot_of(_profile())
+        fake.profile["employments"] = [
+            _employment("E2", "ChangedCorp"), _employment("E3", "NewJoiner")]
+
+        out = await pr.restore_section(snap, "employments")
+
+        assert out["status"] == "preview"
+        assert out["restores_completely"] is False, (
+            "consent must be given against the fact that the section will "
+            "STILL not match the snapshot afterwards")
+        assert "SKIPPED" in out["message"]
+        assert fake.writes == []
+
+
+# ---------------------------------------------------------------------------
+# CONTROL 5b - a restore cannot destroy the snapshot it may need to retry from
+# ---------------------------------------------------------------------------
+
+class TestTheSourceSnapshotSurvivesTheRestore:
+    async def test_a_failed_multi_row_restore_leaves_the_source_intact(
+            self, fake, snapshot_home):
+        """A row-by-row restore takes a NEW pre-write snapshot per row. If any
+        of those could land on the source filename, the file needed to retry
+        would be gone at exactly the moment it was needed."""
+        original = _profile(employments=[
+            _employment("E1", "A"), _employment("E2", "B")])
+        snap = await _snapshot_of(original, "the-source")
+        source = snapshot_home / snap
+        before = source.read_bytes()
+
+        fake.profile["employments"] = [
+            _employment("E1", "CLOBBERED"), _employment("E2", "CLOBBERED")]
+        fake.raise_on_write = 2
+
+        out = await pr.restore_section(snap, "employments", confirm=True)
+        assert out["status"] == "partial"
+
+        assert source.exists(), "the source snapshot was deleted"
+        assert source.read_bytes() == before, (
+            "the source snapshot was rewritten by the restore that reads it")
+
+        # The per-row snapshots are additional files, not replacements: one
+        # per ATTEMPTED write, including the one that blew up (write_section
+        # snapshots before it dispatches, so the row that failed is the row
+        # whose pre-state is most worth having), and all under distinct names.
+        taken = sorted(p.name for p in snapshot_home.glob("*.json")
+                       if "pre-restore-employments" in p.name)
+        assert len(taken) == 2, taken
+        assert len(set(taken)) == 2, "two snapshots collided on one filename"
+        assert snap not in taken
+
+        # And the retry works off the untouched source.
+        fake.raise_on_write = None
+        again = await pr.restore_section(snap, "employments", confirm=True)
+        assert again["status"] == "updated", again
+        assert [r["organization"] for r in fake.profile["employments"]] == [
+            "A", "B"]
 
 
 # ---------------------------------------------------------------------------

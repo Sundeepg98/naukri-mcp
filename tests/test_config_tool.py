@@ -267,25 +267,79 @@ class TestWriting:
         assert any("uplers" in r for r in result["refusals"]), result
 
     @pytest.mark.asyncio
-    async def test_the_agent_block_is_refused_from_here_too(self, config_file):
-        from naukri_server.tools.config_tool import naukri_set_config
+    async def test_the_agent_block_is_RATCHETED_from_here_not_refused(self,
+                                                                      config_file):
+        """Was `test_the_agent_block_is_refused_from_here_too`.
+
+        Since 2026-08-25 this tool CAN arm the agent. `mode: "auto"` is a
+        loosening move on a tier-B key, so it refuses once and lands when
+        asked properly -- both halves asserted, because a refusal that never
+        turns into an acceptance would leave the confirmation flag untested.
+        """
+        from naukri_server.tools.config_tool import naukri_config, naukri_set_config
 
         result = await naukri_set_config(json.dumps(
             {"servers": {"naukri": {"agent": {"mode": "auto"}}}}))
         assert result["status"] == "refused", result
+        assert "confirm_widen" in " ".join(result["refusals"]), result
+
+        result = await naukri_set_config(
+            json.dumps({"servers": {"naukri": {"agent": {"mode": "auto"}}}}),
+            confirm_widen=True)
+        assert result["status"] == "ok", result
+        assert (await naukri_config())["server"]["agent"]["mode"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_an_UNNAMED_agent_key_is_still_refused_from_here(self,
+                                                                   config_file):
+        """CONTROL for the pair above, and the half the ruling did not touch.
+
+        Six keys are named and loadable; the subtree still denies by default,
+        and confirm_widen does not buy a tier-C key at any price.
+        """
+        from naukri_server.tools.config_tool import naukri_set_config
+
+        result = await naukri_set_config(
+            json.dumps({"servers": {"naukri": {"agent": {"invented": True}}}}),
+            confirm_widen=True)
+        assert result["status"] == "refused", result
+        assert "tier C" in " ".join(result["refusals"]), result
 
 
 class TestTheSurfaceExplainsItself:
     @pytest.mark.asyncio
     async def test_it_names_what_the_file_cannot_decide(self, config_file):
-        """"Why did my edit do nothing?" must be answerable from the tool."""
+        """"Why did my edit do nothing?" must be answerable from the tool.
+
+        The list SHRANK on 2026-08-25 -- five of the six names it used to
+        carry are loadable now -- so the readout has to say the new truth in
+        both directions: what is still refused, and what the file now decides.
+        A readout still naming `agent.mode` as unreachable would be the
+        documentation-true-when-written defect in its purest form.
+        """
         from naukri_server.tools.config_tool import naukri_config
 
         result = await naukri_config()
         blob = " ".join(result["not_loadable_here"])
-        for key in ("agent.enabled", "agent.mode", "agent.min_fit_score",
-                    "agent.searches", "agent.blocklist.enabled"):
-            assert key in blob, (key, result["not_loadable_here"])
+        assert "agent.max_daily_applications" in blob, result["not_loadable_here"]
+        for gone in ("agent.enabled", "agent.mode", "agent.min_fit_score",
+                     "agent.searches", "agent.blocklist.enabled",
+                     "agent.per_search_limit"):
+            assert gone not in blob, (gone, result["not_loadable_here"])
+
+        assert "subtree_deny" in result and result["subtree_deny"]
+
+    @pytest.mark.asyncio
+    async def test_it_says_the_file_CAN_arm_the_agent_and_what_bounds_it(self,
+                                                                         config_file):
+        """The other half. A surface that only lists prohibitions, after the
+        prohibition was lifted, is worse than one that says nothing."""
+        from naukri_server.tools.config_tool import naukri_config
+
+        blob = (await naukri_config())["agent_authority"].lower()
+        assert "can arm" in blob
+        for guard in ("floor", "kill switch", "quota", "validate_agent_config"):
+            assert guard in blob, guard
 
     @pytest.mark.asyncio
     async def test_it_reports_the_python_floor(self, config_file):

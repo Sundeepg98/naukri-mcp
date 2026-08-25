@@ -31,12 +31,24 @@ logger = logging.getLogger(__name__)
 # IST offset (UTC+5:30) — matches scheduler.py
 IST = timezone(timedelta(hours=5, minutes=30))
 
+#: How many results one agent search puts in front of the selector, and the
+#: Python ceiling on it. The ceiling is here rather than only in jobcore's
+#: KeySpec because jobcore enforces floor/ceiling on the WRITE path; a
+#: hand-edited file reaches `_decide` unbounded. Mirrors
+#: HARD_LIMITS["agent_per_search_limit_ceiling"].
+_PER_SEARCH_LIMIT_DEFAULT = 20
+_PER_SEARCH_LIMIT_CEILING = 100
+
 # Default config — used when agent_config.json doesn't exist
 DEFAULT_CONFIG = {
     "enabled": False,  # Must be explicitly enabled
     "mode": "approval",  # dry_run | approval | auto
     "max_daily_applications": 15,
     "min_fit_score": APPLY_MIN_FIT_SCORE,
+    # Read by `_decide` as the per-search page size. Present here so the
+    # config readout shows every key the agent actually uses -- it was absent
+    # while `_decide` hardcoded 20, which is how it stayed a decoy unnoticed.
+    "per_search_limit": _PER_SEARCH_LIMIT_DEFAULT,
     "quiet_hours": {
         "enabled": True,
         "start_hour": 20,  # 8 PM IST
@@ -75,36 +87,60 @@ POLICY_STATE_PATH = DATA_DIR / "agent_policy_state.json"
 
 
 # ---------------------------------------------------------------------------
-# The two guards the config file cannot reach
+# The guards no config write can reach
 # ---------------------------------------------------------------------------
 #
-# THE INVARIANT: no sequence of config writes, from any server, may grant
-# autonomous apply authority.
+# THE OLD INVARIANT, RETIRED 2026-08-25: *no sequence of config writes, from
+# any server, may grant autonomous apply authority.* The config file CAN now
+# arm this agent -- six keys under `servers.naukri.agent` are loadable (see
+# `load_agent_config`). Do not re-derive the old sentence from this file's
+# shape; it was overruled deliberately, and only the CONCLUSION was overruled.
 #
-# The traced escalation ran through this module. `min_fit_score` is not a
-# display filter here — `_decide` enqueues every job at or above it with
-# apply_status "pending", and `_act` in "auto" mode then submits them. Five
-# writes (enabled -> auto -> min_fit_score 0 -> blocklist off -> arbitrary
+# The traced escalation ran through this module and is still real. `min_fit_score`
+# is not a display filter here -- `_decide` enqueues every job at or above it
+# with apply_status "pending", and `_act` in "auto" mode then submits them.
+# Five writes (enabled -> auto -> min_fit_score 0 -> blocklist off -> arbitrary
 # searches) took the system from "disabled, dry_run, threshold 70" to fifteen
 # real applications a day at no threshold on his live account.
 #
-# jobcore refuses those keys from the config file (tier C: not loadable, not
-# merely refused on write). These two guards are the SECOND, independent layer,
-# because a guard on one path is a guard on one path:
+# What changed is WHERE that escalation is stopped. It used to be stopped at
+# the config layer, by tier C. It is now stopped HERE, in Python, by four
+# guards that no config write of any kind can reach:
 #
 #   1. MIN_AGENT_FIT_FLOOR — a Python constant the file cannot reach. A bad
-#      threshold, from ANY source including naukri_agent_update_config, costs
-#      display noise instead of applications.
+#      threshold, from ANY source (this file, agent_config.json, or
+#      naukri_agent_update_config), costs display noise instead of
+#      applications. Applied in `_decide` as `max(configured, floor)`, and
+#      applied AGAIN per search, because a per-search override is the selector
+#      one level down and lists never reach jobcore's schema at all.
 #
-#   2. A forced approval cycle whenever the FULL POLICY fingerprint changed since
-#      the last cycle. This covers the two levers that cannot be tier C because
-#      they are the feature he asked for by name: inflating `candidate.skills`
-#      (|matched|/|job_skills| -> 100 for every job in existence) and reshaping
-#      `scoring`. Neither touches the agent block at all, and either can be
-#      written FROM A SIBLING SERVER, so no amount of section-scoping catches
-#      them. One condition does. That condition compares `policy_hash`, the
-#      FULL {scoring, candidate} fingerprint -- NOT `scoring_hash`, which
-#      covers `scoring` alone and would miss the candidate.skills lever.
+#   2. A forced approval cycle whenever the FULL POLICY fingerprint changed
+#      since the last cycle. This covers the two levers that cannot be tier C
+#      because they are the feature he asked for by name: inflating
+#      `candidate.skills` (|matched|/|job_skills| -> 100 for every job in
+#      existence) and reshaping `scoring`. Neither touches the agent block at
+#      all, and either can be written FROM A SIBLING SERVER, so no amount of
+#      section-scoping catches them. One condition does. That condition
+#      compares `policy_hash`, the FULL {scoring, candidate} fingerprint --
+#      NOT `scoring_hash`, which covers `scoring` alone and would miss the
+#      candidate.skills lever.
+#
+#      READ THIS BEFORE RELYING ON GUARD 2 FOR THE AGENT BLOCK: `policy_hash`
+#      covers {scoring, candidate} and NOT `servers.*`. Writing `mode: "auto"`
+#      into the config file therefore does NOT by itself force an approval
+#      cycle. Guard 2 was built for the two levers above and still catches
+#      them; it is not, and never was, a guard on the agent block. A
+#      file-armed agent is bounded by guards 1, 3 and 4 -- plus tier B's
+#      confirm_widen on the write path and `validate_agent_config` on load.
+#
+#   3. The kill switch -- re-checked inside the auto-apply loop on every
+#      iteration, so a trip mid-loop halts the rest of the batch.
+#
+#   4. The daily quota -- `_decide` stops adding candidates at
+#      `daily_remaining`, which is upstream of `_act`, and
+#      `validate_agent_config` bounds `max_daily_applications` to 1-100
+#      whatever the source. `max_daily_applications` is NOT one of the six:
+#      the shared file cannot set it (see FILE_DECIDABLE_KEYS).
 
 
 def _min_agent_fit_floor() -> int:
@@ -208,25 +244,184 @@ def _effective_mode(config: dict, cycle_id: str = "") -> tuple[str, Optional[str
 # Config management
 # ---------------------------------------------------------------------------
 
+#: The six keys the shared policy file (`config/jobhunt.json`) may decide,
+#: dotted relative to the agent block. THE ONLY SIX. `max_daily_applications`,
+#: `cycle_interval_hours` and `quiet_hours.*` are deliberately absent: they are
+#: tier B in jobcore's schema and loadable into the jobcore Policy, but this
+#: agent does not take them from the shared file. The daily quota in particular
+#: is guard 4 above, and a guard whose value the same file can raise is worth
+#: less than one it cannot.
+FILE_DECIDABLE_KEYS = (
+    "enabled",
+    "mode",
+    "min_fit_score",
+    "searches",
+    "per_search_limit",
+    "blocklist.enabled",
+)
+
+_MISSING = object()
+
+
+def _dig(node, dotted: str):
+    """The value at a dotted path inside nested mappings, or ``_MISSING``."""
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
+def _same_value(a, b) -> bool:
+    """Equality that does not care about list-vs-tuple or bool-vs-int."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a is b
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return list(a) == list(b)
+    return a == b
+
+
+def agent_config_overlay() -> dict:
+    """What the shared policy file is currently DECIDING, as dotted keys.
+
+    Empty when there is no config file, when the file cannot be read, or when
+    every one of the six still carries the value jobcore ships. That last
+    clause is the load-bearing one and deserves its reason:
+
+    jobcore hands back a MERGED block -- schema defaults with the file's values
+    laid over them -- so "present in the returned dict" cannot tell a declared
+    key from a default. If this function treated every returned key as
+    declared, the shipped `config/jobhunt.json` (which contains exactly the six
+    schema defaults) would permanently override whatever the operator had set
+    through `naukri_agent_update_config`, resetting a deliberately-armed agent
+    to `enabled: false, mode: dry_run` on every load. So a value EQUAL to the
+    shipped default is read as "the file has no opinion here".
+
+    The cost of that rule, stated plainly rather than discovered later: the
+    file cannot use a shipped-default VALUE to override a non-default value in
+    `agent_config.json`. Writing `mode: "dry_run"` into the file does not undo
+    a tool-set `mode: "auto"`, because "dry_run" is the shipped default and is
+    therefore indistinguishable from silence. Use `naukri_agent_update_config`
+    for that; it is the surface that owns `agent_config.json`.
+
+    Never raises. A config problem must cost the agent its overlay, not its
+    ability to run.
+    """
+    try:
+        from jobcore.policy import schema_defaults
+
+        from naukri_server import policy as _policy
+
+        loaded = _policy.snapshot().policy.server("naukri").get("agent", {})
+        shipped = schema_defaults("servers").get("naukri", {}).get("agent", {})
+    except Exception as exc:  # pragma: no cover - the loader already swallows
+        logger.warning("agent config overlay unavailable (%s); "
+                       "agent_config.json decides alone", exc,
+                       extra={"step": "config"})
+        return {}
+
+    overlay: dict = {}
+    for dotted in FILE_DECIDABLE_KEYS:
+        value = _dig(loaded, dotted)
+        if value is _MISSING:
+            continue
+        # An EMPTY searches list means "not specified", never "search for
+        # nothing". The shipped file ships `searches: []`, and
+        # `validate_agent_config` requires a NON-EMPTY list, so a naive merge
+        # would fail validation on the very first load and take the agent down.
+        # Stated as its own branch rather than left to the default-compare
+        # below, so it survives a future change to the shipped default.
+        if dotted == "searches" and not value:
+            continue
+        if _same_value(value, _dig(shipped, dotted)):
+            continue
+        overlay[dotted] = value
+    return overlay
+
+
+def _apply_overlay(config: dict, overlay: dict) -> dict:
+    """A deep copy of *config* with each dotted key in *overlay* set."""
+    out = json.loads(json.dumps(config, default=str))
+    for dotted, value in overlay.items():
+        parts = dotted.split(".")
+        node = out
+        for part in parts[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                node[part] = child
+            node = child
+        node[parts[-1]] = value
+    return out
+
+
 def load_agent_config() -> dict:
-    """Load agent config from file, falling back to defaults.
+    """The effective agent config: Python defaults, agent_config.json, then file.
+
+    PRECEDENCE, and why it is this way round::
+
+        DEFAULT_CONFIG  <  agent_config.json  <  config/jobhunt.json (the six)
+
+    THE SHARED FILE WINS for the six keys in :data:`FILE_DECIDABLE_KEYS`.
+    The alternative -- letting `agent_config.json` win -- was measured and
+    rejected: `naukri_agent_update_config` saves the FULL merged config, so
+    `agent_config.json` on any live box already contains all six keys. Under
+    that precedence the file layer would be shadowed on every load and
+    "loadable" would be a word with no behaviour behind it.
+
+    The file also earns it. It is the reviewed surface: version-controlled,
+    revision-stamped, ledgered, tier-checked, with an external-edit detector.
+    `agent_config.json` is unversioned runtime state in DATA_DIR.
+
+    The cost is a real one and is made LOUD rather than silent:
+    `naukri_agent_update_config` reports a warning naming any key its patch
+    wrote that the file then overrode, so a tool write that cannot take effect
+    says so instead of appearing to succeed.
+
+    Every file-sourced value is routed through `validate_agent_config`, so the
+    mode enum, the 0-100 fit bound and the non-empty-searches rule apply to
+    file input exactly as they apply to tool input. If the overlay introduces
+    an error the base did not have, THE WHOLE OVERLAY IS DROPPED and the base
+    runs: half-applying a policy is worse than ignoring one, which is the same
+    call jobcore's loader makes on a malformed document.
 
     Sync — for use from sync contexts. Async callers should use
     `await asyncio.to_thread(load_agent_config)` to avoid blocking the event loop.
-    Config file is small (~500 bytes), so blocking is microseconds, but consistent
-    use of to_thread() keeps the pattern correct.
     """
+    base = DEFAULT_CONFIG.copy()
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, "r") as f:
-                config = json.load(f)
+                stored = json.load(f)
             # Merge with defaults for any missing keys
-            merged = {**DEFAULT_CONFIG, **config}
-            return merged
+            base = {**DEFAULT_CONFIG, **stored}
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load agent config: %s, using defaults", e,
                            extra={"step": "config"})
-    return DEFAULT_CONFIG.copy()
+
+    overlay = agent_config_overlay()
+    if not overlay:
+        return base
+
+    candidate = _apply_overlay(base, overlay)
+    base_errors = validate_agent_config(base)
+    new_errors = [e for e in validate_agent_config(candidate)
+                  if e not in base_errors]
+    if new_errors:
+        logger.error(
+            "agent config from the shared policy file is invalid, so the whole "
+            "overlay was DROPPED and agent_config.json is running unchanged. "
+            "Keys offered: %s. Errors: %s%s",
+            ", ".join(sorted(overlay)), "; ".join(new_errors),
+            " (agent_config.json was already invalid too)" if base_errors else "",
+            extra={"step": "config"},
+        )
+        return base
+
+    logger.info("agent config: %s supplied by the shared policy file",
+                ", ".join(f"{k}={overlay[k]!r}" for k in sorted(overlay)),
+                extra={"step": "config"})
+    return candidate
 
 
 def save_agent_config(config: dict):
@@ -307,6 +502,33 @@ async def _decide(observe_result: dict) -> dict:
             cycle_id, configured_min_fit, floor,
             extra={"cycle_id": cycle_id, "step": "decide"},
         )
+
+    # `per_search_limit` was a DECOY until 2026-08-25: it shipped in the
+    # schema, in agent_config.json and in the docs, and this call passed a
+    # hardcoded `limit=20`. It is read here now, which is also what lets it
+    # leave tier C at all -- jobcore's KeySpec refuses to construct a loadable
+    # spec with no declared reader, so "loadable" and "read by something" are
+    # the same statement in this system.
+    #
+    # Clamped in Python because jobcore enforces floor/ceiling on the WRITE
+    # path only; a hand-edited file reaches this with any integer at all.
+    # The bound costs nothing real: `_decide` stops adding candidates at
+    # `daily_remaining` (<= 100), so a larger page only wastes scoring.
+    per_search_limit = _PER_SEARCH_LIMIT_DEFAULT
+    try:
+        per_search_limit = int(config.get("per_search_limit",
+                                          _PER_SEARCH_LIMIT_DEFAULT))
+    except (TypeError, ValueError):
+        pass
+    clamped = max(1, min(per_search_limit, _PER_SEARCH_LIMIT_CEILING))
+    if clamped != per_search_limit:
+        logger.warning(
+            "Agent %s: per_search_limit %s clamped to %d",
+            cycle_id, per_search_limit, clamped,
+            extra={"cycle_id": cycle_id, "step": "decide"},
+        )
+    per_search_limit = clamped
+
     blocklist_obj = AgentBlocklist.from_config(config)
 
     candidates: list[AgentCandidate] = []
@@ -331,7 +553,7 @@ async def _decide(observe_result: dict) -> dict:
             keywords=search["keywords"],
             location=search.get("location"),
             min_fit_score=search_min_fit,
-            limit=20,
+            limit=per_search_limit,
             freshness=search.get("freshness", 7),
             work_mode=search.get("work_mode"),
         )

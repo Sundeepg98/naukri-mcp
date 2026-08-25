@@ -18,8 +18,8 @@ def _deep_merge(base: dict, patch: dict) -> dict:
 
     jobcore's loader uses the identical rule for the config file; this is the
     same decision applied to agent_config.json, which is a separate file on
-    purpose — the autonomous-apply block is not loadable from the shared config
-    at any tier, so it needs its own merge rather than borrowing jobcore's.
+    purpose -- it holds the keys the shared config does NOT decide, and it is
+    the lower-precedence layer for the six it does.
     """
     out = dict(base)
     for key, value in (patch or {}).items():
@@ -27,6 +27,56 @@ def _deep_merge(base: dict, patch: dict) -> dict:
             out[key] = _deep_merge(out[key], value)
         else:
             out[key] = value
+    return out
+
+
+def _flatten_patch(patch: dict, prefix: str = "") -> dict:
+    """Every leaf of *patch* as a dotted path. Lists are leaves."""
+    out: dict = {}
+    for key, value in (patch or {}).items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict) and value:
+            out.update(_flatten_patch(value, path))
+        else:
+            out[path] = value
+    return out
+
+
+def _shadowed_by_the_policy_file(patch: dict) -> list[str]:
+    """Keys this patch wrote that `config/jobhunt.json` then overrides.
+
+    The shared file wins over agent_config.json for the six keys in
+    `agent.FILE_DECIDABLE_KEYS`, so a patch touching one of them can be saved
+    correctly and still not take effect. That is the exact silent-no-op shape
+    this repo has been bitten by twice, so it is reported as a warning naming
+    the key and the winning value rather than left for someone to discover by
+    watching the agent do the wrong thing.
+    """
+    try:
+        from naukri_server.agent import agent_config_overlay
+    except Exception:  # pragma: no cover - defensive
+        return []
+    try:
+        overlay = agent_config_overlay()
+    except Exception:  # pragma: no cover - overlay already swallows
+        return []
+    if not overlay:
+        return []
+
+    flat = _flatten_patch(patch)
+    out = []
+    for dotted, winning in sorted(overlay.items()):
+        if dotted not in flat:
+            continue
+        attempted = flat[dotted]
+        if attempted == winning:
+            continue
+        out.append(
+            f"{dotted}={attempted!r} was saved to agent_config.json but the "
+            f"shared policy file decides this key and sets {winning!r}; the "
+            f"agent will use {winning!r}. Edit config/jobhunt.json (via "
+            f"naukri_set_config) to change it."
+        )
     return out
 
 
@@ -64,10 +114,12 @@ async def _agent_status() -> dict:
 
 
 async def _agent_config() -> dict:
-    """Get full agent configuration."""
-    from naukri_server.agent import load_agent_config
+    """Get full agent configuration, plus which keys the shared file decided."""
+    from naukri_server.agent import agent_config_overlay, load_agent_config
     config = await asyncio.to_thread(load_agent_config)
-    return {"status": "success", "config": config}
+    overlay = await asyncio.to_thread(agent_config_overlay)
+    return {"status": "success", "config": config,
+            "config_sources": {k: "config/jobhunt.json" for k in sorted(overlay)}}
 
 
 async def _agent_update_config(updates: str) -> dict:
@@ -83,9 +135,11 @@ async def _agent_update_config(updates: str) -> dict:
         return {"status": "error", "message": "Patch must be a JSON object",
                 "error_code": "VALIDATION_ERROR"}
 
-    # Warn about unknown keys
+    # Warn about unknown keys. `per_search_limit` joined this set on
+    # 2026-08-25: it shipped in the schema and in agent_config.json but
+    # `_decide` passed a hardcoded limit, so it was a decoy. It is read now.
     known_keys = {"enabled", "mode", "max_daily_applications", "min_fit_score",
-                  "quiet_hours", "searches", "blocklist"}
+                  "quiet_hours", "searches", "blocklist", "per_search_limit"}
     unknown = set(patch.keys()) - known_keys
 
     # DEEP merge, not dict.update. `config.update(patch)` REPLACED whole nested
@@ -103,6 +157,9 @@ async def _agent_update_config(updates: str) -> dict:
     result = {"status": "success", "message": "Config updated", "config": config}
     if unknown:
         result["warnings"] = [f"Unknown config key: {k}" for k in unknown]
+
+    for shadowed in _shadowed_by_the_policy_file(patch):
+        result.setdefault("warnings", []).append(shadowed)
 
     floor = _min_agent_fit_floor()
     if int(config.get("min_fit_score", floor)) < floor:
@@ -210,15 +267,50 @@ async def naukri_agent_status() -> dict:
 async def naukri_agent_config() -> dict:
     """Get full agent configuration (searches, blocklist, mode, limits).
 
+    This is the EFFECTIVE config after all three layers are merged:
+    Python defaults < agent_config.json < config/jobhunt.json, where the
+    shared file decides enabled, mode, min_fit_score, searches,
+    per_search_limit and blocklist.enabled and nothing else. `config_sources`
+    names the keys the shared file supplied, so a value that disagrees with
+    agent_config.json is traceable without diffing two files.
+
+    The numbers here are what the agent was CONFIGURED with, not what it will
+    do: MIN_AGENT_FIT_FLOOR (60) raises any lower min_fit_score at run time,
+    the daily quota caps candidates, and the kill switch can halt a batch.
+
     Returns:
-        {status, config: {...full config...}}
+        {status, config: {...full config...}, config_sources: {...}}
     """
     return await handle_tool_action(_agent_config, "agent.config")
 
 
 @mcp.tool()
 async def naukri_agent_update_config(updates: str) -> dict:
-    """Merge JSON updates into agent config.
+    """Merge JSON updates into agent config (agent_config.json).
+
+    NOT THE ONLY SOURCE, since 2026-08-25. Six keys -- enabled, mode,
+    min_fit_score, searches, per_search_limit, blocklist.enabled -- are also
+    loadable from the shared config/jobhunt.json, and THE SHARED FILE WINS.
+    A patch touching one of those is still saved here, but the response
+    carries a warning naming the key and the value the agent will actually
+    use; change it in config/jobhunt.json (naukri_set_config) instead.
+    Everything else -- max_daily_applications, cycle_interval_hours,
+    quiet_hours -- is decided here and only here.
+
+    Four Python guards bound the agent whatever any config says, and none of
+    them can be moved from any file:
+
+      - MIN_AGENT_FIT_FLOOR (60) floors the apply selector on every cycle and
+        on every per-search override, so a min_fit_score below it changes what
+        is DISPLAYED, not what is applied to.
+      - The kill switch is re-checked inside the auto-apply loop, so it halts
+        a batch part-way rather than only at the start.
+      - The daily quota caps candidates before any apply runs, and
+        max_daily_applications is validated to 1-100.
+      - requires_approval_cycle forces ONE approval cycle per change to the
+        scoring/candidate fingerprint, and on the first-ever cycle. Note it
+        keys on {scoring, candidate}, NOT on the agent block: setting mode to
+        "auto" does not itself buy an approval cycle.
 
     Args:
         updates: JSON string of fields to update (e.g. '{"mode": "auto", "min_fit_score": 75}')

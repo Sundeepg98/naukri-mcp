@@ -91,4 +91,28 @@
 #
 # 6acc7e6 is CI-green and a descendant of 998baf1; it touches only paths.py and
 # adds no public name, so the pin check passes across the bump unchanged.
-jobcore @ git+https://github.com/Sundeepg98/jobcore@6acc7e6c6949676863a4e22e68bcfeae479f5026
+#
+# FIFTH ENTRY, and it is a case the four rules above do NOT cover, which is
+# why it is written out rather than assumed. jobcore ac189b0 moves six
+# `servers.naukri.agent.*` keys from tier C to tier B, so the file may now arm
+# the agent. This repo adds no `from jobcore...` import for that -- RULE THREE
+# is not triggered -- and `test_jobcore_pin.py` would pass across the bump
+# unchanged, because every module and name it scans for already exists at
+# 6acc7e6.
+#
+# The pin still HAS to move, and the reason is one the name-scanner cannot
+# see: naukri's own tests now assert the NEW BEHAVIOUR. `test_safety_invariant`
+# plants the five-write escalation and asserts it LANDS in config and is
+# neutralised in Python. Against 6acc7e6 those keys are still refused, the
+# values never arrive, and the assertions fail. So the coupling here is
+# semantic, not structural -- the imports are identical and the meaning is not.
+#
+# THE FOURTH RULE, generalised by this entry: bump the pin when this repo
+# starts depending on jobcore BEHAVIOUR that the pinned commit does not have,
+# not only when it imports a NAME the pinned commit does not have. The local
+# suite cannot see either, for the same reason every time -- the venv runs
+# jobcore editable from ../jobcore and is already on the new behaviour.
+#
+# ac189b0 is a descendant of 6acc7e6, 707 passed locally, and adds two public
+# names (HARD_LIMITS entries), so the pin check passes across the bump.
+jobcore @ git+https://github.com/Sundeepg98/jobcore@ac189b04ce8d8a358a59862d511f9cec1863ee7a
