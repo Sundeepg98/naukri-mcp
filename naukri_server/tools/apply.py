@@ -19,7 +19,7 @@ from naukri_server.resilience import get_apply_rate_limiter, jittered_delay, hum
 from naukri_server.events import event_bus, ApplicationSubmitted
 from naukri_server.models import ApplicationStatus
 from naukri_server.tools.jobs import _extract_job_id
-from naukri_server.tools.tracking import record_application
+from naukri_server.tools.tracking import record_application, project_pending_questions
 from naukri_server.validation import validate_limit
 # Pure answer-handling helpers live in services.apply_service — re-exported
 # under legacy underscored names so existing imports (tests, _cache_answers)
@@ -283,9 +283,15 @@ async def _apply_single(job_id: str, answers: Optional[dict] = None,
                     )
 
             if pending:
+                # Persist the QUESTIONS, not len(pending). The list below is
+                # returned to the caller either way; storing only its length
+                # meant that if the caller did not answer immediately, what the
+                # recruiter actually asked was gone -- unrecoverable without a
+                # live re-fetch. Text, type and options only: never an answer.
                 await record_application(job_id, title=title, company=company,
                                          status="needs_input",
-                                         extra={"pending_questions": len(pending), **(tracking_extra or {})})
+                                         extra={"pending_questions": project_pending_questions(pending),
+                                                **(tracking_extra or {})})
                 return {
                     "status": "needs_input",
                     "job_id": job_id,
@@ -682,3 +688,187 @@ def _cache_answers(questionnaire: list, answers: dict, cache: dict):
                     "questionName": q_name,
                     "answer": _format_answer(answer, q_type, options),
                 }
+
+
+# ============================================================================
+# Recovery: re-fetch the questions that were never persisted
+# ============================================================================
+
+
+def _questionnaire_to_pending(questionnaire) -> list:
+    """Convert a raw Naukri questionnaire into the internal pending shape."""
+    pending = []
+    for q in questionnaire or []:
+        if not isinstance(q, dict):
+            continue
+        pending.append({
+            "question": q.get("questionName") or "",
+            "type": q.get("questionType") or "",
+            "options": q.get("answerOption") or {},
+        })
+    return pending
+
+
+async def _refetch_questions_only(job_id: str) -> dict:
+    """Re-fetch ONE job screening questionnaire WITHOUT answering any of it.
+
+    THE GUARANTEE IS STRUCTURAL, NOT AN INTENTION. This function takes no
+    `answers` parameter, never reads the answer cache, and builds its request
+    body from exactly two things: `strJobsarr` and APPLY_TRAILER. `applyData`
+    is the ONLY field the apply endpoint accepts answers through, and no code
+    path in this function constructs it -- there is no branch to audit, because
+    the key is never assigned anywhere in the body.
+
+    It deliberately does NOT route through `_apply_single`. That function CAN
+    submit even when called with no answers at all: every question already in
+    the local answer cache goes into `auto_answers`, and its
+    `if not pending and auto_answers:` branch then POSTs those answers and
+    completes the application. With answers already cached for the common
+    questions, a "re-fetch with no answers" through that function would have
+    applied to real jobs. That is the whole reason this separate probe exists.
+
+    Returns one of:
+        {"status": "recovered", "questions": [...]} -- questionnaire came back
+        {"status": "applied_unexpectedly", ...}     -- see the caution below
+        {"status": "unrecoverable", "message": ...} -- nothing usable came back
+
+    CAUTION, and it is real. Naukri exposes no read-only questionnaire
+    endpoint; the only way to see the questions is to open the apply workflow,
+    which is the same call that produced these rows. If a posting NO LONGER
+    asks screening questions, that call returns status 200, and 200 means
+    APPLIED. Supplying no answers cannot prevent that. This function does not
+    paper over it -- it reports `applied_unexpectedly` and the caller records
+    the row as applied, because that is what is true.
+    """
+    # The same fail-closed rails as the apply path, CALLED here (not altered):
+    # this hits the apply endpoint, so a tripped kill-switch must stop it too.
+    kill_switch.guard()
+    await get_apply_rate_limiter().acquire("apply")
+
+    body = {
+        "strJobsarr": [job_id],
+        **APPLY_TRAILER,
+    }
+    data = await api_client.post(APPLY_WORKFLOW_API, body)
+
+    jobs = data.get("jobs", [])
+    if not jobs:
+        return {"status": "unrecoverable", "job_id": job_id,
+                "message": data.get("message") or "No job entry in apply-workflow response"}
+
+    job_result = jobs[0]
+    questionnaire = job_result.get("questionnaire", [])
+    if questionnaire:
+        return {"status": "recovered", "job_id": job_id,
+                "questions": _questionnaire_to_pending(questionnaire)}
+
+    if job_result.get("status") == 200:
+        return {"status": "applied_unexpectedly", "job_id": job_id,
+                "message": "Job no longer asks screening questions, so opening the "
+                           "apply workflow completed the application. No answers "
+                           "were supplied or submitted."}
+
+    return {"status": "unrecoverable", "job_id": job_id,
+            "message": "Apply workflow returned status %s with no questionnaire"
+                       % (job_result.get("status"),)}
+
+
+async def _recover_pending_questions(job_ids=None, confirm: bool = False,
+                                     limit: int = 25) -> dict:
+    """Re-fetch questions for needs_input rows that persisted only a count.
+
+    Gated: `confirm=False` (the default) makes NO network call and NO write. It
+    names exactly which job ids would be re-fetched and returns.
+
+    A row is recovered once: rows whose question text is already present are
+    skipped, so a second run has nothing left to do.
+    """
+    from naukri_server.database import list_applications as db_list
+    from naukri_server.tools.tracking import read_pending_questions, _row_pending_raw
+
+    limit = validate_limit(limit)
+    rows, _total = await db_list(status="needs_input", limit=limit, offset=0)
+
+    wanted = {str(j) for j in job_ids} if job_ids else None
+
+    targets, already = [], []
+    for row in rows:
+        jid = str(row.get("job_id") or "")
+        if wanted is not None and jid not in wanted:
+            continue
+        read = read_pending_questions(_row_pending_raw(row))
+        if read["text_recoverable"]:
+            already.append(jid)
+        else:
+            targets.append({
+                "job_id": jid,
+                "company": row.get("company"),
+                "title": row.get("title"),
+                "question_count": read["count"],
+            })
+
+    not_eligible = (sorted(wanted - {t["job_id"] for t in targets} - set(already))
+                    if wanted is not None else [])
+
+    if not confirm:
+        # PERFORMS NOTHING. No api_client call is reachable from this branch.
+        return {
+            "status": "preview",
+            "confirm_required": True,
+            "would_refetch_count": len(targets),
+            "would_refetch": targets,
+            "skipped_already_recovered": already,
+            "not_needs_input": not_eligible,
+            "performed": "nothing",
+            "note": ("Preview only: no network call was made and nothing was written. "
+                     "Re-run with confirm=True to re-fetch these questions. The "
+                     "re-fetch supplies no answers and submits none."),
+        }
+
+    recovered, failed, applied_unexpectedly = [], [], []
+    for target in targets:
+        jid = target["job_id"]
+        try:
+            result = await _refetch_questions_only(jid)
+        except kill_switch.KillSwitchTrippedError as e:
+            return {
+                "status": "halted",
+                "message": str(e),
+                "error_code": "KILL_SWITCH_TRIPPED",
+                "block_kind": e.block_kind,
+                "recovered_count": len(recovered),
+                "recovered": recovered,
+                "applied_unexpectedly": applied_unexpectedly,
+                "failed": failed,
+                "skipped_already_recovered": already,
+                "not_needs_input": not_eligible,
+            }
+        except Exception as e:  # noqa: BLE001 - one bad job must not stop the sweep
+            logger.warning("Question re-fetch failed for %s: %s", jid, e)
+            failed.append({"job_id": jid, "message": "%s: %s" % (type(e).__name__, e)})
+            continue
+
+        if result["status"] == "recovered":
+            questions = project_pending_questions(result["questions"])
+            await record_application(jid, status="needs_input",
+                                     extra={"pending_questions": questions})
+            recovered.append({"job_id": jid, "question_count": len(questions)})
+        elif result["status"] == "applied_unexpectedly":
+            # Record what actually happened. Leaving it as needs_input would
+            # make recovery re-open the same job forever.
+            await record_application(jid, status="applied",
+                                     extra={"recovery_note": result["message"]})
+            applied_unexpectedly.append(result)
+        else:
+            failed.append({"job_id": jid, "message": result.get("message")})
+
+    return {
+        "status": "success" if not failed else "partial_success",
+        "confirmed": True,
+        "recovered_count": len(recovered),
+        "recovered": recovered,
+        "applied_unexpectedly": applied_unexpectedly,
+        "failed": failed,
+        "skipped_already_recovered": already,
+        "not_needs_input": not_eligible,
+    }

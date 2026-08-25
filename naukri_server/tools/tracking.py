@@ -1,5 +1,6 @@
 """Application tracking tools — thin MCP dispatcher over ApplicationService."""
 
+import json
 from typing import Optional
 
 from naukri_server import mcp
@@ -36,6 +37,116 @@ from naukri_server.services.apply_service import (  # noqa: F401
     batch_apply_with_reminders as _do_batch_apply,
 )
 
+
+
+# ---------------------------------------------------------------------------
+# Pending screening questions: the persisted shape, and reading BOTH shapes
+#
+# A needs_input row records what the recruiter asked under
+# `extra.pending_questions`. That field has TWO shapes on disk and both must
+# keep working:
+#
+#   legacy int   -- the COUNT alone. Every row written before the text was
+#                   persisted carries this. The questions themselves were
+#                   returned to the caller and never stored, so for these rows
+#                   the text is GONE and only a live re-fetch brings it back.
+#   current list -- the questions themselves: text, type and options.
+#
+# Never an answer. An answer is personal data; it lives only in the local
+# answer cache (questions.json), keyed by question text.
+# ---------------------------------------------------------------------------
+
+#: Key under `applications.extra` naming what a needs_input row waits on.
+PENDING_QUESTIONS_KEY = "pending_questions"
+
+_NO_COUNT_NOTE = "question count not recorded, re-fetch to see them"
+
+
+def project_pending_questions(pending) -> list:
+    """Project live pending questions into the shape persisted on the row.
+
+    Keeps question TEXT, TYPE and OPTIONS. Drops everything else -- including,
+    deliberately, any answer that happens to ride along on the input dict. The
+    row records what was ASKED; what was answered belongs in the answer cache.
+    """
+    projected = []
+    for item in pending or []:
+        if isinstance(item, str):
+            # A third shape reaches this from the JSON->SQLite migration, which
+            # round-trips pending_questions as a list of bare question strings
+            # (see tests/test_json_migration.py). Skipping non-dicts would drop
+            # the text and then report text_recoverable=True over an empty list
+            # -- the exact "silently shows nothing" failure this module exists
+            # to prevent. The string IS the question, so keep it.
+            projected.append({"question": item, "type": "", "options": {}})
+            continue
+        if not isinstance(item, dict):
+            continue
+        projected.append({
+            "question": item.get("question") or "",
+            "type": item.get("type") or "",
+            "options": item.get("options") or {},
+        })
+    return projected
+
+
+def read_pending_questions(raw) -> dict:
+    """Read `extra.pending_questions` in EITHER shape, without ever lying.
+
+    Returns {"count", "questions", "text_recoverable", "note"}.
+
+    `text_recoverable` is the load-bearing field. A legacy row must NEVER be
+    rendered as though the text were available: handing back an empty question
+    list for a row genuinely blocked on three questions reads as "no
+    questions", which is the opposite of the truth. When the text is gone the
+    `note` says so in words and the count is still reported.
+    """
+    if isinstance(raw, list):
+        questions = project_pending_questions(raw)
+        return {
+            "count": len(questions),
+            "questions": questions,
+            "text_recoverable": True,
+            "note": None,
+        }
+    # bool subclasses int -- exclude it so True never reports as "1 question".
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        count = max(0, raw)
+        noun = "question" if count == 1 else "questions"
+        pronoun = "it" if count == 1 else "them"
+        return {
+            "count": count,
+            "questions": [],
+            "text_recoverable": False,
+            "note": (
+                "%d %s, text not recoverable, re-fetch to see %s" % (count, noun, pronoun)
+                if count else _NO_COUNT_NOTE
+            ),
+        }
+    return {
+        "count": 0,
+        "questions": [],
+        "text_recoverable": False,
+        "note": _NO_COUNT_NOTE,
+    }
+
+
+def _row_pending_raw(row: dict):
+    """Pull the raw pending_questions value off an application row.
+
+    The DB packs every non-column field into the `extra` JSON TEXT column, so
+    that is where it lives on a row read back from SQLite. Falls back to the
+    top level because in-memory rows carry it flat.
+    """
+    extra = row.get("extra")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (ValueError, TypeError):
+            extra = None
+    if isinstance(extra, dict) and PENDING_QUESTIONS_KEY in extra:
+        return extra[PENDING_QUESTIONS_KEY]
+    return row.get(PENDING_QUESTIONS_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +508,167 @@ async def naukri_batch_apply(
             set_reminder_days=set_reminder_days,
         ),
         "applications.batch_apply",
+    )
+
+
+# ---------------------------------------------------------------------------
+# What is each stalled application waiting for?
+# ---------------------------------------------------------------------------
+
+
+async def _pending_questions_report(limit: int = 50) -> dict:
+    """Build the "what is each stuck application waiting for?" report.
+
+    Read-only: one SELECT plus the local answer cache. No network, no writes.
+    """
+    from naukri_server.database import list_applications as db_list
+    from naukri_server.cache import _load_cache, _cache_key
+
+    limit = validate_limit(limit)
+    rows, total = await db_list(status="needs_input", limit=limit, offset=0)
+
+    try:
+        cache = _load_cache()
+    except Exception as exc:  # noqa: BLE001 - an unreadable cache must not
+        # sink the report; it only costs the answered/unanswered marking.
+        logger.warning("Answer cache unreadable, treating every question as unanswered: %s", exc)
+        cache = {}
+
+    entries = []
+    for row in rows:
+        read = read_pending_questions(_row_pending_raw(row))
+
+        questions = []
+        for q in read["questions"]:
+            key = _cache_key(q["question"], q["options"])
+            questions.append({**q, "answered": key in cache, "cache_key": key})
+
+        if read["text_recoverable"]:
+            unanswered = sum(1 for q in questions if not q["answered"])
+            estimate = False
+        else:
+            # The text is gone, so which of them are already answered CANNOT be
+            # known. Assume none are. That is the conservative direction: it can
+            # only under-promise. Assuming the opposite would float a genuinely
+            # expensive row to the top of a list sorted by cheapness.
+            unanswered = read["count"]
+            estimate = True
+
+        entry = {
+            "job_id": row.get("job_id"),
+            "company": row.get("company"),
+            "title": row.get("title"),
+            "stalled_at": row.get("applied_at"),
+            "question_count": read["count"],
+            "unanswered_count": unanswered,
+            "unanswered_is_estimate": estimate,
+            "text_recoverable": read["text_recoverable"],
+            "questions": questions,
+        }
+        if read["note"]:
+            entry["note"] = read["note"]
+        entries.append(entry)
+
+    # Cheapest win first: fewest OUTSTANDING questions, then fewest questions
+    # overall, then job_id so the order is total and stable. An application
+    # blocked on one already-answered question is one action from done and must
+    # never sit below one blocked on ten.
+    entries.sort(key=lambda e: (e["unanswered_count"], e["question_count"], str(e["job_id"] or "")))
+
+    with_text = sum(1 for e in entries if e["text_recoverable"])
+    return {
+        "status": "success",
+        "total_needs_input": total,
+        "count": len(entries),
+        # The cheapest-first ordering is over the rows RETURNED. If `limit` cut
+        # the set short, the true cheapest win could be in the tail that was
+        # never fetched -- so say when that is possible rather than implying a
+        # global ranking. (17 stalled rows today, against a default of 50.)
+        "has_more": total > len(entries),
+        "total_questions": sum(e["question_count"] for e in entries),
+        "total_unanswered": sum(e["unanswered_count"] for e in entries),
+        "with_question_text": with_text,
+        "text_not_recoverable": len(entries) - with_text,
+        "recovery_hint": (
+            "Rows with text_recoverable=false stored only a count; their question "
+            "text was never persisted. naukri_recover_pending_questions re-fetches it."
+        ),
+        "applications": entries,
+    }
+
+
+@mcp.tool()
+async def naukri_pending_questions(limit: int = 50) -> dict:
+    """Show what every stalled (needs_input) application is waiting for.
+
+    Sorted cheapest-win first: fewest OUTSTANDING (unanswered) questions at the
+    top, so an application one answer from done is never buried under one
+    blocked on ten.
+
+    Each question is marked `answered` when the local answer cache already
+    holds a reply for it -- those need no new input from you, only a re-submit.
+
+    Rows written before the question text was persisted carry `text_recoverable:
+    false` and a `note` saying the count is all that survived. They report their
+    COUNT honestly and an empty `questions` list; that is not "no questions".
+    Call naukri_recover_pending_questions to re-fetch their text.
+
+    Read-only: no network, no writes.
+
+    Args:
+        limit: Max applications to report (default 50)
+
+    Returns:
+        {status, total_needs_input, count, has_more, total_questions,
+         total_unanswered, with_question_text, text_not_recoverable,
+         applications: [...]}
+
+        `has_more` true means `limit` truncated the set, so the ordering is
+        cheapest-first WITHIN the returned rows only.
+    """
+    return await handle_tool_action(
+        lambda: _pending_questions_report(limit=limit),
+        "applications.pending_questions",
+    )
+
+
+@mcp.tool()
+async def naukri_recover_pending_questions(
+    job_ids: Optional[list] = None,
+    confirm: bool = False,
+    limit: int = 25,
+) -> dict:
+    """Re-fetch the screening questions for stalled rows that stored only a count.
+
+    Those rows recorded HOW MANY questions blocked them and not WHAT they were,
+    so the only way back is to ask Naukri again. This does that, and submits
+    nothing: the re-fetch supplies no answers, so the reply comes back as the
+    question list -- the same path that produced these rows in the first place.
+
+    Gated. With `confirm=False` (the default) it touches the network NOT AT ALL:
+    it names exactly which job ids would be re-fetched and returns.
+
+    A row is recovered once. Rows whose text is already present are skipped.
+
+    Args:
+        job_ids: Restrict to these job ids. Omit for every recoverable row.
+        confirm: False (default) previews and performs nothing. True re-fetches.
+        limit: Max stalled rows to consider (default 25)
+
+    Returns:
+        confirm=False -> {status: "preview", would_refetch_count, would_refetch,
+                          skipped_already_recovered, performed: "nothing"}
+        confirm=True  -> {status, recovered_count, recovered, failed,
+                          applied_unexpectedly, skipped_already_recovered}
+    """
+    # Function-scope import: tools.apply imports THIS module at module scope,
+    # so a top-level import here would close the cycle. Same pattern
+    # services/apply_service.py uses for _apply_single.
+    from naukri_server.tools.apply import _recover_pending_questions
+
+    return await handle_tool_action(
+        lambda: _recover_pending_questions(job_ids=job_ids, confirm=confirm, limit=limit),
+        "applications.recover_questions",
     )
 
 
