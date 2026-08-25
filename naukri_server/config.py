@@ -123,6 +123,33 @@ NOTIFICATION_READ_API = "/cloudgateway-mynaukri/notification-center-services/v0/
 
 # Dashboard & analytics
 DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
+# MEASURED 2026-08-25, and five of these ten names are PHANTOM.
+#
+# Naukri's own homepage fires this endpoint with NO query string at all --
+# captured live: `GET .../v1/users/self/dashboard`, no `properties`, 200. This
+# server invents the parameter.
+#
+# An observed bare response contains five of the ten requested names
+# (isPaidUser, profileSegment, lookupData, res360NotifType, photoInfo) and does
+# NOT contain the other five: userDetails, profilePerformance,
+# incompleteSection, campusData, aiInterviewEligibility. Those five were never
+# "discarded" -- they never arrived. Asking for them adds nothing observable.
+#
+# NOT PROVEN, and stated as unproven: that the parameter is ignored outright.
+# The browser-context probe cannot send a query string to this endpoint (CORS),
+# so with-versus-without could not be compared through ONE transport. What is
+# measured is that the five do not appear in a real response and that Naukri's
+# own client never asks for them.
+#
+# Left in place deliberately rather than trimmed: the five that DO arrive are
+# named here, and removing the list would make this a bare call whose contents
+# nobody has written down. The pass-through in profile_service reports the
+# absent ones as absent, which is the honest reading and is exactly why it
+# distinguishes present from absent instead of testing truthiness.
+#
+# aiInterviewEligibility does not arrive -- but `eligibleFlagForAIMockInterview`
+# DOES, in the default payload, and is already read. The capability was reachable
+# the whole time under a different key.
 DASHBOARD_PROPERTIES = "userDetails,profilePerformance,incompleteSection,isPaidUser,profileSegment,lookupData,res360NotifType,photoInfo,campusData,aiInterviewEligibility"
 MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"
 APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"  # GET ?days=7

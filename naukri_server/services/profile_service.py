@@ -361,6 +361,31 @@ async def _get_dashboard() -> dict:
         # --- Recommendations ---
         result["recommended_jobs_count"] = safe_get(db, "recommendedJobsCount", "totalRecommendedJobs")
 
+        # --- Fields that DO arrive and were read by nothing ------------------
+        # Found by reading a real captured payload rather than by grepping the
+        # request list: these three are in the DEFAULT dashboard response, were
+        # never requested by name, and no code touched them.
+        #
+        # `videoProfile` names a product surface this server has never had a
+        # tool for. `desiredRole` is what HE says he wants, which the ranking
+        # code never consults. `predictiveFuncArea` is what NAUKRI thinks he
+        # is -- and the gap between those two is the interesting quantity,
+        # because it is the gap recruiters search across.
+        result["video_profile"] = safe_get(db, "videoProfile")
+        result["desired_roles"] = safe_get(db, "desiredRole")
+        result["predicted_functional_area"] = safe_get(db, "predictiveFuncArea")
+
+        # --- The conversion signal, which was arriving and unread ------------
+        # `totalSearchAppearancesLatestDate` says when he last SHOWED UP in a
+        # recruiter search; `recruiterActionsLatestDate` says when one last
+        # ACTED. Both were in the payload; only the second was read. The pair
+        # is the whole funnel: appearing without action is a positioning
+        # problem, not a discovery problem, and one date alone cannot say which.
+        result["search_appearances_latest_date"] = safe_get(
+            db, "totalSearchAppearancesLatestDate")
+        result["resume_score"] = safe_get(
+            safe_get(db, "lookupData", default={}), "resumeScore")
+
         # --- Properties this server ASKS FOR and used to throw away -----------
         #
         # `DASHBOARD_PROPERTIES` requests ten properties. SIX of them were read
