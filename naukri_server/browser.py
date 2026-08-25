@@ -17,6 +17,8 @@ from naukri_server.config import (
     CHROME_PROFILE, NAUKRI_BASE, NAV_TIMEOUT, ELEMENT_TIMEOUT, MAX_TABS, CDP_PORT,
     PROFILE_API, SESSION_VALIDATE_TIMEOUT, TOKEN_RENEWAL_TIMEOUT, POOL_CHECKOUT_TIMEOUT,
     BROWSER_OP_TIMEOUT, TOKEN_REFRESH_TIMEOUT, TOKEN_LOCK_WAIT_TIMEOUT,
+    PAGE_IDLE_TIMEOUT, PAGE_POOL_MIN_PAGES, PAGE_REAPER_INTERVAL,
+    CONTEXT_IDLE_TIMEOUT,
     logger,
 )
 from naukri_server import profile_lock
@@ -75,6 +77,10 @@ class TokenManager:
         self._cookies: Optional[str] = None
         self._refresh_lock = asyncio.Lock()
         self._context: Optional[BrowserContext] = None
+        # Set by NaukriBrowser._open_context. Lets the renewal path below bring
+        # a SUSPENDED browser back: renewing a token is real work, not
+        # monitoring, so it is allowed to resume.
+        self._resume_hook = None
 
     def bind(self, context: BrowserContext):
         """Bind to a browser context for cookie extraction."""
@@ -194,8 +200,29 @@ class TokenManager:
         Both paths are LOGGED (not debug-swallowed) so a checkpoint is no longer
         indistinguishable from a transient timeout.
         """
+        # RELOAD ONLY WORKS ON A NAUKRI PAGE. Reloading about:blank re-renders
+        # nothing, Naukri never sees a request, no nauk_at is reissued, and the
+        # code below then concludes "session expired" - a false AuthExpiredError
+        # from a session that was fine. That was reachable before 2026-08-25
+        # because the pool routinely held about:blank tabs, and it is reachable
+        # by construction now: a resumed context starts on a blank page. So
+        # navigate somewhere real unless we are already there.
         try:
-            await page.reload(timeout=NAV_TIMEOUT)
+            current = page.url or ""
+        except Exception:
+            current = ""
+        try:
+            if NAUKRI_BASE in current:
+                await page.reload(timeout=NAV_TIMEOUT)
+            else:
+                logger.debug(
+                    "Token refresh: page is at %r, not on Naukri - navigating instead "
+                    "of reloading", current[:60],
+                )
+                await page.goto(
+                    f"{NAUKRI_BASE}/mnjuser/homepage",
+                    wait_until="domcontentloaded", timeout=NAV_TIMEOUT,
+                )
         except (PlaywrightTimeoutError, TargetClosedError, asyncio.TimeoutError) as e:
             # Transient: nav didn't complete. Don't swallow — log + re-raise
             # so the API layer's retry/backoff can act on it.
@@ -291,6 +318,15 @@ class TokenManager:
             # Double-check after acquiring lock — another caller may have renewed
             if self._token:
                 return
+            if self._context is None and self._resume_hook is not None:
+                # The browser is suspended (idle). Minting a token is real work,
+                # so bring it back rather than reporting "not logged in" - which
+                # is what this would otherwise do the moment the cached JWT
+                # expired during an idle stretch.
+                try:
+                    await self._resume_hook()
+                except Exception as e:
+                    logger.warning("Token renewal could not resume the browser: %s", e)
             if self._context:
                 try:
                     pages = self._context.pages
@@ -368,6 +404,14 @@ class BrowserUnavailableError(Exception):
     pass
 
 
+# The three states a liveness caller can be told about. RUNNING and DOWN are the
+# pre-2026-08-25 binary; SUSPENDED is the state added so an intentionally idle
+# browser stops being reported as a crash.
+BROWSER_RUNNING = "running"
+BROWSER_SUSPENDED = "suspended"
+BROWSER_DOWN = "down"
+
+
 class _NoPagePool:
     """Stand-in for ``page_pool`` while the browser is not started.
 
@@ -404,17 +448,43 @@ class PagePool:
 
     _MAX_CRASHES = 10  # Max crashes before entering degraded mode
 
-    def __init__(self, context: BrowserContext, max_pages: int = 3):
+    def __init__(self, context: BrowserContext, max_pages: int = 3,
+                 idle_timeout: float = PAGE_IDLE_TIMEOUT,
+                 min_pages: int = PAGE_POOL_MIN_PAGES):
         self._context = context
         self._max_pages = max_pages
         self._semaphore = asyncio.Semaphore(max_pages)
         self._available: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
+        # Idle reaping. _last_used is keyed by the Page object and holds the
+        # monotonic time the page was RETURNED to the pool - i.e. the moment it
+        # went idle. A page absent from this map is treated as just-used, so an
+        # unknown page is never reaped.
+        self._idle_timeout = idle_timeout
+        self._min_pages = max(0, min_pages)
+        self._last_used: dict[Page, float] = {}
+        # Suspension. The pool object OUTLIVES the context on purpose: every
+        # existing guard is written as `if browser.page_pool` and two health
+        # probes (pool.utilization, pool.crash_rate - the latter CRITICAL) read
+        # get_stats()/circuit_state off it. Swapping in a falsy stand-in while
+        # idle would park a critical probe at "degraded" forever, which is the
+        # notification-noise pathology all over again. So the pool stays, keeps
+        # its counters, and simply has no context until someone needs one.
+        self._suspended = False
+        # Set by NaukriBrowser so a checkout can bring the browser back. This is
+        # the ONLY resume trigger in the system, which is what makes "probes do
+        # not resume" structural: the probe path never calls acquire().
+        self._on_resume = None
+        # Last REAL checkout. Liveness probes pass count_as_activity=False, so
+        # this clock tracks work, not monitoring - without that the 30s probes
+        # would hold the browser open forever.
+        self._last_activity = time.monotonic()
         # Observability counters
         self._checkouts = 0
         self._returns = 0
         self._crashes = 0
         self._max_wait_ms = 0
+        self._idle_closed = 0
         # Circuit breaker state
         self._circuit_state = "closed"  # closed, open, half_open
         self._circuit_failure_count = 0
@@ -425,7 +495,63 @@ class PagePool:
     async def initialize(self, first_page: Page):
         """Seed pool with the initial page from browser context."""
         self._all_pages.append(first_page)
+        self._touch(first_page)
         await self._available.put(first_page)
+
+    def _touch(self, page: Page) -> None:
+        """Stamp ``page`` as used now. Called when a page enters the pool and
+        every time one is returned to it."""
+        try:
+            self._last_used[page] = time.monotonic()
+        except TypeError:
+            # An unhashable page object cannot be tracked; it simply never
+            # becomes reap-eligible, which is the safe direction.
+            pass
+
+    def _forget(self, page: Page) -> None:
+        """Drop idle bookkeeping for a page leaving the pool."""
+        try:
+            self._last_used.pop(page, None)
+        except TypeError:
+            pass
+
+    def _idle_age(self, page: Page, now: float) -> float:
+        """Seconds since ``page`` was last used. Unknown pages read as 0 (fresh)."""
+        try:
+            return now - self._last_used.get(page, now)
+        except TypeError:
+            return 0.0
+
+    # -- suspension ---------------------------------------------------------
+
+    @property
+    def is_suspended(self) -> bool:
+        return self._suspended
+
+    def outstanding_leases(self) -> int:
+        """Checkouts that have not yet returned. Zero means nobody holds a page."""
+        return max(0, self._checkouts - self._returns)
+
+    def idle_seconds(self) -> float:
+        """Seconds since the last REAL checkout (monitoring does not count)."""
+        return time.monotonic() - self._last_activity
+
+    async def park(self) -> None:
+        """Close every page and give up the context, keeping the pool object.
+
+        Counters, circuit state and configuration all survive, so the health
+        probes that read this pool keep answering truthfully across an idle
+        period. Only the pages and the context reference go.
+        """
+        await self.close_all()
+        self._context = None
+        self._suspended = True
+
+    def rebind_context(self, context: BrowserContext) -> None:
+        """Point the parked pool at a freshly launched context."""
+        self._context = context
+        self._suspended = False
+        self._last_activity = time.monotonic()
 
     async def _create_page(self) -> Page:
         """Create a new tab in the shared browser context.
@@ -452,6 +578,7 @@ class PagePool:
                 "needed afterwards)."
             ) from exc
         self._all_pages.append(page)
+        self._touch(page)
         logger.info("PagePool: created new tab (%d/%d)", len(self._all_pages), self._max_pages)
         return page
 
@@ -468,6 +595,7 @@ class PagePool:
         logger.warning("PagePool: recovering crashed tab")
         if dead_page in self._all_pages:
             self._all_pages.remove(dead_page)
+        self._forget(dead_page)
         try:
             # new_page() has NO default timeout. A context whose browser has
             # wedged (socket open, renderer dead) neither answers nor errors, so
@@ -486,6 +614,7 @@ class PagePool:
                 "needed afterwards)."
             ) from exc
         self._all_pages.append(page)
+        self._touch(page)
         logger.info("PagePool: recovered tab (%d total)", len(self._all_pages))
         return page
 
@@ -506,14 +635,53 @@ class PagePool:
         logger.error("PagePool: browser context is dead (%s) - marked unavailable", reason)
 
     @asynccontextmanager
-    async def acquire(self):
+    async def acquire(self, *, count_as_activity: bool = True,
+                      allow_resume: bool = True):
         """Check out a page from the pool. Auto-returns on exit.
 
         Usage:
             async with page_pool.acquire() as page:
                 await page.goto(url)
                 result = await page.evaluate(...)
+
+        THIS IS THE ONLY PLACE A SUSPENDED BROWSER COMES BACK. Every one of the
+        call sites that needs a page reaches it, and nothing else does - which is
+        what makes "the 30s liveness probes must not resurrect the browser"
+        structural rather than a rule someone has to remember. The probes reach
+        NaukriBrowser.liveness(), which answers from state and never touches a
+        pool while suspended.
+
+        ``count_as_activity=False`` checks a page out WITHOUT restarting the
+        idle countdown. It exists for the one caller that is monitoring rather
+        than working: liveness() round-tripping a live browser. If monitoring
+        counted as activity, a probe every 30s against a 600s idle timeout would
+        hold the context open forever and suspension could never fire.
         """
+        # Resume BEFORE anything else - notably before the semaphore, so no
+        # lease is held across a relaunch and this cannot self-deadlock.
+        if self._suspended:
+            if not allow_resume:
+                # The monitoring path. Refusing here rather than relying on the
+                # caller checking state first is what makes "probes never
+                # resurrect an idle browser" true even if a suspend lands in the
+                # microseconds between the caller's state read and this call.
+                raise BrowserUnavailableError(
+                    "Browser is suspended; this caller may not resume it."
+                )
+            if self._on_resume is None:
+                raise BrowserUnavailableError(
+                    "Browser is suspended and no resume hook is installed. "
+                    "Call naukri_login to start a session."
+                )
+            await self._on_resume()
+            if self._suspended or self._context is None:
+                raise BrowserUnavailableError(
+                    "Browser is suspended and could not be resumed. "
+                    "Check naukri_health_check for watchdog state."
+                )
+
+        if count_as_activity:
+            self._last_activity = time.monotonic()
         # Circuit breaker check — fast-fail when browser is known-dead
         if self._circuit_state == "open":
             elapsed = time.monotonic() - self._circuit_open_time
@@ -591,10 +759,119 @@ class PagePool:
             self._returns += 1
             if page is not None:
                 try:
+                    # Stamp BEFORE re-queueing: the page becomes reap-eligible
+                    # only from the moment it is back in the pool, and it must
+                    # never land in the queue without a fresh timestamp.
+                    self._touch(page)
                     await self._available.put(page)
                 except Exception:
                     pass
             self._semaphore.release()
+
+    async def reap_idle_pages(self) -> int:
+        """Close pooled tabs that have sat unused past ``_idle_timeout``.
+
+        Returns the number of tabs closed.
+
+        THREE PROPERTIES MAKE THIS SAFE, and each one is load-bearing:
+
+        1. A CHECKED-OUT PAGE CANNOT BE REAPED, structurally rather than by a
+           lock. ``acquire()`` removes a page from ``_available`` for the whole
+           duration of the ``async with`` block and only puts it back in its
+           ``finally``. This method considers *only* what is in ``_available``,
+           so a page an operation is holding is not a candidate at all. There is
+           no window and no new lock to deadlock on.
+
+        2. THE BOOKKEEPING IS ATOMIC. Draining the queue, choosing keepers,
+           putting them back and removing the doomed from ``_all_pages`` all
+           happen below with NO await between them, so the event loop cannot
+           interleave a caller into a half-updated pool. Only the actual
+           ``page.close()`` calls await - and by then the doomed pages are
+           reachable from neither ``_available`` nor ``_all_pages``, so no
+           caller can be handed one. This is why there is no second dead-page
+           path: ``acquire()``'s existing ``is_page_alive`` -> ``_recover_page``
+           recovery stays the only one, and it is not even reachable from here.
+
+        3. IT NEVER TOUCHES BROWSER LIFECYCLE. This is what keeps it clear of
+           browser_watchdog and of reauth's browser_restart stage, which both
+           own stop/start. The reaper closes tabs and nothing else: it never
+           closes the context, never flips ``browser.available``, never opens
+           the circuit. The watchdog's own restart path goes through
+           ``NaukriBrowser.stop()``, which cancels the reaper before tearing the
+           pool down, so no orphan sweep can run against a dead pool.
+
+        WHAT THE FLOOR IS AND IS NOT FOR. ``_min_pages`` newest pages are kept
+        whatever their age. It is tempting to say the floor is what stops the
+        30s liveness probes (browser_watchdog._probe and health.probes.browser,
+        where two consecutive failures trigger an automatic restart) from
+        failing. MEASURED, THAT IS NOT TRUE: with an aggressive reaper running
+        flat out, the probe shape saw 0/400 failures at min_pages=1 AND 0/400 at
+        min_pages=0, because ``acquire()`` creates a tab on demand whenever
+        ``len(_all_pages) < _max_pages``. The probes are safe at any floor.
+        What the floor actually buys is (a) an interactive caller never paying
+        tab-creation latency after an idle stretch, and (b) no create/close
+        churn - at floor 0 an aggressive reaper produced a visible "created new
+        tab" / "closed 1 idle tab" cycle on every probe.
+
+        Skipped entirely while the circuit is open: the browser is already
+        known-dead, the watchdog owns recovery, and closing corpses adds
+        nothing.
+        """
+        if self._circuit_state == "open":
+            return 0
+
+        now = time.monotonic()
+
+        # ---- Phase 1: bookkeeping. STRICTLY SYNCHRONOUS - do not add an await. ----
+        idle: list[Page] = []
+        while True:
+            try:
+                idle.append(self._available.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not idle:
+            return 0
+
+        # Freshest first, so the floor keeps the most recently used tabs and the
+        # stalest are the ones that go. Beyond tidiness this favours keeping a
+        # tab that is on a real Naukri page over one sitting at about:blank,
+        # which is what TokenManager.refresh_via_pool reloads.
+        idle.sort(key=lambda p: self._idle_age(p, now))
+
+        keep: list[Page] = []
+        doomed: list[Page] = []
+        for page in idle:
+            if len(keep) < self._min_pages or self._idle_age(page, now) < self._idle_timeout:
+                keep.append(page)
+            else:
+                doomed.append(page)
+
+        for page in keep:
+            self._available.put_nowait(page)   # unbounded queue: cannot block
+        for page in doomed:
+            if page in self._all_pages:
+                self._all_pages.remove(page)
+            self._forget(page)
+        # ---- end of the atomic section ----
+
+        if not doomed:
+            return 0
+
+        # ---- Phase 2: closing. The doomed pages are already unreachable. ----
+        for page in doomed:
+            try:
+                await page.close()
+            except Exception as e:
+                # A tab that cannot be closed is already gone; it has been
+                # dropped from the pool either way.
+                logger.debug("Idle tab close failed (already gone?): %s", e)
+
+        self._idle_closed += len(doomed)
+        logger.info(
+            "PagePool: closed %d idle tab(s) after >%.0fs unused (%d kept, %d total)",
+            len(doomed), self._idle_timeout, len(keep), len(self._all_pages),
+        )
+        return len(doomed)
 
     async def close_all(self):
         """Close all pages in the pool."""
@@ -604,6 +881,7 @@ class PagePool:
             except Exception:
                 pass
         self._all_pages.clear()
+        self._last_used.clear()
         while not self._available.empty():
             try:
                 self._available.get_nowait()
@@ -627,6 +905,14 @@ class PagePool:
             "returns": self._returns,
             "crashes": self._crashes,
             "max_wait_ms": self._max_wait_ms,
+            "open_tabs": len(self._all_pages),
+            "idle_tabs": self._available.qsize(),
+            "idle_closed": self._idle_closed,
+            "idle_timeout_s": self._idle_timeout,
+            "min_tabs": self._min_pages,
+            "suspended": self._suspended,
+            "idle_seconds": round(self.idle_seconds(), 1),
+            "outstanding_leases": self.outstanding_leases(),
         }
 
 
@@ -776,6 +1062,13 @@ class NaukriBrowser:
         self.page_pool: Union[PagePool, _NoPagePool] = _NO_POOL
         self.available = False
         self._holds_profile_lock = False
+        self._reaper_task: Optional[asyncio.Task] = None
+        # Serializes suspend, resume and the liveness state read, so no caller
+        # can observe a half-torn-down browser and mistake it for a crash.
+        self._suspend_lock = asyncio.Lock()
+        self._suspended = False
+        self._suspends = 0
+        self._resumes = 0
 
     async def start(self):
         # Cross-process guard: refuse to launch a SECOND instance against the
@@ -788,26 +1081,7 @@ class NaukriBrowser:
         profile_lock.acquire()
         self._holds_profile_lock = True
         try:
-            self.pw = await async_playwright().start()
-            self.context = await self.pw.chromium.launch_persistent_context(
-                user_data_dir=CHROME_PROFILE,
-                headless=False,
-                viewport={"width": 1280, "height": 800},
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    f"--remote-debugging-port={CDP_PORT}",
-                ],
-            )
-
-            # Initialize token manager
-            self.token_manager.bind(self.context)
-            await self.token_manager.extract()
-
-            # Initialize page pool with first page
-            first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-
-            self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
-            await self.page_pool.initialize(first_page)
+            await self._open_context()
 
             logger.info("Browser started (pool: %d max tabs), token: %s",
                          MAX_TABS, "found" if self.token_manager._token else "none")
@@ -831,6 +1105,8 @@ class NaukriBrowser:
                     self.token_manager.invalidate()
 
             self.available = True
+            self._suspended = False
+            self._start_reaper()
         except Exception as e:
             logger.error("Browser startup failed: %s. REST-only mode active.", e)
             self.available = False
@@ -861,6 +1137,14 @@ class NaukriBrowser:
         # and a probe that runs mid-teardown must not report it healthy.
         self.available = False
 
+        # Cancel the reaper BEFORE close_all: it must not be mid-sweep, holding
+        # pages it drained out of the queue, while the pool is being torn down.
+        # This also makes the watchdog restart path (stop -> start) and reauth's
+        # browser_restart stage clean - each start() installs a fresh reaper
+        # bound to the new pool, and no orphan task survives pointing at the old
+        # one.
+        await self._stop_reaper()
+
         # Every teardown step is individually guarded. Stopping a browser that
         # already died is the NORMAL case on the watchdog restart path, and a
         # raise from any one step used to skip the profile-lock release below,
@@ -881,6 +1165,9 @@ class NaukriBrowser:
         self.page_pool = _NO_POOL
         self.context = None
         self.pw = None
+        # A full stop is NOT a suspend: the pool is gone and the profile lock is
+        # about to be released, so nothing here should read as "idle but ready".
+        self._suspended = False
 
         # Release the cross-process profile lock so another instance (or a
         # watchdog restart in this process) can re-acquire it cleanly.
@@ -891,6 +1178,274 @@ class NaukriBrowser:
                 logger.warning("Profile lock release failed: %s", e)
             self._holds_profile_lock = False
         logger.info("Browser stopped")
+
+    # -- context lifecycle: start / suspend / resume -------------------------
+
+    async def _open_context(self) -> None:
+        """Launch Playwright and the persistent context, and bind the pool to it.
+
+        Shared by ``start()`` and ``_resume()`` so a resumed browser is
+        configured identically to a freshly started one - notably
+        ``headless=False``, which is deliberate (sign-in must be visible, and
+        headless is more detectable). The fix for the idle browser is fewer live
+        tabs and no idle process, never an invisible one.
+
+        On RESUME the existing PagePool object is REUSED rather than replaced.
+        Two health probes (pool.utilization and the CRITICAL pool.crash_rate)
+        read counters straight off ``browser.page_pool``, and every other caller
+        guards with ``if browser.page_pool``. Keeping one pool object for the
+        life of the process means an idle period neither blanks those probes nor
+        resets the crash history.
+        """
+        self.pw = await async_playwright().start()
+        self.context = await self.pw.chromium.launch_persistent_context(
+            user_data_dir=CHROME_PROFILE,
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                f"--remote-debugging-port={CDP_PORT}",
+            ],
+        )
+
+        # Initialize token manager
+        self.token_manager.bind(self.context)
+        self.token_manager._resume_hook = self._resume
+        await self.token_manager.extract()
+
+        # Initialize page pool with first page
+        first_page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+
+        if isinstance(self.page_pool, PagePool):
+            self.page_pool.rebind_context(self.context)
+        else:
+            self.page_pool = PagePool(self.context, max_pages=MAX_TABS)
+        self.page_pool._on_resume = self._resume
+        await self.page_pool.initialize(first_page)
+
+    @property
+    def is_suspended(self) -> bool:
+        """True when the browser was closed ON PURPOSE because it was idle.
+
+        Distinct from "down". A suspended browser has no Chrome process and
+        holds no context - and is perfectly healthy: the session lives in
+        chrome-profile/ on disk, and the next call that needs a page brings it
+        back. Down means it should be running and is not.
+        """
+        return self._suspended
+
+    async def _suspend(self) -> None:
+        """Close the context because nothing has used it. Caller holds the lock.
+
+        Deliberately NOT a full stop(). The profile lock is KEPT (we still own
+        the profile, we are simply not running Chrome against it, and holding it
+        means our own resume cannot lose a race to another instance). The
+        aiohttp API session is KEPT, so REST calls keep working off the cached
+        token while the browser is away. The PagePool object is KEPT so the
+        health probes that read it keep answering.
+
+        The reaper task is left running on purpose: this method is called FROM
+        that task, so cancelling it here would cancel its own caller.
+        """
+        t0 = time.monotonic()
+        idle_for = self.page_pool.idle_seconds() if isinstance(self.page_pool, PagePool) else 0.0
+
+        # available goes False first: from here the browser cannot serve a page
+        # until it is resumed. _suspended is set only at the END, once the
+        # teardown is real. liveness() reads both under the same lock, so no
+        # caller can observe the half-torn-down middle and call it a crash.
+        self.available = False
+
+        for label, step in (
+            ("pool.park", self.page_pool.park() if isinstance(self.page_pool, PagePool) else None),
+            ("context.close", self.context.close() if self.context else None),
+            ("playwright.stop", self.pw.stop() if self.pw else None),
+        ):
+            if step is None:
+                continue
+            try:
+                await step
+            except Exception as e:
+                logger.debug("Browser suspend step %s failed: %s", label, e)
+
+        self.context = None
+        self.pw = None
+        self._suspended = True
+        self._suspends += 1
+        logger.info(
+            "Browser suspended after %.0fs idle (teardown %.2fs) - no Chrome process; "
+            "session is on disk and the next page checkout resumes it",
+            idle_for, time.monotonic() - t0,
+        )
+
+    async def _resume(self) -> None:
+        """Bring a suspended browser back. Idempotent and safe to call
+        concurrently - the losers of the lock find the work already done.
+
+        Reached ONLY from PagePool.acquire() and from the token layer's renewal
+        path, which is equally real work. Monitoring never gets here.
+        """
+        async with self._suspend_lock:
+            if not self._suspended:
+                return
+            t0 = time.monotonic()
+            try:
+                await self._open_context()
+            except Exception as e:
+                # A browser that cannot come back is NOT healthy, and leaving it
+                # flagged suspended would report it as healthy forever. Demote
+                # to DOWN so the very next probe says unhealthy and the watchdog
+                # takes over with a real restart.
+                self._suspended = False
+                self.available = False
+                logger.error(
+                    "Browser resume FAILED (%s) - leaving the browser DOWN so the "
+                    "watchdog restarts it", e,
+                )
+                raise BrowserUnavailableError("Browser resume failed: %s" % e) from e
+            self._suspended = False
+            self.available = True
+            self._resumes += 1
+            self._start_reaper()
+            logger.info("Browser resumed from suspend in %.2fs", time.monotonic() - t0)
+
+    async def liveness(self) -> tuple:
+        """Authoritative browser state for MONITORING. Returns (state, message).
+
+        Single source of truth for browser_watchdog._probe and the
+        browser.liveness health probe, so the two can never disagree about
+        whether an idle browser is a crash.
+
+        IT NEVER RESUMES. The suspended branch touches no pool at all, and the
+        running branch checks out with allow_resume=False, so even a suspend
+        landing between the state read and the checkout cannot turn a probe into
+        a relaunch. Without that, the 30s probes would resurrect the browser
+        forever and it could never stay down.
+
+        HOW SUSPENDED IS TOLD APART FROM CRASHED - the whole risk of this
+        feature, since suspended is reported as healthy:
+          * ``_suspended`` is set ONLY by _suspend(), only under _suspend_lock,
+            only with zero outstanding page leases, and only after the teardown
+            has actually run.
+          * It is then NOT TAKEN ON TRUST. A genuine suspension has no context,
+            no Playwright and a parked pool; anything claiming to be suspended
+            while still holding one of those is a broken teardown and is
+            reported DOWN. That is the control against a suspend state
+            swallowing a real crash.
+          * A failed resume clears the flag and leaves available=False, so it
+            reports DOWN on the very next probe.
+          * A crash while RUNNING is untouched by any of this: the round-trip
+            still runs and still answers DOWN.
+        """
+        async with self._suspend_lock:
+            if self._suspended:
+                if self.context is not None or self.pw is not None:
+                    return (BROWSER_DOWN,
+                            "Suspend state is inconsistent: a context is still open. "
+                            "Treating as a crash, not as idle.")
+                if getattr(self.page_pool, "is_suspended", False) is not True:
+                    return (BROWSER_DOWN,
+                            "Suspend state is inconsistent: the page pool is not parked. "
+                            "Treating as a crash, not as idle.")
+                return (BROWSER_SUSPENDED,
+                        "Browser suspended (idle) - no Chrome process; session is on "
+                        "disk and the next page checkout resumes it")
+            if not self.available:
+                return (BROWSER_DOWN, "Browser not available")
+            if not self.page_pool:
+                return (BROWSER_DOWN, "Browser has no page pool")
+
+        try:
+            async with self.page_pool.acquire(
+                count_as_activity=False, allow_resume=False
+            ) as page:
+                if await is_page_alive(page):
+                    return (BROWSER_RUNNING, "Browser alive")
+                return (BROWSER_DOWN,
+                        "Page did not answer a liveness round-trip (target closed or wedged)")
+        except Exception as e:
+            if self._suspended:
+                # Suspended between the state read and the checkout. Benign.
+                return (BROWSER_SUSPENDED, "Browser suspended (idle) during the probe")
+            return (BROWSER_DOWN, "Probe failed: %s" % e)
+
+    async def _maybe_suspend(self) -> bool:
+        """Suspend when the pool has been quiet long enough. True if it did."""
+        if CONTEXT_IDLE_TIMEOUT <= 0:
+            return False
+        pool = self.page_pool
+        if not isinstance(pool, PagePool) or pool.is_suspended:
+            return False
+        if not self.available or self._suspended:
+            return False
+        if pool.outstanding_leases() > 0:
+            return False
+        if pool.idle_seconds() < CONTEXT_IDLE_TIMEOUT:
+            return False
+        async with self._suspend_lock:
+            # Re-check everything under the lock: a caller may have checked a
+            # page out while we waited for it, and suspending with a lease
+            # outstanding would close a page from under a live operation.
+            if self._suspended or not self.available:
+                return False
+            if pool.is_suspended or pool.outstanding_leases() > 0:
+                return False
+            if pool.idle_seconds() < CONTEXT_IDLE_TIMEOUT:
+                return False
+            await self._suspend()
+            return True
+
+    def _start_reaper(self) -> None:
+        """Install the background idle-tab reaper for the CURRENT pool."""
+        if PAGE_REAPER_INTERVAL <= 0:
+            return
+        if self._reaper_task is not None and not self._reaper_task.done():
+            return
+        try:
+            self._reaper_task = asyncio.create_task(self._reaper_loop())
+        except RuntimeError:
+            # No running loop (import-time / sync test context). The pool still
+            # works; it just does not self-trim.
+            self._reaper_task = None
+
+    async def _stop_reaper(self) -> None:
+        """Cancel and await the reaper. Safe to call when it was never started."""
+        task, self._reaper_task = self._reaper_task, None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _reaper_loop(self) -> None:
+        """Periodically close pooled tabs nobody has touched.
+
+        Two jobs, in order: trim idle tabs, then suspend the whole context once
+        the pool has been quiet for CONTEXT_IDLE_TIMEOUT.
+
+        It never opens the circuit and never restarts anything - suspension is
+        not recovery. The watchdog and reauth still own CRASH recovery; this
+        owns only the idle path, and the two are kept apart by liveness()
+        reporting a suspended browser as healthy so no restart is ever
+        triggered for it. One cycle failing must never kill the loop.
+        """
+        while True:
+            try:
+                await asyncio.sleep(PAGE_REAPER_INTERVAL)
+                pool = self.page_pool
+                if not pool or not self.available or self._suspended:
+                    continue
+                await pool.reap_idle_pages()
+                # Then, if the whole pool has gone quiet, close the context too.
+                # Ordering matters: tabs trim at PAGE_IDLE_TIMEOUT, the context
+                # goes at the longer CONTEXT_IDLE_TIMEOUT.
+                await self._maybe_suspend()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("Idle tab reaper cycle failed (continuing): %s", e)
 
     async def get_profile_name(self) -> str:
         """Get profile name via profile API."""

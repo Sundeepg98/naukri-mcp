@@ -78,22 +78,43 @@ class BrowserWatchdog:
                 logger.warning("Watchdog loop error: %s", e)
 
     async def _probe(self) -> bool:
-        """Liveness check - acquire a page and make it ANSWER.
+        """Liveness check - is the browser in a state that needs no restart?
 
         This used to end in `_ = page.url`, a cached attribute read that cannot
         raise on a dead target (see browser.is_page_alive). The watchdog
         therefore reported healthy against a corpse: 7 BrowserCrashed events on
-        2026-08-20 produced 0 restarts. The probe now round-trips to the
-        browser, so it is capable of returning the failing verdict.
+        2026-08-20 produced 0 restarts. It now delegates to
+        NaukriBrowser.liveness(), which round-trips to the browser and so is
+        capable of returning the failing verdict.
+
+        A SUSPENDED BROWSER IS HEALTHY (2026-08-25). Since the server closes an
+        idle context on purpose, "no Chrome process" is now a NORMAL state, not
+        a crash: the session lives in chrome-profile/ on disk and the next page
+        checkout brings it back. Restarting it would defeat the whole point, and
+        - worse - each cycle would emit BrowserCrashed, the event class that
+        produced 2342 spurious notifications over two days (see _handle_failure
+        below). So suspended returns True and nothing here fires.
+
+        Crucially this reports state WITHOUT resuming: liveness() checks out
+        with allow_resume=False. Were it to resume, this 30s probe would
+        resurrect the browser forever and it could never stay idle.
+
+        The distinction is not taken on trust - liveness() reports DOWN for a
+        browser that CLAIMS to be suspended while still holding a context, and a
+        failed resume is demoted to DOWN too. A real crash is still a crash.
         """
         try:
-            from naukri_server.browser import browser, is_page_alive
-            if not browser or not browser.available:
+            from naukri_server.browser import browser, BROWSER_RUNNING, BROWSER_SUSPENDED
+            if not browser:
                 return False
-            # Try to acquire a page with a short timeout
             async with _timeout(10):
-                async with browser.page_pool.acquire() as page:
-                    return await is_page_alive(page)
+                state, message = await browser.liveness()
+            if state == BROWSER_SUSPENDED:
+                logger.debug("Browser probe: suspended (idle) - no restart needed")
+                return True
+            if state != BROWSER_RUNNING:
+                logger.debug("Browser probe failed: %s", message)
+            return state == BROWSER_RUNNING
         except Exception as e:
             logger.debug("Browser probe failed: %s", e)
             return False
@@ -176,6 +197,22 @@ class BrowserWatchdog:
         """Stop and restart the browser. Emit recovery event on success."""
         from naukri_server.browser import browser
         from naukri_server.events import event_bus, BrowserRecovered
+
+        # Defence in depth. _probe already reports a suspended browser as
+        # healthy, so this should be unreachable for one - but _handle_failure is
+        # also called directly by the health probe scheduler
+        # (health/framework.py), and restarting an intentionally idle browser
+        # would relaunch Chrome behind the operator's back.
+        # `is True`, not truthiness: this guard SKIPS recovery, so it must fire
+        # only on an unambiguous, real suspended flag. Anything else (a stub, a
+        # sentinel, a property that raised) falls through and restarts, which is
+        # the safe direction to fail in.
+        if getattr(browser, "is_suspended", False) is True:
+            logger.info(
+                "Browser restart skipped: the browser is SUSPENDED (idle), not "
+                "crashed. It resumes on the next page checkout."
+            )
+            return
 
         t0 = time.monotonic()
         logger.warning("Attempting browser restart (#%d)...", self._restart_count + 1)

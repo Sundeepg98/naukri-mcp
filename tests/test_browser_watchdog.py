@@ -62,18 +62,14 @@ class TestProbe:
         the fix -- see tests/test_browser_liveness.py.
         """
         w = BrowserWatchdog()
-        mock_page = MagicMock()
-        mock_page.url = "https://www.naukri.com"
-        mock_page.is_closed = MagicMock(return_value=False)
-        mock_page.evaluate = AsyncMock(return_value=1)
-
-        @asynccontextmanager
-        async def fake_acquire():
-            yield mock_page
-
         with patch("naukri_server.browser.browser") as mock_browser:
-            mock_browser.available = True
-            mock_browser.page_pool.acquire = fake_acquire
+            # Since 2026-08-25 _probe delegates to NaukriBrowser.liveness(), the
+            # single source of truth shared with the browser.liveness health
+            # probe, so the two can never disagree about whether an idle browser
+            # is a crash. The page round-trip still happens - inside liveness()
+            # - and is covered end to end against the real browser object in
+            # tests/test_browser_liveness.py.
+            mock_browser.liveness = AsyncMock(return_value=("running", "Browser alive"))
             result = await w._probe()
         assert result is True
 

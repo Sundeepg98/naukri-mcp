@@ -253,7 +253,12 @@ def _fake_pool_yielding(page):
     """
 
     @asynccontextmanager
-    async def acquire():
+    async def acquire(*, count_as_activity=True, allow_resume=True):
+        # PagePool.acquire gained these keyword-only params on 2026-08-25
+        # (monitoring must neither reset the idle clock nor resume a suspended
+        # browser). A stand-in that refused them would fail with a TypeError
+        # that the probes swallow as "unhealthy", which would look like a real
+        # browser fault.
         yield page
 
     pool = type("FakePool", (), {})()

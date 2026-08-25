@@ -363,6 +363,64 @@ SESSION_VALIDATE_TIMEOUT = 5  # Seconds for session validation on startup
 TOKEN_RENEWAL_TIMEOUT = 15000  # Milliseconds for token renewal navigation
 POOL_CHECKOUT_TIMEOUT = 30  # Max seconds to wait for a browser tab
 
+# --- Idle tab reaping (2026-08-25) -----------------------------------------
+# The pool grew to MAX_TABS and never shrank: _all_pages only ever appended, so
+# a tab opened for one scheduled run sat at about:blank until the process died.
+# Measured live on 2026-08-25 before the fix: 12 chrome processes / 263.5 MB,
+# and CDP reported 3 page targets of which 2 were about:blank.
+#
+# What keeps this clear of browser_watchdog (and of reauth's browser_restart
+# stage) is that reaping touches TAB COUNT ONLY - it never closes the context,
+# never flips browser.available, never opens the circuit, and NaukriBrowser.stop
+# cancels the reaper before the pool is torn down.
+#
+# The floor is NOT the anti-race mechanism, though it reads like it should be.
+# Measured with an aggressive reaper running flat out, the 30s liveness probe
+# shape saw 0/400 failures at PAGE_POOL_MIN_PAGES=1 AND 0/400 at 0, because
+# acquire() creates a tab on demand. What the floor actually buys is no
+# cold-start for interactive callers and no create/close churn.
+PAGE_IDLE_TIMEOUT = int(os.environ.get("NAUKRI_PAGE_IDLE_TIMEOUT", "300"))
+"""Seconds a pooled tab may sit unused in the available queue before it is
+closed. Only tabs ABOVE PAGE_POOL_MIN_PAGES are eligible, and a tab that is
+checked out is not in the queue at all, so an in-flight operation can never
+have its page closed underneath it."""
+
+PAGE_POOL_MIN_PAGES = int(os.environ.get("NAUKRI_PAGE_POOL_MIN_PAGES", "1"))
+"""Warm-page floor. Never reaped regardless of age, so interactive callers pay
+no tab-creation cost and the 30s liveness probes always have a tab to acquire.
+Recreating a reaped tab costs 0.048s measured (context.new_page on a live
+context), so the floor is about the probes, not about speed."""
+
+CONTEXT_IDLE_TIMEOUT = int(os.environ.get("NAUKRI_CONTEXT_IDLE_TIMEOUT", "600"))
+"""Seconds of no REAL pool activity before the whole browser context is closed
+and the server goes to the SUSPENDED state - no Chrome process at all, which is
+what the LinkedIn / Instahyre / Uplers servers do and what the operator asked
+for on 2026-08-25.
+
+Safe because the session lives in chrome-profile/ on disk, not in the process.
+Verified empirically 2026-08-25: a persistent cookie planted on .naukri.com
+survived context.close() + playwright.stop() + relaunch from the same profile
+dir with an identical value. Corroborated by the profile's
+Default/Network/Cookies being an on-disk SQLite that running Chrome holds an
+exclusive lock on. It is also the move reauth's browser_restart stage already
+makes in production - the one that ended the 8.5-hour outage on 2026-08-22.
+
+Deliberately LONGER than PAGE_IDLE_TIMEOUT so tabs trim first and the context
+goes only once the whole pool has gone quiet.
+
+SET TO 0 TO DISABLE suspension entirely (NAUKRI_CONTEXT_IDLE_TIMEOUT=0), which
+leaves the 2026-08-25 tab reaping in place but keeps the browser up forever, as
+it behaved before."""
+
+PAGE_REAPER_INTERVAL = int(os.environ.get("NAUKRI_PAGE_REAPER_INTERVAL", "60"))
+"""Seconds between reaper sweeps. A tab therefore dies between PAGE_IDLE_TIMEOUT
+and PAGE_IDLE_TIMEOUT + this.
+
+SET TO 0 TO DISABLE idle reaping entirely (NAUKRI_PAGE_REAPER_INTERVAL=0): the
+background task is never started and the pool behaves exactly as it did before
+2026-08-25. That is the escape hatch if reaping is ever suspected in an
+incident; it is not a knob to reach for otherwise."""
+
 # --- Wedge guards (2026-08-20) ---------------------------------------------
 # Each of these caps an await that previously had NO bound at all. The reason
 # they matter more than an ordinary timeout: the awaits they cap run while

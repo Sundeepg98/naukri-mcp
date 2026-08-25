@@ -150,7 +150,11 @@ class TestTokenManagerRefreshClassification:
         ctx = AsyncMock()
         tm.bind(ctx)
         page = AsyncMock()
+        page.url = "https://www.naukri.com/mnjuser/homepage"
+        # Both navigation strategies fail: the contract is "a transient nav
+        # failure re-raises", independent of reload-vs-goto.
         page.reload = AsyncMock(side_effect=PWTimeout("Timeout 20000ms exceeded"))
+        page.goto = AsyncMock(side_effect=PWTimeout("Timeout 20000ms exceeded"))
         with pytest.raises(PWTimeout):
             await tm.refresh(page)
 
@@ -163,7 +167,9 @@ class TestTokenManagerRefreshClassification:
         ctx = AsyncMock()
         tm.bind(ctx)
         page = AsyncMock()
+        page.url = "https://www.naukri.com/mnjuser/homepage"
         page.reload = AsyncMock(side_effect=TargetClosedError())
+        page.goto = AsyncMock(side_effect=TargetClosedError())
         with pytest.raises(TargetClosedError):
             await tm.refresh(page)
 
@@ -179,6 +185,7 @@ class TestTokenManagerRefreshClassification:
         ctx.cookies = AsyncMock(return_value=[{"name": "other", "value": "v"}])  # no nauk_at
         tm.bind(ctx)
         page = AsyncMock()  # reload() succeeds (AsyncMock no-op)
+        page.url = "https://www.naukri.com/mnjuser/homepage"
         with pytest.raises(AuthExpiredError, match="re-authenticate"):
             await tm.refresh(page)
 
@@ -375,7 +382,9 @@ class TestRefreshViaPoolUnifiedLock:
                 self.total_acquires += 1
                 self.max_in_use = max(self.max_in_use, self.in_use)
                 page = AsyncMock()
+                page.url = "https://www.naukri.com/mnjuser/homepage"
                 page.reload = AsyncMock(side_effect=PWTimeout("nav timeout"))
+                page.goto = AsyncMock(side_effect=PWTimeout("nav timeout"))
                 try:
                     yield page
                 finally:
