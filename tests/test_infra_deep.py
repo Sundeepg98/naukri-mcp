@@ -153,8 +153,12 @@ class TestDebugRouting:
 
     def test_handler_keys_all_present(self):
         from naukri_server.tools.debug import _HANDLERS, _BROWSER_ACTIONS
-        # 6 browser + 6 api + 4 discovery = 16
-        assert len(_HANDLERS) == 16
+        # 6 browser DOM + 6 api REST + 5 api-via-browser + 4 discovery = 21.
+        # The five *_via_browser entries arrived 2026-08-26, when the six api_*
+        # actions were moved onto the REST transport and the browser-context
+        # fetch they used to run was kept under an honest name rather than
+        # deleted -- it reaches cookie-authenticated surfaces the bearer cannot.
+        assert len(_HANDLERS) == 21
         assert "browser_snapshot" in _HANDLERS
         assert "browser_screenshot" in _HANDLERS
         assert "browser_scan" in _HANDLERS
@@ -166,6 +170,21 @@ class TestDebugRouting:
         from naukri_server.tools.debug import _HANDLERS
         for key in ("api_fetch", "api_post", "api_put", "api_delete", "api_fetch_widget", "api_settings"):
             assert key in _HANDLERS, f"Missing handler key: {key}"
+
+    def test_api_via_browser_handler_keys(self):
+        """The browser-context transport survives under a name that says so."""
+        from naukri_server.tools.debug import _HANDLERS
+        for key in ("api_fetch_via_browser", "api_post_via_browser",
+                    "api_put_via_browser", "api_delete_via_browser",
+                    "api_fetch_widget_via_browser"):
+            assert key in _HANDLERS, f"Missing handler key: {key}"
+
+    def test_rest_actions_are_exactly_the_six_bearer_actions(self):
+        from naukri_server.tools.debug import _REST_ACTIONS
+        assert _REST_ACTIONS == {
+            "api_fetch", "api_post", "api_put", "api_delete",
+            "api_fetch_widget", "api_settings",
+        }
 
     def test_discovery_handler_keys(self):
         from naukri_server.tools.debug import _HANDLERS
