@@ -320,3 +320,46 @@ def sample_profile():
         "current_location": "Bengaluru",
         "expected_ctc": "25",
     }
+
+
+@pytest.fixture(autouse=True)
+def _never_write_the_live_auth_state(tmp_path, monkeypatch):
+    """No test may write the real `chrome-profile/auth_state.json`.
+
+    MEASURED 2026-08-26, and it was live: a test built a real `TokenManager`,
+    bound a fake context returning `nauk_at="jwt"`, and called `extract()`.
+    `extract()` unconditionally calls `_export_auth_state`, which writes
+    `_AUTH_STATE_FILE` -- and nothing patched it. So EVERY full pytest run
+    overwrote the operator's credential file with::
+
+        {"token": "jwt", "cookies": "nauk_at=jwt"}
+
+    That file is the cross-process auth bridge. Clobbering it breaks the token
+    for every other agent and script on this machine, not just for the test.
+
+    THE FAILURE WAS SILENT IN BOTH DIRECTIONS, which is why it survived:
+    `get_auth_state()` accepts the stub rather than rejecting it -- `jwt_exp("jwt")`
+    is None, so the expiry gate cannot fire, and the file-age fallback sees a
+    file written seconds ago and calls it fresh. The result is a credential
+    that looks valid to every check and returns 401 from Naukri. Hours were
+    spent this week attributing exactly that 401 to "a transport shape I could
+    not find".
+
+    Autouse and suite-wide ON PURPOSE. Patching the one test that does it today
+    fixes today; the next test to touch `extract()` re-breaks it, and the
+    breakage is invisible until someone's unrelated probe starts failing.
+    """
+    import naukri_server.auth_bridge as _bridge
+    import naukri_server.browser as _browser
+
+    fake = tmp_path / "auth_state.json"
+
+    # `_export_auth_state` writes `self._AUTH_STATE_FILE` -- a CLASS attribute
+    # on TokenManager, not the module-level name. Patching the module alone
+    # looks right, runs green, and still clobbers the real file; that was
+    # measured before this line was written.
+    monkeypatch.setattr(_browser.TokenManager, "_AUTH_STATE_FILE", fake,
+                        raising=False)
+    monkeypatch.setattr(_bridge, "_AUTH_STATE_FILE", fake, raising=False)
+    monkeypatch.setattr(_browser, "_AUTH_STATE_FILE", fake, raising=False)
+    yield
