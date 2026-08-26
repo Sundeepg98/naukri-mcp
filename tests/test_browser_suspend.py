@@ -927,3 +927,39 @@ async def test_400_watchdog_probes_across_suspend_resume_cycles_never_fail():
     assert failures == 0, "%d/400 probes failed across suspend/resume cycles" % failures
     assert w._restart_count == 0, "the watchdog restarted an idle browser"
     assert nb._suspends == 20 and nb._resumes == 20
+
+
+@pytest.mark.asyncio
+async def test_the_reaper_loop_is_what_actually_suspends_in_production():
+    """Closes the loop on the real path.
+
+    Everything above drives _maybe_suspend() directly. In production nothing
+    calls it but the reaper task, so this pins the wiring: the same background
+    loop that trims idle tabs goes on to close the context, and a resume
+    afterwards leaves that loop alive to do it again.
+    """
+    nb = await make_browser()
+    stub_open_context(nb)
+    nb.page_pool._last_activity -= 10_000
+    for p in list(nb.page_pool._last_used):
+        nb.page_pool._last_used[p] -= 10_000
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(bmod, "PAGE_REAPER_INTERVAL", 0.001)
+        mp.setattr(bmod, "CONTEXT_IDLE_TIMEOUT", 600)
+        nb._start_reaper()
+        for _ in range(200):
+            if nb.is_suspended:
+                break
+            await asyncio.sleep(0.005)
+
+        assert nb.is_suspended is True, "the reaper loop never suspended the browser"
+        assert (await nb.liveness())[0] == BROWSER_SUSPENDED
+
+        # the loop must survive suspension and still be there after a resume
+        task = nb._reaper_task
+        assert task is not None and not task.done(), "the reaper died on suspend"
+        async with nb.page_pool.acquire() as page:
+            assert page is not None
+        assert nb.is_suspended is False
+        await nb._stop_reaper()
