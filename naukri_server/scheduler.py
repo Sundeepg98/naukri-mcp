@@ -382,11 +382,7 @@ class TaskScheduler:
                         t.catch_up_window_hours if t.run_at_hour is not None
                         else None
                     ),
-                    "window_opened_at": (
-                        self._window_start(t).isoformat()
-                        if t.run_at_hour is not None else None
-                    ),
-                    "due_now": self.is_due(t),
+                    **self._window_report(t),
                     "seconds_since_last_start": (
                         None if name not in self._last_started
                         else round(time.time() - self._last_started[name], 1)
@@ -395,6 +391,32 @@ class TaskScheduler:
                 for name, t in self._tasks.items()
             },
         }
+
+    def _window_report(self, task: ScheduledTask) -> dict:
+        """The window/dueness fields for `status`, never raising.
+
+        `status` backs `naukri_scheduler_status`, which is the operator's only
+        window into this subsystem. A task registered with an out-of-range
+        `run_at_hour` makes `_window_start` raise (datetime.replace rejects
+        hour=25), and before the day window existed nothing in `status` touched
+        the hour at all -- so computing it here introduced a way for a
+        READ-ONLY tool to die on a misconfiguration it exists to reveal.
+
+        The exception is not swallowed anywhere it matters: `_run_interval`
+        still lets it hit the backstop sleep, so a bad task degrades to slow
+        retries rather than a hot loop. This method only ensures the report
+        NAMES the broken task instead of replacing the whole listing with a
+        stack trace.
+        """
+        report: dict = {"window_opened_at": None}
+        try:
+            if task.run_at_hour is not None:
+                report["window_opened_at"] = self._window_start(task).isoformat()
+            report["due_now"] = self.is_due(task)
+        except Exception as exc:  # noqa: BLE001 - a report must not crash
+            report["due_now"] = None
+            report["error"] = f"{type(exc).__name__}: {exc}"
+        return report
 
     def enable_task(self, task_name: str) -> bool:
         """Enable a task. Returns True if found."""

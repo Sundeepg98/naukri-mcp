@@ -444,6 +444,61 @@ writes run rows) but it is the reason the run table is hard to read, and
 
 ---
 
+## 5b. A regression I introduced, found and fixed
+
+Recorded because it is the kind of thing that is easy to leave unmentioned.
+
+Adding `window_opened_at` to `TaskScheduler.status` made a READ-ONLY tool
+crashable. `status` backs `naukri_scheduler_status`, and `_window_start` calls
+`datetime.replace(hour=...)`, which raises `ValueError: hour must be in 0..23`.
+Before this change nothing in `status` touched the hour at all, so I had created
+a way for the operator's only window into this subsystem to die on exactly the
+misconfiguration it exists to reveal.
+
+Probed directly, before fixing:
+
+```
+STATUS RAISED: ValueError hour must be in 0..23
+```
+
+Fixed by `_window_report`, which reports the broken task instead of replacing
+the whole listing with a stack trace. The exception is deliberately NOT
+swallowed in `_run_interval` -- a bad task still hits the backstop sleep and
+degrades to slow retries rather than a hot loop. Pinned by
+`test_status_survives_a_task_with_an_out_of_range_hour`, shown red first:
+
+```
+E       ValueError: hour must be in 0..23
+naukri_server\scheduler.py:460: ValueError
+FAILED tests/test_scheduler_day_window.py::test_status_survives_a_task_with_an_out_of_range_hour
+```
+
+---
+
+## 5c. None of this is live yet
+
+**The running server is still executing the old code.** It was not restarted --
+that was out of bounds, and correctly so.
+
+On the next restart, in order:
+
+1. `init_db` applies `reminders_notified_at_v1`; all 50 existing rows arrive with
+   `notified_at = NULL`.
+2. The first `reminder_check` tick emits **one last burst of ~50 ReminderDue
+   events**, then goes quiet permanently. Expect that burst; it is not a
+   regression.
+3. `prime_schedule_from_db` seeds `daily_brief` and `boost_profile` from
+   persisted history. Both have no history at all, so both are unseeded.
+4. If the restart lands between 08:00-14:00 IST, the brief runs within ~45s.
+   If between 09:00-15:00 IST, **boost_profile runs and writes his profile
+   headline** -- once. Outside those windows, neither runs until tomorrow.
+
+Point 4 is the one to be aware of before restarting, and it is the intended
+behaviour, not a surprise. `servers.naukri.boost_profile.enabled: false` in
+`config/jobhunt.json` turns the boost off without touching code.
+
+---
+
 ## 6. Findings outside the five
 
 Same disease as defects 1-2, not in the brief, not fixed -- flagged for a decision:
@@ -463,6 +518,39 @@ across restarts rather than reseeding it to `now`). Deliberately not done here:
 it changes cadence for `sync_applications`, whose purge step deletes rows, and
 that decision deserves its own change rather than riding along inside this one.
 
+### The failed runs, and one limitation of my own fix
+
+Of 2,228 runs, 14 failed:
+
+```
+  7x  notification_digest    Not logged in -- call naukri_login first
+  2x  reminder_check         Timeout after 30s
+  2x  sync_applications      'NoneType' object has no attribute 'acquire'
+  2x  sync_saved_jobs        'NoneType' object has no attribute 'acquire'
+  1x  notification_digest    HTTP 503: Circuit breaker open
+```
+
+The `reminder_check` timeouts should stop on their own: its budget is 30s and
+the last successful run took 17.06s, most of it emitting and banking 50
+notifications. After the emit-once fix, subsequent runs emit nothing.
+
+`'NoneType' object has no attribute 'acquire'` is the page pool being absent --
+a `catch_up` task firing at the 45s startup grace before the browser finished
+coming up. **This bears on my own change and is stated rather than buried:** the
+day window now brings `daily_brief` and `boost_profile` into that same 45s
+window, so they inherit the same exposure.
+
+I did NOT make a failed window retry later the same day. That is deliberate.
+`_execute_task` stamps the interval clock at START, so a task that fails at +45s
+closes its window for the day. Rolling that back on failure would be an easy
+change and the wrong one for `boost_profile`: a "failure" can be a partial write
+(headline saved, then an error), and retrying a partial profile write is worse
+than skipping a day. Fail-closed is the right default for the mutating task; the
+cost is that a startup-race failure costs that day's brief too.
+
+If this shows up in practice, the correct fix is to make the grace wait on
+browser readiness rather than on a fixed 45 seconds -- not to retry the window.
+
 ### Not mine, but you will see it
 
 `tests/test_no_committed_identity.py` fails on
@@ -477,14 +565,27 @@ before I started, is in that agent's lane, and I left it alone.
 | | |
 |---|---|
 | Baseline before this work | **3993 passed, 1 failed** |
-| After | see final run below |
+| After | **4022 passed, 1 failed** |
 
 The brief's "3991" was already stale when I started; 3993 is the measured
-baseline. The 1 failure is the other agent's audit file, described above.
+baseline. In both runs the single failure is the other agent's tracked audit
+file, described above. **No test failure in this work is mine.**
 
-New tests added by this work: 15 (`test_scheduler_day_window.py`) + 6
-(`test_reminder_lifecycle.py`) + 3 (`test_t2_verify_control.py`) = **24**, plus
-one replaced in `test_scheduler.py`.
+The +29 reconciles exactly:
+
+- 16 in `tests/test_scheduler_day_window.py` (new)
+- 6 in `tests/test_reminder_lifecycle.py` (new)
+- 3 in `tests/test_t2_verify_control.py` (new)
+- 4 new parameters on `test_no_committed_identity.py`, which is parametrized per
+  TRACKED file and therefore grew by one case for each of the four files this
+  work added to the repo. All four pass.
+
+Plus one test replaced in `test_scheduler.py` (`test_is_target_hour` ->
+`test_window_start_is_the_most_recent_opening`), which is why the count is +29
+and not +30.
+
+Every new test was shown RED before its fix. The failure texts are quoted in the
+sections above rather than summarised.
 
 Live-state files verified unchanged (git-clean) at finish: `naukri.db`,
 `sync_state.json`, `healing_state.json`, `agent_config.json`. The server was not

@@ -315,6 +315,26 @@ async def test_the_loop_does_not_rerun_a_task_already_served_today():
 # ---------------------------------------------------------------------------
 
 
+def test_status_survives_a_task_with_an_out_of_range_hour():
+    """`status` backs naukri_scheduler_status, the operator's only window into
+    this subsystem. Computing the day window there introduced a way for a
+    READ-ONLY tool to die on exactly the misconfiguration it exists to reveal:
+    datetime.replace rejects hour=25, so _window_start raises.
+
+    The report must name the broken task, not vanish."""
+    sched = TaskScheduler()
+    sched.register(_task("bad", [], run_at_hour=25))
+    sched.register(_task("good", [], run_at_hour=8))
+
+    status = sched.status
+
+    assert status["tasks"]["bad"]["due_now"] is None
+    assert "hour must be in 0..23" in status["tasks"]["bad"]["error"]
+    # And the healthy task in the same listing is still fully reported.
+    assert status["tasks"]["good"]["window_opened_at"] is not None
+    assert "error" not in status["tasks"]["good"]
+
+
 def test_the_two_dead_tasks_declare_a_catch_up_window():
     """daily_brief and boost_profile are the two tasks with zero runs. Both
     must now carry a bounded window; a fixed-hour task without one is the
