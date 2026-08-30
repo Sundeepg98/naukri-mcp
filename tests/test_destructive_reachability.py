@@ -58,6 +58,13 @@ DESTRUCTIVE_TOOLS = {
     "naukri_unsave_job":
         "Removing a bookmark is the entire point of the tool, and a saved job "
         "is re-savable from the listing it came from.",
+    "naukri_dismiss_reminder":
+        "Dismissing IS the tool. It removes one row from the local reminders "
+        "table and nothing on Naukri -- no application withdrawn, no saved job "
+        "unsaved -- and naukri_set_reminder recreates it. Added 2026-08-30 "
+        "because a reminder previously had no end: it could be created and "
+        "re-dated but never closed, and his 50 permanently-overdue rows minted "
+        "7,571 ReminderDue events in ten days.",
 }
 
 

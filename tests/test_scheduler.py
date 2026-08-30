@@ -207,15 +207,29 @@ class TestTaskSchedulerCore:
         call_args = mock_update.call_args
         assert call_args[0][1] == "failed"
 
-    async def test_is_target_hour(self, scheduler):
-        """_is_target_hour returns True/False based on IST time."""
+    async def test_window_start_is_the_most_recent_opening(self, scheduler):
+        """Replaced test_is_target_hour, which covered a helper the loop no
+        longer calls. The hour gate was an equality test on the current hour;
+        it is now a day window, and _window_start is the piece that decides
+        which day a window belongs to."""
         from datetime import datetime, timezone, timedelta
 
         IST = timezone(timedelta(hours=5, minutes=30))
-        current_hour = datetime.now(IST).hour
+        now_ist = datetime.now(IST)
 
-        assert scheduler._is_target_hour(current_hour) is True
-        assert scheduler._is_target_hour((current_hour + 12) % 24) is False
+        async def _fn():
+            return {}
+
+        # An hour that has already passed today opens TODAY.
+        past = ScheduledTask(name="past", fn=_fn, interval_seconds=86400,
+                             run_at_hour=(now_ist.hour - 2) % 24)
+        # An hour still ahead of us today opens YESTERDAY.
+        future = ScheduledTask(name="future", fn=_fn, interval_seconds=86400,
+                               run_at_hour=(now_ist.hour + 2) % 24)
+
+        assert scheduler._window_start(past) <= now_ist
+        assert scheduler._window_start(future) <= now_ist
+        assert (now_ist - scheduler._window_start(future)) < timedelta(days=1)
 
     async def test_scheduler_start_groups_by_interval(self, scheduler):
         """start() groups tasks into interval buckets — same interval = same asyncio task."""

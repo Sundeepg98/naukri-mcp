@@ -13,10 +13,11 @@ from naukri_server.error_handler import handle_tool_action
 from naukri_server.services.reminder_service import (
     set_reminder as _set_reminder,
     list_reminders as _list_reminders,
+    dismiss_reminder as _dismiss_reminder,
 )
 
 # Re-export for backward compatibility (other modules + test patches import these)
-__all__ = ["_set_reminder", "_list_reminders"]
+__all__ = ["_set_reminder", "_list_reminders", "_dismiss_reminder"]
 
 
 # ---------------------------------------------------------------------------
@@ -75,4 +76,30 @@ async def naukri_set_reminder(
     return await handle_tool_action(
         lambda: _set_reminder(job_id=job_id, days=days, note=note, title=title, company=company),
         "reminders.set",
+    )
+
+
+@mcp.tool()
+async def naukri_dismiss_reminder(job_id: str) -> dict:
+    """Dismiss (delete) a follow-up reminder once it has been dealt with.
+
+    The way a reminder ENDS. A reminder that is only ever re-dated stays due
+    forever and is re-notified on every hourly reminder check; dismissing it
+    is what stops that for good.
+
+    Local only: this removes one row from the local reminders table. Nothing
+    is withdrawn or changed on Naukri, and the reminder can be recreated at
+    any time with naukri_set_reminder.
+
+    Args:
+        job_id: The job ID whose reminder should be dismissed
+
+    Returns:
+        {status, job_id, message} on success, or
+        {status: "error", job_id, message, error_code: "NOT_FOUND"} if no
+        reminder exists for that job_id.
+    """
+    return await handle_tool_action(
+        lambda: _dismiss_reminder(job_id=job_id),
+        "reminders.dismiss",
     )

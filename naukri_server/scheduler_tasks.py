@@ -29,10 +29,26 @@ logger = logging.getLogger(__name__)
 #                       drops rows older than AUTO_PURGE_DAYS (config.py)
 #   api_discovery     - probes many endpoints; pacing matters with 7 captcha
 #                       blocks on the account record
-#   daily_brief       - hour-gated (08:00 IST), not interval-gated
+#   daily_brief       - hour-gated (08:00 IST); see the DAY WINDOW note below
 #   retention_sweep   - calls cleanup_old_records(), which DELETES rows past
 #                       the retention horizon from event_log / scheduled_runs /
 #                       agent_runs / agent_decisions
+#
+# DAY WINDOW (fixed-hour tasks)
+# -----------------------------
+# `daily_brief` and `boost_profile` are NOT governed by catch_up, and must not
+# be: catch_up means "once per server START", and the live server restarted 26
+# times in ten days. They use `catch_up_window_hours` instead, which means
+# "once per IST DAY, from run_at_hour until the window closes, at most once",
+# with "already served today" read from persisted history.
+#
+# They needed it because they had run ZERO times in 2,228 recorded executions
+# between 2026-08-20 and 2026-08-30. The old pairing demanded 24h of unbroken
+# uptime AND that the loop be awake inside one specific hour; only two sessions
+# ever reached 24h and neither crossed 08:00 or 09:00 IST afterwards.
+# `retention_sweep`, same bucket and same interval but no hour gate, ran twice
+# in that period -- which is the control that isolates the hour gate as the
+# cause. See tests/test_scheduler_day_window.py.
 
 # Interval constants (seconds)
 INTERVAL_1H = 3600
@@ -100,6 +116,10 @@ async def _task_sync_saved_jobs() -> dict:
     description="Generate morning daily brief at 8am IST",
     run_at_hour=8,
     timeout_seconds=180,
+    # Serve a missed 08:00 window until 14:00 IST. A brief that arrives at
+    # 11:00 because the laptop was closed at 08:00 is still that morning's
+    # brief; one that arrives at 22:00 is not, so the window is bounded.
+    catch_up_window_hours=6,
 )
 async def _task_daily_brief() -> dict:
     """Generate daily brief summary."""
@@ -139,6 +159,17 @@ async def _task_stale_check() -> dict:
     description="Boost profile visibility at 9am IST",
     run_at_hour=9,
     timeout_seconds=60,
+    # WRITES TO THE LIVE NAUKRI PROFILE (re-saves the headline). The window is
+    # what makes that safe to catch up at all: bounded to 09:00-15:00 IST and
+    # to ONE run per IST day, decided from the persisted last run rather than
+    # process memory, so the 26-restarts-per-ten-days pattern produces one
+    # boost and not twenty-six. tests/test_scheduler_day_window.py
+    # ::test_a_restart_storm_still_boosts_exactly_once is the guard, and
+    # prime_schedule_from_db fails CLOSED if history is unreadable.
+    #
+    # He can still switch it off outright without touching code:
+    # `servers.naukri.boost_profile.enabled: false` in config/jobhunt.json.
+    catch_up_window_hours=6,
 )
 async def _task_boost_profile() -> dict:
     """Boost profile visibility by re-saving headline.

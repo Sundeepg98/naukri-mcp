@@ -13,6 +13,7 @@ from naukri_server.config import logger
 __all__ = [
     "set_reminder",
     "list_reminders",
+    "dismiss_reminder",
 ]
 
 
@@ -43,6 +44,10 @@ async def set_reminder(
         existing["remind_at"] = remind_at
         existing["note"] = note or existing.get("note")
         existing["updated_at"] = now.isoformat()
+        # Re-arm. Without this a snooze produces a reminder that has already
+        # been "notified" and therefore never notifies again -- a silent
+        # failure strictly worse than the storm the stamp exists to stop.
+        existing["notified_at"] = None
         if title:
             existing["title"] = title
         if company:
@@ -75,6 +80,7 @@ async def set_reminder(
         "remind_at": remind_at,
         "note": note,
         "created_at": now.isoformat(),
+        "notified_at": None,
     })
 
     # Emit ReminderSet for both new and updated reminders
@@ -123,6 +129,15 @@ async def list_reminders(
     Only `scheduler_tasks._task_reminder_check` (hourly) opts in - that task
     exists to notify him, and tests/test_reminder_storm.py pins it as the sole
     opt-in so a future read path cannot quietly re-arm this.
+
+    THE SECOND HALF, 2026-08-30. Gating the READS left the one sanctioned
+    emitter with no memory: the hourly task re-emitted every past-due row on
+    every tick. Measured on his live DB: 7,571 ReminderDue events over 10 days
+    (the largest event type in the database, ahead of ScheduledTaskCompleted
+    at 2,230) produced by the same 50 rows, all 166 days overdue, at ~757/day.
+    A due reminder now emits only while `notified_at IS NULL`, and the stamp
+    is written immediately after a successful emit. `set_reminder` clears it,
+    so re-dating genuinely re-arms; `dismiss_reminder` is the other end.
     """
     from naukri_server.database import list_reminders as db_list_reminders
 
@@ -149,17 +164,28 @@ async def list_reminders(
         if not include_past and is_due:
             continue
 
+        notified_at = r.get("notified_at")
+
         if is_due:
             due_count += 1
-            if emit_events:
+            # `notified_at` is the memory: emit on the DUE-TRANSITION, not on
+            # every tick that finds the row still past due.
+            if emit_events and not notified_at:
                 try:
                     from naukri_server.events import event_bus, ReminderDue
+                    from naukri_server.database import mark_reminder_notified
                     await event_bus.emit(ReminderDue(
                         job_id=r.get("job_id", ""),
                         company=r.get("company", ""),
                         title=r.get("title", ""),
                         note=r.get("note", ""),
                     ))
+                    stamp = now.isoformat()
+                    await mark_reminder_notified(r.get("job_id", ""), stamp)
+                    # Assigned only after the write LANDED: a failed stamp must
+                    # leave the row re-emittable (noisy) rather than report a
+                    # notification the database does not record (silent).
+                    notified_at = stamp
                 except Exception:
                     pass
 
@@ -172,6 +198,7 @@ async def list_reminders(
             "is_due": is_due,
             "days_until_due": days_until,
             "created_at": r.get("created_at"),
+            "notified_at": notified_at,
         })
 
     # Sort: due first (by overdue days desc), then upcoming (by days asc)
@@ -211,4 +238,37 @@ async def list_reminders(
         "total": len(result_list),
         "due_count": due_count,
         "reminders": result_list,
+    }
+
+
+async def dismiss_reminder(job_id: str) -> dict:
+    """Discharge one reminder: remove the row so it stops coming back.
+
+    The end a reminder never had. Until 2026-08-30 the only two reminder tools
+    were list and set, so a reminder could be created and re-dated but never
+    closed; `database.delete_reminder` had existed since the SQLite port with
+    no caller outside the uncalled `ReminderRepository.delete`. His 50 rows
+    were therefore permanent, and re-notified forever.
+
+    Local only. This removes a row from naukri.db and touches nothing on
+    Naukri -- no application is withdrawn, no saved job is unsaved -- and the
+    reminder is recreatable with `set_reminder`.
+    """
+    from naukri_server.database import delete_reminder
+
+    logger.info("Dismissing reminder for job %s", job_id)
+    deleted = await delete_reminder(job_id)
+
+    if not deleted:
+        return {
+            "status": "error",
+            "job_id": job_id,
+            "message": f"No reminder found for job {job_id}",
+            "error_code": "NOT_FOUND",
+        }
+
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "message": f"Reminder dismissed for job {job_id}.",
     }

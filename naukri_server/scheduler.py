@@ -270,6 +270,19 @@ class ScheduledTask:
     # which is only safe for tasks that neither mutate the Naukri account nor
     # delete local rows.
     catch_up: bool = False
+    # How long after `run_at_hour` a missed window may still be served. Only
+    # meaningful when run_at_hour is set.
+    #
+    # This is NOT catch_up and must not be confused with it. catch_up is "once
+    # per server START"; this is "once per IST DAY", read from persisted
+    # history, so 26 restarts inside the window still produce one run. That
+    # difference is what lets boost_profile -- which rewrites the live Naukri
+    # headline -- opt in at all.
+    #
+    # Bounded rather than open-ended because the point of a fixed hour is the
+    # hour: a 08:00 brief delivered at 13:00 is late but still today's brief,
+    # and delivered at 23:00 it is not a morning brief at all.
+    catch_up_window_hours: float = 6.0
 
 
 class TaskScheduler:
@@ -362,6 +375,17 @@ class TaskScheduler:
                     "run_at_hour": t.run_at_hour,
                     "description": t.description,
                     "catch_up": t.catch_up,
+                    # Only meaningful for fixed-hour tasks; None elsewhere so a
+                    # reader is not invited to think an interval task has a
+                    # window.
+                    "catch_up_window_hours": (
+                        t.catch_up_window_hours if t.run_at_hour is not None
+                        else None
+                    ),
+                    "window_opened_at": (
+                        self._window_start(t).isoformat()
+                        if t.run_at_hour is not None else None
+                    ),
                     "due_now": self.is_due(t),
                     "seconds_since_last_start": (
                         None if name not in self._last_started
@@ -396,17 +420,68 @@ class TaskScheduler:
     # -- interval clock -------------------------------------------------------
 
     def is_due(self, task: ScheduledTask, now: Optional[float] = None) -> bool:
-        """Has interval_seconds actually elapsed since this task last started?
+        """Is this task due to run right now?
 
-        An unseeded task counts as due. prime_schedule() seeds every
+        Two different clocks, chosen by whether the task declares an hour:
+
+        INTERVAL tasks ask whether interval_seconds have elapsed since the last
+        start. An unseeded task counts as due. prime_schedule() seeds every
         non-catch_up task with "now" so the historical sleep-then-run cadence
         is preserved exactly; catch_up tasks are seeded from their persisted
         last run, or left unseeded (= due) when there is none.
+
+        FIXED-HOUR tasks ask whether today's window is open and unserved. They
+        must NOT use the interval clock: combining it with the hour gate is
+        what killed daily_brief and boost_profile outright. The interval clock
+        restarts from zero on every process start, so it demands 24h of
+        continuous uptime, and the hour gate then demands the loop also be
+        awake inside one specific hour. Measured over ten days on the live
+        server: 26 restarts, only two sessions ever reached 24h, and neither
+        crossed 08:00 or 09:00 IST after passing its 24h mark. Zero runs from
+        2,228 recorded executions. See tests/test_scheduler_day_window.py.
         """
+        if task.run_at_hour is not None:
+            return self._window_is_open_and_unserved(task, now)
         last = self._last_started.get(task.name)
         if last is None:
             return True
         return (now if now is not None else time.time()) - last >= task.interval_seconds
+
+    def _window_start(self, task: ScheduledTask, now: Optional[float] = None) -> datetime:
+        """The most recent opening of this task's daily window, in IST.
+
+        Today's occurrence of run_at_hour if that has already passed,
+        otherwise yesterday's -- so a window opened before midnight still
+        belongs to the day it opened on.
+        """
+        now_ist = datetime.fromtimestamp(
+            now if now is not None else time.time(), IST,
+        )
+        start = now_ist.replace(
+            hour=task.run_at_hour, minute=0, second=0, microsecond=0,
+        )
+        if start > now_ist:
+            start -= timedelta(days=1)
+        return start
+
+    def _window_is_open_and_unserved(
+        self, task: ScheduledTask, now: Optional[float] = None,
+    ) -> bool:
+        """Due iff we are inside the current window and it has not run in it.
+
+        "Has not run in it" is answered from `_last_started`, which
+        prime_schedule_from_db seeds from PERSISTED history for fixed-hour
+        tasks. That persistence is the safety property, not an optimisation:
+        without it every restart inside the window re-opens it, and for
+        boost_profile each re-open is another write to the live Naukri
+        profile.
+        """
+        epoch = now if now is not None else time.time()
+        start = self._window_start(task, epoch)
+        if epoch >= (start + timedelta(hours=task.catch_up_window_hours)).timestamp():
+            return False
+        last = self._last_started.get(task.name)
+        return last is None or last < start.timestamp()
 
     def prime_schedule(self, last_started: Optional[dict] = None) -> None:
         """Seed the interval clock before the loops start.
@@ -418,8 +493,12 @@ class TaskScheduler:
         for name, task in self._tasks.items():
             if name in provided:
                 self._last_started[name] = provided[name]
-            elif task.catch_up:
-                # Unseeded == due on the first wake.
+            elif task.catch_up or task.run_at_hour is not None:
+                # Unseeded == due on the first wake. Fixed-hour tasks join
+                # catch_up tasks here because seeding them with "now" is
+                # precisely what blocked them: it puts _last_started inside
+                # the current window, so the window reads as already served
+                # and the task can never run in the process that started it.
                 self._last_started.pop(name, None)
             else:
                 self._last_started[name] = now
@@ -448,13 +527,21 @@ class TaskScheduler:
         """
         seed: dict[str, float] = {}
         for name, task in self._tasks.items():
-            if not task.catch_up:
+            fixed_hour = task.run_at_hour is not None
+            if not task.catch_up and not fixed_hour:
                 continue
             try:
                 from naukri_server.database import get_last_run
                 ts = self._epoch_from_run_row(await get_last_run(name))
             except Exception as exc:
                 logger.warning("Could not read last run for %s: %s", name, exc)
+                if fixed_hour:
+                    # FAIL CLOSED. Unseeded means "due", so falling through
+                    # here would run the task on every restart for as long as
+                    # the database stays unreadable -- and boost_profile's run
+                    # is a write to the live Naukri profile. Treating the
+                    # window as already served costs at most one skipped day.
+                    seed[name] = time.time()
                 continue
             if ts is not None:
                 seed[name] = ts
@@ -467,13 +554,19 @@ class TaskScheduler:
         first_wake = True
         while self._running:
             try:
-                if first_wake and self._bucket_has_overdue_catch_up(tasks):
-                    # An opted-in task is ALREADY overdue. Sleeping a whole
-                    # interval here is what made 4h and 6h tasks never run at
-                    # all: the server does not live that long, so the first
-                    # wake never arrived. Use a short startup grace instead.
+                if first_wake and self._bucket_has_work_waiting(tasks):
+                    # Something is ALREADY due. Sleeping a whole interval here
+                    # is what made 4h and 6h tasks never run at all: the server
+                    # does not live that long, so the first wake never arrived.
+                    # Use a short startup grace instead.
+                    #
+                    # A fixed-hour task with an open window qualifies too. The
+                    # 86400s bucket otherwise sleeps up to an hour before it
+                    # looks, and several measured uptime sessions were under 90
+                    # minutes -- an hour of that spent asleep is the same
+                    # defect wearing a smaller number.
                     logger.info(
-                        "Scheduler bucket %ss: overdue catch-up task present, "
+                        "Scheduler bucket %ss: work already due, "
                         "first wake in %.0fs instead of %ss",
                         interval, self._STARTUP_GRACE_SECONDS, interval,
                     )
@@ -494,9 +587,6 @@ class TaskScheduler:
                 for task in tasks:
                     if not task.enabled:
                         logger.debug("Task %s is disabled, skipping", task.name)
-                        continue
-                    if task.run_at_hour is not None and not self._is_target_hour(task.run_at_hour):
-                        logger.debug("Task %s: not target hour (want %d, now %d)", task.name, task.run_at_hour, datetime.now(IST).hour)
                         continue
                     if not self.is_due(task):
                         # Buckets with interval >= 86400 wake HOURLY (they sleep
@@ -526,9 +616,16 @@ class TaskScheduler:
                 except asyncio.CancelledError:
                     break
 
-    def _bucket_has_overdue_catch_up(self, tasks: list[ScheduledTask]) -> bool:
-        """Is any enabled catch_up task in this bucket already due?"""
-        return any(t.enabled and t.catch_up and self.is_due(t) for t in tasks)
+    def _bucket_has_work_waiting(self, tasks: list[ScheduledTask]) -> bool:
+        """Is anything in this bucket already due at startup?
+
+        Only two kinds of task can be: a catch_up task whose persisted last run
+        is older than its interval, and a fixed-hour task whose window is open
+        and unserved. A plain interval task is seeded with "now" by
+        prime_schedule and is never due here, so this stays false for the
+        buckets that must keep their sleep-first cadence.
+        """
+        return any(t.enabled and self.is_due(t) for t in tasks)
 
     def _seconds_until_next_run(self, tasks: list[ScheduledTask]) -> float:
         """Calculate seconds until the next task should run."""
@@ -543,11 +640,6 @@ class TaskScheduler:
             wait = (target - now).total_seconds()
             min_wait = min(min_wait, wait)
         return min_wait
-
-    def _is_target_hour(self, hour: int) -> bool:
-        """Check if current IST hour matches target."""
-        now_ist = datetime.now(IST)
-        return now_ist.hour == hour
 
     async def _execute_task(self, task: ScheduledTask) -> dict:
         """Run a single task with timeout, log to database, emit events."""

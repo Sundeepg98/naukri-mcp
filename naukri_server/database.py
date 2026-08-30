@@ -29,6 +29,10 @@ assert not _JSON_KEY_RE.match("a.b") and not _JSON_KEY_RE.match("$.job_id")
 # be re-run against every database as a genuinely new migration.
 JSON_MIGRATION_NAME = "json_to_sqlite_v1"
 
+# Adds reminders.notified_at to a database created before that column existed.
+# Same ledger, same naming convention as above.
+REMINDERS_NOTIFIED_AT_MIGRATION = "reminders_notified_at_v1"
+
 # Migration ledger. Kept as its own constant (and appended to _SCHEMA_SQL
 # below) so has_migration_run() / record_migration() can create it
 # defensively on a database that was initialised before this table existed.
@@ -75,7 +79,13 @@ CREATE TABLE IF NOT EXISTS reminders (
     remind_at TEXT,
     note TEXT,
     created_at TEXT,
-    is_due INTEGER DEFAULT 0
+    is_due INTEGER DEFAULT 0,
+    -- NULL until a ReminderDue has actually been emitted for this row, and
+    -- set back to NULL by set_reminder. It is what makes the hourly
+    -- reminder_check notify ONCE per due-transition instead of on every tick.
+    -- `is_due` above is dead by contrast: 0 in all 50 of his rows, written by
+    -- nothing, computed live from remind_at at read time instead.
+    notified_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS interview_rounds (
@@ -218,7 +228,14 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def init_db():
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then apply pending DDL migrations.
+
+    CREATE TABLE IF NOT EXISTS cannot add a column to a table that already
+    exists, so every schema change after the first release needs both halves:
+    the column in _SCHEMA_SQL for a fresh database, and an ALTER for an
+    existing one. init_db is the only place both are guaranteed to run before
+    any tool touches the table.
+    """
     db = await get_db()
     try:
         await db.executescript(_SCHEMA_SQL)
@@ -226,6 +243,8 @@ async def init_db():
         logger.info("Database initialized at %s", DB_PATH)
     finally:
         await db.close()
+
+    await migrate_reminders_notified_at()
 
 
 async def list_applications(status=None, date_from=None, date_to=None, limit=50, offset=0):
@@ -716,17 +735,37 @@ async def upsert_reminder(rem: dict):
     db = await get_db()
     try:
         await db.execute("""
-            INSERT INTO reminders (job_id, title, company, remind_at, note, created_at, is_due)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO reminders (job_id, title, company, remind_at, note, created_at, is_due, notified_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id) DO UPDATE SET
                 title=excluded.title, company=excluded.company,
-                remind_at=excluded.remind_at, note=excluded.note, is_due=excluded.is_due
+                remind_at=excluded.remind_at, note=excluded.note,
+                is_due=excluded.is_due, notified_at=excluded.notified_at
         """, (
             rem.get("job_id"), rem.get("title"), rem.get("company"),
             rem.get("remind_at"), rem.get("note"), rem.get("created_at"),
-            rem.get("is_due", 0),
+            rem.get("is_due", 0), rem.get("notified_at"),
         ))
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def mark_reminder_notified(job_id: str, when: str) -> bool:
+    """Stamp notified_at on one reminder. Returns True if a row was stamped.
+
+    A targeted UPDATE rather than an upsert: the caller (list_reminders) holds
+    a row it read, and re-upserting that row would write back every other
+    column too, silently clobbering a concurrent set_reminder.
+    """
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE reminders SET notified_at = ? WHERE job_id = ?",
+            (when, job_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
@@ -1063,6 +1102,50 @@ async def record_migration(name: str, rows_inserted: int = 0) -> None:
         await db.commit()
     finally:
         await db.close()
+
+
+async def migrate_reminders_notified_at(force: bool = False) -> dict:
+    """Add `reminders.notified_at` to a database that predates the column.
+
+    Two independent guards, because either one alone has a hole:
+
+      * the `migrations` ledger short-circuits the whole function, but it is
+        only armed once an ALTER has actually run somewhere;
+      * PRAGMA table_info is checked regardless, because a database can have
+        the column without a ledger row -- every FRESH database does, since
+        _SCHEMA_SQL now declares it. Without this check the ALTER would raise
+        "duplicate column name: notified_at" and take init_db down with it on
+        every server start.
+
+    Returns ``{"status": "applied"|"skipped", "column_added": bool}``.
+    """
+    if not force and await has_migration_run(REMINDERS_NOTIFIED_AT_MIGRATION):
+        return {"status": "skipped", "column_added": False}
+
+    db = await get_db()
+    try:
+        cursor = await db.execute("PRAGMA table_info(reminders)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        column_added = "notified_at" not in columns
+        if column_added:
+            await db.execute("ALTER TABLE reminders ADD COLUMN notified_at TEXT")
+            await db.commit()
+            logger.info("Migration %s: added reminders.notified_at",
+                        REMINDERS_NOTIFIED_AT_MIGRATION)
+    finally:
+        await db.close()
+
+    if column_added:
+        # Recorded ONLY when the ALTER actually fired. A FRESH database gets
+        # the column from _SCHEMA_SQL and has nothing to record; a ledger row
+        # there would claim this migration changed something it did not.
+        # MEASURED, not assumed: recording unconditionally put a second row in
+        # the ledger on every fresh database and turned
+        # test_json_migration.test_ledger_records_migration_after_default_run
+        # red ("assert 2 == 1") -- that test reads the WHOLE migrations table.
+        await record_migration(REMINDERS_NOTIFIED_AT_MIGRATION, 1)
+
+    return {"status": "applied", "column_added": column_added}
 
 
 def _empty_counts() -> dict:
