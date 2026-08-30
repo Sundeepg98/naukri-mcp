@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from naukri_server.config import NAUKRI_BASE, API_HEADERS, API_TIMEOUT, API_MAX_RETRIES, API_BACKOFF_BASE, API_MAX_BACKOFF_SECONDS, BLOCK_STATE_CLASSIFIER_ENFORCE, logger
-from naukri_server.browser import browser, AuthExpiredError
+from naukri_server.browser import browser, AuthExpiredError, ServerWarmingUpError
 from naukri_server.block_state import classify_block_state, BlockState, BlockAssessment
 
 RETRIABLE_STATUSES = {429, 502, 503, 504}
@@ -166,8 +166,26 @@ def api_tool(context: Optional[str] = None):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            # THE SECOND DISPATCH SEAM. handle_tool_action is not the only door
+            # into a tool: every @api_tool REST tool bypasses it entirely. Both
+            # seams therefore carry the same pre-flight wait and the same
+            # SERVER_WARMING_UP mapping -- a guarantee that holds on one of two
+            # doors is not a guarantee. Without the branch below, a call during
+            # warm-up came back as error_code "API_ERROR", which names the wrong
+            # subsystem and reads as "Naukri rejected it".
+            from naukri_server.readiness import readiness
+
+            if readiness.browser_pending:
+                await readiness.wait_for_browser()
             try:
                 return await func(*args, **kwargs)
+            except ServerWarmingUpError as e:
+                return {
+                    "status": "error",
+                    "message": str(e),
+                    "error_code": "SERVER_WARMING_UP",
+                    "readiness": readiness.snapshot(),
+                }
             except NaukriAPIError as e:
                 if e.code == "BOT_CHECK":
                     error_code = "BOT_CHECK"

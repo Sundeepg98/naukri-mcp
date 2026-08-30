@@ -6,8 +6,10 @@ from naukri_server.browser import (
     AuthExpiredError,
     BrowserUnavailableError,
     NotLoggedInError,
+    ServerWarmingUpError,
 )
 from naukri_server.api import NaukriAPIError, api_tool  # noqa: F401 — re-export
+from naukri_server.readiness import readiness
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,25 @@ async def handle_tool_action(handler_fn, action_name: str) -> dict:
         expired / never logged in -> run naukri_login), BROWSER_ERROR (browser
         dead or circuit open), INTERNAL_ERROR (genuinely unexpected).
     """
+    # PRE-FLIGHT, NOT RETRY. If the background warm-up has not produced a
+    # browser yet, spend a bounded moment here -- BEFORE the tool body runs --
+    # rather than letting the body fail and re-running it. A retry-after-failure
+    # would re-execute whatever the tool already did before its first browser
+    # touch, and in this server that can include an application write or a saga
+    # step. Waiting first is the only version that is safe to do unconditionally.
+    #
+    # Costs one bool read once the server is ready (browser_pending is False),
+    # and the wait ends the instant the browser phase completes -- it does not
+    # hold a caller for probes or the scheduler coming up behind it.
+    #
+    # Browser-free tools (config reads, DB reads, scheduler status) pay this
+    # wait too during the startup window. Accepted deliberately: there is no
+    # per-tool "needs browser" declaration in this codebase to key off, the
+    # window is seconds, and the alternative -- inventing one across 120 tools --
+    # buys latency at the cost of a classification that would rot.
+    if readiness.browser_pending:
+        await readiness.wait_for_browser()
+
     try:
         # ONE CALL, ONE POLICY. Bind the config snapshot here, at the single
         # seam every tool passes through, and hold it for the whole call. Bound
@@ -109,6 +130,20 @@ async def handle_tool_action(handler_fn, action_name: str) -> dict:
             logger.error("Auth failure in %s (HTTP %s)", action_name, e.status)
         return {"status": "error", "message": message,
                 "http_status": e.status, "error_code": code}
+    except ServerWarmingUpError as e:
+        # BEFORE _AUTH_ERRORS and _BROWSER_ERRORS on purpose. This is a
+        # subclass of BrowserUnavailableError, so an ordering slip would bury it
+        # as BROWSER_ERROR and the caller would go looking for a dead browser
+        # that is merely unborn. The payload carries the phase and the elapsed
+        # time because "wait and retry" is only actionable if the caller can see
+        # that something is in fact progressing.
+        logger.info("Tool %s arrived during warm-up (%s)", action_name, readiness.phase)
+        return {
+            "status": "error",
+            "message": str(e),
+            "error_code": "SERVER_WARMING_UP",
+            "readiness": readiness.snapshot(),
+        }
     except _AUTH_ERRORS as e:
         logger.error("Auth failure in %s (%s): %s", action_name, type(e).__name__, e)
         return {"status": "error", "message": str(e) or _REAUTH_HINT, "error_code": "AUTH_ERROR"}

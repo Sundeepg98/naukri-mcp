@@ -52,6 +52,20 @@ from naukri_server.browser import browser as _browser_instance
 from naukri_server.database import init_db
 import naukri_server.browser_watchdog as _watchdog_module
 from naukri_server.browser_watchdog import BrowserWatchdog
+# Aliased for the same reason `browser` is, one import above: binding the bare
+# name `readiness` here would shadow the SUBMODULE `naukri_server.readiness` on
+# the package namespace, so `monkeypatch.setattr(naukri_server.readiness, ...)`
+# would reach the instance and fail with AttributeError. Measured, not feared -
+# it did exactly that on first run of tests/test_startup_warmup.py.
+from naukri_server.readiness import (
+    PHASE_BROWSER,
+    PHASE_MIGRATION,
+    PHASE_PROBES,
+    PHASE_SCHEDULER,
+    PHASE_WATCHDOG,
+    WARMUP_SHUTDOWN_GRACE_SECONDS,
+    readiness as _readiness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,67 +74,166 @@ logger = logging.getLogger(__name__)
 _lifespan_refs = 0
 _lifespan_lock = asyncio.Lock()
 
+#: The detached background warm-up. Held at module scope so shutdown can wait
+#: on it -- a fire-and-forget task with no reference is also collectable
+#: mid-flight, which for a Chrome launch means an orphan process.
+_warmup_task = None
+
+
+async def _warm_up():
+    """Everything expensive, run OFF the lifespan's critical path.
+
+    THE BUG THIS SPLIT FIXES (measured 2026-08-30). Every statement in this
+    function used to run INSIDE ``lifespan`` before it yielded. The MCP lifespan
+    is entered by ``mcp.server.lowlevel.server.Server.run`` at the top of the
+    session, BEFORE it reads the first message off the transport -- so under
+    ``--http``, where the session manager starts one ``Server.run`` per MCP
+    session, the first client's ``initialize`` request sat unread in the stream
+    for the entire duration of this sequence. On the live server that was
+    process start 10:01:32 -> browser launch beginning 10:09 -> profile written
+    10:11:22: minutes during which the server was healthy, listening, and
+    completely unable to answer the one request a client needs answered first.
+    The client gave up and dropped all 120 tools.
+
+    (The socket itself was never the problem and is not touched here: uvicorn
+    binds after the STARLETTE lifespan, which for a FastMCP app is only
+    ``StreamableHTTPSessionManager.run()`` -- a task-group creation. Measured
+    time to accept on a spare port: 8.6s, all of it module import.)
+
+    Each phase names itself in ``readiness`` before it runs, so a tool call that
+    lands mid-warm-up can report WHAT is still starting instead of guessing.
+    A failure marks readiness failed rather than propagating: this runs as a
+    detached task, so an unhandled exception here would be swallowed by asyncio
+    and every waiting tool call would block for its full budget on a warm-up
+    that had already died.
+    """
+    try:
+        _readiness.enter(PHASE_BROWSER)
+        # start() swallows its own launch failures and drops to REST-only mode,
+        # so this returns either way. browser_up() is therefore released
+        # unconditionally: if the browser genuinely failed, waiting longer
+        # cannot help, and the honest answer downstream is the pre-existing
+        # BROWSER_ERROR ("browser is not running") -- which by then is true.
+        await _browser_instance.start()
+        _readiness.browser_up()
+
+        _readiness.enter(PHASE_MIGRATION)
+        # One-shot JSON -> SQLite import. migrate_json_to_sqlite() has
+        # existed and been unit-tested since the SQLite move, but nothing
+        # in production ever called it: on 2026-08-20 the DB reported 0
+        # applications while applications.json held 151 real records, and
+        # six tracking tools were structurally empty as a result.
+        # Guarded by the `migrations` ledger, so it is a no-op on every
+        # start after the first and cannot resurrect deleted rows.
+        try:
+            from naukri_server.database import migrate_json_to_sqlite
+            _migration = await migrate_json_to_sqlite()
+            if _migration.get("status") == "applied":
+                logger.info(
+                    "JSON -> SQLite migration applied: apps=%s saved=%s reminders=%s rounds=%s",
+                    _migration.get("applications"), _migration.get("saved_jobs"),
+                    _migration.get("reminders"), _migration.get("interview_rounds"),
+                )
+        except Exception as e:
+            # Never block startup on a data import.
+            logger.error("JSON -> SQLite migration failed (continuing): %s", e)
+
+        _readiness.enter(PHASE_WATCHDOG)
+        # Start browser watchdog for self-healing
+        _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
+        await _watchdog_module.watchdog.start()
+
+        _readiness.enter(PHASE_PROBES)
+        # Import and start probe scheduler
+        import naukri_server.health.probes  # noqa: F401 -- triggers probe registration
+        from naukri_server.health import probe_registry, HealthProbeScheduler
+        import naukri_server.health as _health_module
+        _health_module._scheduler = HealthProbeScheduler(probe_registry, watchdog=_watchdog_module.watchdog)
+        await _health_module._scheduler.start()
+
+        _readiness.enter(PHASE_SCHEDULER)
+        # Start task scheduler for autonomous background operations
+        from naukri_server.scheduler import TaskScheduler
+        from naukri_server.scheduler_tasks import register_all as register_scheduler_tasks
+        import naukri_server.scheduler as _scheduler_module
+        _scheduler_module.scheduler = TaskScheduler()
+        register_scheduler_tasks(_scheduler_module.scheduler)
+        await _scheduler_module.scheduler.start()
+
+        # THE STARTUP HEALTH CHECK IS GONE, AND NOT MOVED. It ran
+        # `naukri_health_check(include_browser=False)` and did nothing with the
+        # result but log it. Three reasons it does not belong at startup at all,
+        # not even here in the background:
+        #   1. Nothing consumed it. No branch, no gate, no readiness signal --
+        #      one log line, on a server whose stderr goes to a scheduled task's
+        #      discarded console.
+        #   2. It is redundant by construction. HealthProbeScheduler started two
+        #      statements above runs 21 probes continuously; a one-shot sample at
+        #      t=0 tells nobody anything the first probe sweep does not.
+        #   3. It is the exact shape of the 2026-08-20 wedge documented below in
+        #      this file: a STUCK naukri_health_check took an unrelated tool down
+        #      with it. Running that call on the startup path put the one known
+        #      wedge-prone handler between the server and its own readiness.
+        # `naukri_health_check` remains available as an on-demand tool, which is
+        # where a health check a caller actually reads belongs.
+        _readiness.ready()
+    except asyncio.CancelledError:
+        # Shutdown cancelled us mid-phase. Not a warm-up failure -- re-raise so
+        # the awaiting shutdown path sees a clean cancellation.
+        raise
+    except Exception as e:
+        _readiness.failed(e)
+
 
 @asynccontextmanager
 async def lifespan(server):
-    global _lifespan_refs
+    """Fast path only. Everything expensive is handed to ``_warm_up``.
+
+    WHAT STAYS ON THE CRITICAL PATH and why: the ref-count (it is the thing
+    being counted), and ``init_db()`` -- measured 0.099s, and the ~40 DB-backed
+    tools would otherwise race a table that does not exist yet. Nothing else
+    here may grow an await that can take more than milliseconds; if it needs
+    one, it belongs in ``_warm_up``.
+
+    REF-COUNTING IS UNCHANGED, and gains a property it did not have: session 2
+    used to block on ``_lifespan_lock`` for the whole of session 1's browser
+    launch, because session 1 held the lock across it. Now the lock is held for
+    milliseconds, so ``--dual`` (stdio + HTTP on one browser) no longer
+    serialises its sessions behind a Chrome launch.
+    """
+    global _lifespan_refs, _warmup_task
     async with _lifespan_lock:
         _lifespan_refs += 1
         if _lifespan_refs == 1:
-            await _browser_instance.start()
             await init_db()
-            # One-shot JSON -> SQLite import. migrate_json_to_sqlite() has
-            # existed and been unit-tested since the SQLite move, but nothing
-            # in production ever called it: on 2026-08-20 the DB reported 0
-            # applications while applications.json held 151 real records, and
-            # six tracking tools were structurally empty as a result.
-            # Guarded by the `migrations` ledger, so it is a no-op on every
-            # start after the first and cannot resurrect deleted rows.
-            try:
-                from naukri_server.database import migrate_json_to_sqlite
-                _migration = await migrate_json_to_sqlite()
-                if _migration.get("status") == "applied":
-                    logger.info(
-                        "JSON -> SQLite migration applied: apps=%s saved=%s reminders=%s rounds=%s",
-                        _migration.get("applications"), _migration.get("saved_jobs"),
-                        _migration.get("reminders"), _migration.get("interview_rounds"),
-                    )
-            except Exception as e:
-                # Never block startup on a data import.
-                logger.error("JSON -> SQLite migration failed (continuing): %s", e)
-            # Start browser watchdog for self-healing
-            _watchdog_module.watchdog = BrowserWatchdog(check_interval=30.0, max_restart_attempts=3)
-            await _watchdog_module.watchdog.start()
-            # Import and start probe scheduler
-            import naukri_server.health.probes  # noqa: F401 — triggers probe registration
-            from naukri_server.health import probe_registry, HealthProbeScheduler
-            import naukri_server.health as _health_module
-            _health_module._scheduler = HealthProbeScheduler(probe_registry, watchdog=_watchdog_module.watchdog)
-            await _health_module._scheduler.start()
-            # Start task scheduler for autonomous background operations
-            from naukri_server.scheduler import TaskScheduler
-            from naukri_server.scheduler_tasks import register_all as register_scheduler_tasks
-            import naukri_server.scheduler as _scheduler_module
-            _scheduler_module.scheduler = TaskScheduler()
-            register_scheduler_tasks(_scheduler_module.scheduler)
-            await _scheduler_module.scheduler.start()
-            # Startup health check — validates core services after browser is ready
-            logger.info("Running startup health check...")
-            try:
-                from naukri_server.tools.health import naukri_health_check
-                health = await naukri_health_check(include_browser=False)
-                if health.get("summary", {}).get("fail", 0) > 0:
-                    logger.warning("Startup health check has failures: %s", health.get("summary"))
-                else:
-                    logger.info("Startup health check passed: %s", health.get("summary"))
-            except Exception as e:
-                logger.warning("Startup health check failed: %s (continuing anyway)", e)
+            _readiness.begin()
+            # Detached on purpose: this task must outlive the lifespan's
+            # __aenter__, which is the entire point of the change.
+            _warmup_task = asyncio.create_task(_warm_up())
     try:
         yield
     finally:
         async with _lifespan_lock:
             _lifespan_refs -= 1
             if _lifespan_refs == 0:
+                # Let an in-flight warm-up land before tearing down what it is
+                # still building. Cancelling a half-launched Playwright context
+                # and then calling stop() on it is the one ordering that can
+                # leave an orphan Chrome holding the profile.
+                if _warmup_task is not None and not _warmup_task.done():
+                    try:
+                        await asyncio.wait_for(
+                            _warmup_task, timeout=WARMUP_SHUTDOWN_GRACE_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Warm-up still running after %.0fs at shutdown -- cancelled",
+                            WARMUP_SHUTDOWN_GRACE_SECONDS,
+                        )
+                    except Exception as e:  # already recorded by _warm_up
+                        logger.debug("Warm-up ended with %s during shutdown", e)
+                _warmup_task = None
+                _readiness.reset()
                 # Stop task scheduler
                 import naukri_server.scheduler as _scheduler_module
                 if _scheduler_module.scheduler:

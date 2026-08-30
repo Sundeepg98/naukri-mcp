@@ -9,6 +9,7 @@ from naukri_server.api import api_metrics, NaukriAPIError
 from naukri_server.block_state import BlockState, classify_block_state
 from naukri_server.interfaces import api_client, browser_provider
 from naukri_server.browser import browser, page_goto
+from naukri_server.readiness import readiness
 from naukri_server.config import (
     ACTIVITY_LEVEL_API,
     AMBITIONBOX_BASE,
@@ -263,6 +264,25 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
     Returns:
         - {status: "success", summary: {ok, warn, fail, total_ms}, checks: [{name, status, message, elapsed_ms}, ...]}
     """
+    # A health check that lands during warm-up must report the WARM-UP, not run
+    # five API checks that are all blocked on the same unstarted browser and
+    # then report five separate failures. Five reds for one reason is a worse
+    # answer than one honest "not up yet": it invites debugging the API.
+    #
+    # This is also the surface the operator queries to WATCH a restart, which is
+    # why it returns the snapshot rather than a bare message -- phase and elapsed
+    # are what tell him it is progressing rather than wedged.
+    #
+    # Inert on a server that is not warming (readiness IDLE or READY), which is
+    # every existing test.
+    if readiness.browser_pending:
+        return {
+            "status": "error",
+            "error_code": "SERVER_WARMING_UP",
+            "message": readiness.describe(),
+            "readiness": readiness.snapshot(),
+        }
+
     # Probe-based health check
     if source == "probes":
         try:
@@ -340,6 +360,7 @@ async def naukri_health_check(include_browser: bool = True, source: str = "check
         },
         "checks": checks,
         "pool_stats": pool_stats,
+        "readiness": readiness.snapshot(),
     }
     # Watchdog stats
     try:

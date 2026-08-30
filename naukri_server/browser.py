@@ -22,6 +22,7 @@ from naukri_server.config import (
     logger,
 )
 from naukri_server import profile_lock
+from naukri_server.readiness import readiness
 
 
 class NotLoggedInError(ValueError):
@@ -306,6 +307,21 @@ class TokenManager:
         """
         if self._token:
             return self._token
+        # THE SECOND WRONG ANSWER THIS FILE USED TO GIVE. With no context and no
+        # cached JWT this method walks all the way down to
+        # `NotLoggedInError("Not logged in -- call naukri_login first")`. During
+        # warm-up that is false: the session in the profile is fine, the browser
+        # that reads it out just has not launched yet. Sending a caller to
+        # naukri_login there is worse than an error -- it invites a re-login
+        # that would fight the launch already in progress for the profile lock.
+        #
+        # Guarded on `_context is None` so it CANNOT fire during the warm-up's
+        # own session-validation call: NaukriBrowser._open_context binds the
+        # context (token_manager.bind) before start() issues that api_get, so by
+        # then this branch is dead. Without that guard the warm-up would wait on
+        # itself.
+        if self._context is None and readiness.browser_pending:
+            raise ServerWarmingUpError(readiness.describe())
         await self.extract()
         if self._token:
             return self._token
@@ -404,6 +420,26 @@ class BrowserUnavailableError(Exception):
     pass
 
 
+class ServerWarmingUpError(BrowserUnavailableError):
+    """The browser is not up YET -- the server is still starting it.
+
+    Distinct from BrowserUnavailableError-the-parent, which means "known-dead".
+    "Not yet" and "dead" call for opposite reactions: retry in a moment vs.
+    investigate. Before the 2026-08-30 split there was no way to say the first,
+    so a call landing during startup was told either "browser is not running --
+    call naukri_login" (there is nothing to log in to; the browser is mid-launch)
+    or "Not logged in -- call naukri_login first" (the session is fine; it has
+    simply not been read out of the profile yet). Both are wrong answers that
+    look like right ones.
+
+    SUBCLASSES BrowserUnavailableError deliberately: ~30 call sites already
+    catch that, plus error_handler's _BROWSER_ERRORS tuple. Every one of them
+    stays correct; the seams that want to distinguish "yet" test for this type
+    FIRST, which error_handler and api_tool both do.
+    """
+    pass
+
+
 # The three states a liveness caller can be told about. RUNNING and DOWN are the
 # pre-2026-08-25 binary; SUSPENDED is the state added so an intentionally idle
 # browser stops being reported as a crash.
@@ -434,6 +470,19 @@ class _NoPagePool:
         return False
 
     def acquire(self):
+        # "Not started yet" and "not running" are different facts and need
+        # different answers. Only the second one is a reason to call
+        # naukri_login; telling a caller to log in while the browser is still
+        # launching sends them at a problem that does not exist.
+        #
+        # Stays SYNCHRONOUS. All 27 call sites are `async with
+        # browser.page_pool.acquire() as page:`, so a raise here surfaces
+        # identically to a raise from __aenter__; the bounded wait that gives
+        # warm-up a chance to finish lives one layer up, at the dispatch seam
+        # (error_handler.handle_tool_action / api.api_tool), where it runs
+        # BEFORE the tool body and therefore needs no retry.
+        if readiness.browser_pending:
+            raise ServerWarmingUpError(readiness.describe())
         raise BrowserUnavailableError(
             "Browser is not running — no page pool. Call naukri_login to start "
             "a session, or check naukri_health_check for watchdog state."
