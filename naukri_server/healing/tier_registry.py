@@ -99,7 +99,6 @@ _T1_ENTRIES: dict[str, TierEntry] = {
     "AB_SALARY_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox salary REST"),
     "AB_BENEFITS_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox benefits REST"),
     "AB_REVIEW_DIST_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox review distribution"),
-    "AB_REVIEW_FILTERS_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox review filters"),
     "AB_INTERVIEW_QS_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox top interview questions"),
     "AB_COMPANY_COMPARE_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox company comparison"),
     "AB_COMPANY_LOCATIONS_API": TierEntry(TIER_T1, "naukri_server.tools.ambitionbox_rest", "AmbitionBox company locations"),

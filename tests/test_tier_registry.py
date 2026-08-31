@@ -58,7 +58,7 @@ def test_all_critical_endpoints_have_tier_assignment():
         "RESUME_DOWNLOAD_API",
         "RESUME_BUILDER_CONFIG_API", "RESUME_BUILDER_STATUS_API",
         "AB_SALARY_API", "AB_BENEFITS_API", "AB_REVIEW_DIST_API",
-        "AB_REVIEW_FILTERS_API", "AB_INTERVIEW_QS_API",
+        "AB_INTERVIEW_QS_API",
         "AB_COMPANY_COMPARE_API", "AB_COMPANY_LOCATIONS_API",
         "AB_INSIGHTS_APPLIED_API",
         "ENTITY_TAXONOMY_API", "DFP_PROFILE_API", "CCS_PAGE_API",
@@ -180,3 +180,127 @@ def test_all_constants_resolve_via_lookup():
     """Round-trip: every name in all_constants() must resolve via tier_for()."""
     for name in reg.all_constants():
         assert reg.tier_for(name) is not None
+
+
+# ---------------------------------------------------------------------------
+# The registry must describe reality, not intent
+# ---------------------------------------------------------------------------
+#
+# `parser_module` is not documentation. router.py, synthesis.py, t1_autofix.py
+# and t2_autofix.py all resolve it to a FILE PATH and patch that file -- and a
+# T1 fix is committed to git with no further check. So an entry naming a module
+# that does not touch the endpoint points the healer's edit at the wrong file,
+# and an entry for an endpoint NOTHING calls authorizes an auto-fix that can
+# only ever be wrong.
+#
+# Census instrument: _sweep/tier_registry_census.py (2026-08-31).
+
+import re as _re                                            # noqa: E402
+from pathlib import Path as _Path                           # noqa: E402
+
+import naukri_server as _pkg                                # noqa: E402
+
+_PKG_ROOT = _Path(_pkg.__file__).parent
+_REGISTRY_FILE = _PKG_ROOT / "healing" / "tier_registry.py"
+_CONFIG_FILE = _PKG_ROOT / "config.py"
+
+
+def _production_files():
+    """Every package .py EXCEPT the definition site and the registry itself.
+
+    Excluding tier_registry.py is the whole point: a constant whose only
+    mention is its own monitoring row has no reader, and a check that counts
+    that row as a reader cannot see an orphan. `tests/test_no_decoys.py`
+    counts it, which is exactly why AB_REVIEW_FILTERS_API stayed green there
+    while being called by nothing.
+    """
+    return [
+        p for p in sorted(_PKG_ROOT.rglob("*.py"))
+        if "__pycache__" not in p.parts
+        and p != _CONFIG_FILE
+        and p != _REGISTRY_FILE
+    ]
+
+
+def _files_referencing(name: str):
+    pattern = _re.compile(rf"\b{_re.escape(name)}\b")
+    return [
+        p.relative_to(_PKG_ROOT).as_posix()
+        for p in _production_files()
+        if pattern.search(p.read_text(encoding="utf-8", errors="replace"))
+    ]
+
+
+def test_the_reference_scan_works():
+    """CONTROL. Both directions, on this file's own assumptions.
+
+    Without this, every 'no references found' verdict below is unfalsifiable:
+    a scan over the wrong root, or a regex that never matches, reports a clean
+    registry and an empty orphan list identically.
+    """
+    # positive: a constant that is unambiguously called
+    hits = _files_referencing("DASHBOARD_API")
+    assert "services/profile_service.py" in hits, hits
+    # negative: a name that exists nowhere
+    assert _files_referencing("ZZZ_NOT_A_REAL_API") == []
+    # word-boundary: a strict prefix must not match inside a longer identifier
+    assert _files_referencing("DASHBOARD_AP") == []
+    # non-vacuous
+    assert len(_production_files()) > 50, len(_production_files())
+
+
+def test_no_registry_entry_is_an_orphan():
+    """Every monitored endpoint must be called by something.
+
+    Monitoring an endpoint no code calls buys nothing and costs a standing
+    auto-fix authorization: a drift event would send the healer to patch a
+    parser for a call site that does not exist.
+    """
+    orphans = sorted(
+        name for name in reg.all_constants() if not _files_referencing(name)
+    )
+    assert orphans == [], (
+        "these endpoints are in the healing registry but no production code "
+        "calls them: %s -- wire each to something that wants it, or remove "
+        "its registry row AND its config constant together. Leaving the "
+        "constant behind re-creates the blind spot: its registry row is the "
+        "only thing that makes it look read." % orphans
+    )
+
+
+# MEASURED 2026-08-31: 17 entries name a `parser_module` that does not
+# reference their constant. The dominant pattern is an un-followed refactor --
+# the row names the tools/ layer while the call moved to services/ (or the
+# reverse). Each needs a judgement about which module owns the parser, and
+# guessing wrong reproduces the defect, so they are LEDGERED rather than
+# rewritten here. Four of them are T1, where a fix is auto-committed.
+# Detail and the full table: _sweep/tier_registry_census.md.
+ACKNOWLEDGED_MISATTRIBUTED = {
+    "ACTIVITY_LEVEL_API", "APPLIED_JOBS_API", "APPLY_MATCH_SCORE_API",
+    "BATCH_FOLLOW_STATUS_API", "CCS_PAGE_API", "COMPANY_FOLLOW_STATUS_API",
+    "FULLPROFILES_API", "MATCH_ANALYTICS_API", "NOTIFICATION_COUNT_API",
+    "NOTIFICATION_FEED_API", "NOTIFICATION_READ_API", "RECOMMENDED_JOBS_API",
+    "RECOMMEND_NOTIFY_API", "RECRUITER_ACTIVITY_API", "SAVED_JOBS_API",
+    "SEARCH_API", "SEARCH_IMPRESSIONS_API",
+}
+
+
+def test_no_new_misattributed_parser_module():
+    """An entry's parser_module must be a file that touches the endpoint."""
+    bad = []
+    for name in reg.all_constants():
+        entry = reg.tier_for(name)
+        if entry.parser_module is None:
+            continue
+        target = _PKG_ROOT.parent / _Path(*entry.parser_module.split(".")).with_suffix(".py")
+        if not target.exists():
+            bad.append(f"{name} -> {entry.parser_module} (FILE MISSING)")
+            continue
+        if not _re.search(rf"\b{_re.escape(name)}\b",
+                          target.read_text(encoding="utf-8", errors="replace")):
+            if name not in ACKNOWLEDGED_MISATTRIBUTED:
+                bad.append(f"{name} -> {entry.parser_module}")
+    assert bad == [], (
+        "these registry rows send the healer to a module that never mentions "
+        "the endpoint, so a drift fix would patch the wrong file: %s" % bad
+    )
