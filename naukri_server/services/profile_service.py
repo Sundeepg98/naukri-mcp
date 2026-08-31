@@ -8,7 +8,7 @@ from naukri_server.domain.profile import ProfileParser
 from naukri_server.domain.profile_completeness import CompletionReport
 from naukri_server.interfaces import api_client
 from naukri_server.config import (
-    DASHBOARD_API, DASHBOARD_PROPERTIES, PROFILE_API,
+    DASHBOARD_API, PROFILE_API,
     PROFILE_CACHE_TTL,
 )
 from naukri_server.utils import TtlCache
@@ -282,7 +282,11 @@ async def _get_dashboard() -> dict:
         - {status: "error", message}
     """
     try:
-        data = await api_client.get(DASHBOARD_API, params={"properties": DASHBOARD_PROPERTIES})
+        # BARE, deliberately -- see the measurement above DASHBOARD_API in
+        # config.py. A `properties` value narrows the response, and the narrowed
+        # set contains nothing the bare set lacks while dropping 15 keys, four
+        # of which are read a dozen lines below.
+        data = await api_client.get(DASHBOARD_API)
         db = safe_get(data, "dashBoard", default={})
 
         # --- Core fields (existing) ---
@@ -292,11 +296,16 @@ async def _get_dashboard() -> dict:
             "recruiter_activity_date": safe_get(db, "recruiterActionsLatestDate", field_name="recruiter_activity_date", warn=True, context="dashboard"),
             "ctc_lpa": safe_get(db, "rawCtc"),
             "experience_years": safe_get(db, "rawTotalExperience"),
-            "unread_invites": safe_get(db, "unreadPowerNvite"),
-            "total_invites": safe_get(db, "totalPowerNvite"),
-            "unread_relevant_mail": safe_get(db, "unreadMostRelevantMail"),
+            # These four are REAL top-level keys and were reading None on every
+            # call, because the request used to be narrowed past them. They now
+            # carry warn=True like their working neighbours above: the two that
+            # resolved announced their own absence and the four that never
+            # arrived said nothing, which is precisely why nobody noticed.
+            "unread_invites": safe_get(db, "unreadPowerNvite", field_name="unread_invites", warn=True, context="dashboard"),
+            "total_invites": safe_get(db, "totalPowerNvite", field_name="total_invites", warn=True, context="dashboard"),
+            "unread_relevant_mail": safe_get(db, "unreadMostRelevantMail", field_name="unread_relevant_mail", warn=True, context="dashboard"),
             "has_inbox": safe_get(db, "hasInboxFlag") == "Y",
-            "total_matches": safe_get(db, "mrt"),
+            "total_matches": safe_get(db, "mrt", field_name="total_matches", warn=True, context="dashboard"),
         }
 
         # --- Application stats ---
@@ -398,58 +407,63 @@ async def _get_dashboard() -> dict:
         result["resume_score"] = safe_get(
             safe_get(db, "lookupData", default={}), "resumeScore")
 
-        # --- Properties this server ASKS FOR and used to throw away -----------
-        #
-        # `DASHBOARD_PROPERTIES` requests ten properties. SIX of them were read
-        # by nothing: incompleteSection, profileSegment, res360NotifType, campusData,
-        # campusData and aiInterviewEligibility, each with ZERO non-config
-        # references across the package. Naukri computed them, sent them, and
-        # they were dropped on the floor on every single dashboard call.
-        #
-        # That is the cheapest unmeasured gap there is. Everything else in the
-        # unmeasured bucket needs a probe against the live account; this needed
-        # nothing at all, because the bytes were already arriving. Asking for a
-        # field and discarding it is worse than not asking: it costs the same
-        # request, and it reads to the next person as though it were covered.
+        # --- Top-level keys nobody has written a parser for -------------------
         #
         # Passed through with their shape UNINTERPRETED, deliberately. Nobody
-        # has observed these payloads, so any parsing written now would be a
-        # guess dressed as a schema -- and a wrong guess would bury the real
-        # shape exactly as thoroughly as dropping it did. `raw` is honest, and
-        # the next reader gets the actual structure to write a parser against.
-        # `aiInterviewEligibility` and `campusData` in particular name product
-        # surfaces this server has never touched.
+        # has observed these payloads non-empty, so any parsing written now
+        # would be a guess dressed as a schema -- and a wrong guess would bury
+        # the real shape exactly as thoroughly as dropping it did. `raw` is
+        # honest, and the next reader gets the actual structure to write a
+        # parser against.
+        #
+        # TWO NAMES WERE REMOVED FROM THIS LOOP on 2026-08-31, both branches
+        # that could never fire:
+        #
+        #   `profilePerformance` is a property NAME, not a key. Requesting it
+        #   contributes four FLAT scalars -- profileViewCount,
+        #   recruiterActionsLatestDate, totalSearchAppearancesCount,
+        #   totalSearchAppearancesLatestDate -- and no object is ever nested
+        #   under that name. All four are read: the first two at the top of
+        #   this function, the fourth as search_appearances_latest_date, and
+        #   the third by tools/assessments.py. So the branch reported
+        #   `profile_performance` ABSENT forever while its data sat parsed
+        #   one screen higher.
+        #
+        #   `aiInterviewEligibility` is the same shape: the flag arrives as
+        #   `eligibleFlagForAIMockInterview`, read below as ai_mock_interview.
+        #
+        # The four that remain ARE real top-level keys. `incompleteSection` and
+        # `campusData` are recognized-and-EMPTY for this account rather than
+        # missing -- pc is 100, so there are no incomplete sections to report,
+        # and he is five years into a career, not a campus hire. That is a
+        # mechanism returning nothing because there is nothing, which is why
+        # `absent` below says "not sent" and not "not available".
         extras = {}
         for prop, key in (
             ("incomplete_section", "incompleteSection"),
             ("profile_segment", "profileSegment"),
             ("res360_notif_type", "res360NotifType"),
             ("campus_data", "campusData"),
-            ("ai_interview_eligibility", "aiInterviewEligibility"),
-            # SIXTH, and the guard found it rather than the survey: a
-            # PACKAGE-WIDE scan says `profilePerformance` is consumed nowhere.
-            # Its only mention anywhere is a comment about a JS bundle. The
-            # by-hand survey that found the five above missed it, which is why
-            # the test scans instead of trusting a list.
-            ("profile_performance", "profilePerformance"),
         ):
             value = safe_get(db, key)
             if value is not None:
                 extras[prop] = value
-        # Present even when empty, so "we asked and Naukri sent nothing" is
-        # distinguishable from "we never asked" -- which is the whole
+        # Present even when empty, so "Naukri sent an empty structure" is
+        # distinguishable from "Naukri sent nothing" -- which is the whole
         # distinction this block exists to restore.
         result["requested_unparsed"] = {
             "note": (
-                "Requested via DASHBOARD_PROPERTIES and passed through "
-                "uninterpreted. Shape unobserved -- do not rely on these keys "
-                "until someone reads one and writes a real parser."
+                "Real top-level dashboard keys, passed through uninterpreted. "
+                "Shape unobserved -- do not rely on these keys until someone "
+                "reads one and writes a real parser. `absent` means Naukri "
+                "sent no such key on this call, not that the surface does not "
+                "exist: incomplete_section and campus_data are empty for a "
+                "100%-complete non-campus profile."
             ),
             "present": sorted(extras),
             "absent": sorted(
                 k for k in ("incomplete_section", "profile_segment",
-                            "res360_notif_type", "campus_data",
-                            "ai_interview_eligibility", "profile_performance")
+                            "res360_notif_type", "campus_data")
                 if k not in extras
             ),
             "raw": extras,

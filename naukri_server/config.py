@@ -123,34 +123,42 @@ NOTIFICATION_READ_API = "/cloudgateway-mynaukri/notification-center-services/v0/
 
 # Dashboard & analytics
 DASHBOARD_API = "/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/dashboard"
-# MEASURED 2026-08-25, and five of these ten names are PHANTOM.
+# CALL THIS BARE. There was a `DASHBOARD_PROPERTIES` constant here naming ten
+# properties; it was deleted 2026-08-31 because the parameter cost fields and
+# bought none.
 #
-# Naukri's own homepage fires this endpoint with NO query string at all --
-# captured live: `GET .../v1/users/self/dashboard`, no `properties`, 200. This
-# server invents the parameter.
+# The endpoint takes an optional `?properties=a,b,c`. Its behaviour, and the
+# instrument that reads it: an UNRECOGNIZED name is ignored and the response
+# falls back to the FULL payload; a RECOGNIZED name NARROWS the response to a
+# small envelope plus that property's contribution. So "did this name do
+# anything?" is answerable by response SIZE, whether or not a key of that name
+# appears. That asymmetry also settles the older open question -- the parameter
+# is NOT ignored, it binds.
 #
-# An observed bare response contains five of the ten requested names
-# (isPaidUser, profileSegment, lookupData, res360NotifType, photoInfo) and does
-# NOT contain the other five: userDetails, profilePerformance,
-# incompleteSection, campusData, aiInterviewEligibility. Those five were never
-# "discarded" -- they never arrived. Asking for them adds nothing observable.
+# MEASURED 2026-08-31 over the production REST path, both controls firing:
 #
-# NOT PROVEN, and stated as unproven: that the parameter is ignored outright.
-# The browser-context probe cannot send a query string to this endpoint (CORS),
-# so with-versus-without could not be compared through ONE transport. What is
-# measured is that the five do not appear in a real response and that Naukri's
-# own client never asks for them.
+#     bare                -> 46 top-level keys, 3110 serialized bytes
+#     ?properties=<ten>   -> 31 top-level keys, 1883 serialized bytes
 #
-# Left in place deliberately rather than trimmed: the five that DO arrive are
-# named here, and removing the list would make this a bare call whose contents
-# nobody has written down. The pass-through in profile_service reports the
-# absent ones as absent, which is the honest reading and is exactly why it
-# distinguishes present from absent instead of testing truthiness.
+#     (narrowed keys) - (bare keys) = EMPTY -- the parameter adds nothing
+#     (bare keys) - (narrowed keys) = 15 keys, FOUR of them read by name in
+#     profile_service._get_dashboard: unreadPowerNvite, totalPowerNvite,
+#     unreadMostRelevantMail, mrt. Those four returned None on every call.
 #
-# aiInterviewEligibility does not arrive -- but `eligibleFlagForAIMockInterview`
-# DOES, in the default payload, and is already read. The capability was reachable
-# the whole time under a different key.
-DASHBOARD_PROPERTIES = "userDetails,profilePerformance,incompleteSection,isPaidUser,profileSegment,lookupData,res360NotifType,photoInfo,campusData,aiInterviewEligibility"
+# The narrow request was widenable in principle but not in fact: of 31 candidate
+# property names swept, only `inbox` carries any of the four (mr, mrt,
+# unreadPowerNvite, totalPowerNvite) and NOTHING recovers unreadMostRelevantMail.
+# Bare is the only measured route to all four, it is what Naukri's own homepage
+# sends, and it is what the other caller (tools/assessments.py) already did.
+#
+# One more reason not to narrow: `eligibleFlagForAIMockInterview` is an envelope
+# field that reads its true value on a bare call and defaults to FALSE on any
+# narrowed call that does not itself name `aiInterviewEligibility`. A narrowed
+# request turns that flag into a silent false negative.
+#
+# Probe + captured key sets: _sweep/dashboard_properties_probe.py,
+# _sweep/dashboard-property-sweep.md, _sweep/dashboard-payloads.json.
+# Guarded by tests/test_dashboard_request_shape.py.
 MATCH_ANALYTICS_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"
 APPLY_MATCH_SCORE_API = "/cloudgateway-apply/whtma-services/v0/users/self/apply-match-score"  # GET ?days=7
 

@@ -477,20 +477,24 @@ class TestDashboardHtml:
 
 
 class TestPropertiesWeAskForAndUsedToDiscard:
-    """`DASHBOARD_PROPERTIES` requests ten properties; five were read by nothing.
+    """Top-level keys the dashboard sends that no parser interprets.
 
-    incompleteSection, profileSegment, res360NotifType, campusData and
-    aiInterviewEligibility each had ZERO non-config references across the
-    package. Naukri computed them, sent them on every dashboard call, and they
-    were dropped.
+    incompleteSection, profileSegment, res360NotifType and campusData each had
+    ZERO non-config references across the package. Naukri computed them, sent
+    them on every dashboard call, and they were dropped. These tests pin that
+    the bytes now reach the caller.
 
-    Asking for a field and discarding it is worse than not asking: it costs the
-    same request, and it reads to the next person as though the area were
-    covered. These tests pin that the bytes now reach the caller.
+    THE LIST SHRANK FROM SIX TO FOUR on 2026-08-31. `profilePerformance` and
+    `aiInterviewEligibility` are property NAMES, not keys -- nothing is ever
+    nested under either, so both branches were unfireable and both reported
+    ABSENT forever while their data arrived flat and was already parsed.
+    Measured against the live endpoint; see
+    tests/test_dashboard_request_shape.py, which guards the direction this
+    class cannot see.
     """
 
     PROPS = ("incomplete_section", "profile_segment", "res360_notif_type",
-             "campus_data", "ai_interview_eligibility", "profile_performance")
+             "campus_data")
 
     @staticmethod
     async def _run(dash: dict) -> dict:
@@ -504,15 +508,13 @@ class TestPropertiesWeAskForAndUsedToDiscard:
         sent = {
             "incompleteSection": ["resume"], "profileSegment": "SEGMENT_X",
             "res360NotifType": 3, "campusData": {"isCampus": False},
-            "aiInterviewEligibility": {"eligible": True, "slots": 2},
-            "profilePerformance": {"views": 12},
         }
         out = await self._run(dict(sent, profileViewCount=5))
         block = out["requested_unparsed"]
         assert sorted(block["present"]) == sorted(self.PROPS)
         assert block["absent"] == []
         # values arrive UNINTERPRETED -- the point is the shape survives
-        assert block["raw"]["ai_interview_eligibility"] == {"eligible": True, "slots": 2}
+        assert block["raw"]["campus_data"] == {"isCampus": False}
         assert block["raw"]["incomplete_section"] == ["resume"]
 
     @pytest.mark.asyncio
@@ -540,37 +542,23 @@ class TestPropertiesWeAskForAndUsedToDiscard:
         assert block["raw"]["campus_data"] == {}
         assert block["raw"]["res360_notif_type"] == 0
 
-    def test_every_requested_property_is_either_parsed_or_passed_through(self):
-        """The real guard: nothing in DASHBOARD_PROPERTIES may be discarded.
-
-        This is what stops the defect recurring. Add a property to the request
-        string and forget to read it, and this fails -- which is exactly what
-        nobody noticed for six properties -- the sixth found by this guard, not by
-        the survey that preceded it.
-        """
-        import re
-        from naukri_server import config
-        import naukri_server
-
-        # SCAN THE WHOLE PACKAGE, not one module. The first version of this
-        # check read only profile_service.py and flagged userDetails,
-        # profilePerformance and photoInfo -- two of which are consumed
-        # elsewhere (insights_service.py:509, resume_photo.py:186). A guard
-        # with too narrow a FILE SET manufactures findings exactly as readily
-        # as one with too narrow a pattern misses them, and this one was shown
-        # doing it before the scope was widened.
-        root = Path(naukri_server.__file__).parent
-        blob = "\n".join(
-            f.read_text(encoding="utf-8", errors="replace")
-            for f in root.rglob("*.py")
-            if f.name != "config.py"
-        )
-        requested = [p.strip() for p in config.DASHBOARD_PROPERTIES.split(",")]
-        unread = [p for p in requested
-                  if not re.search(r'["\']%s["\']' % re.escape(p), blob)]
-        assert unread == [], (
-            "requested from Naukri and read by NOTHING in the package: %s -- "
-            "parse it, consume it, or add it to the pass-through block. "
-            "Asking for a field and discarding it costs the same request and "
-            "reads to the next person as though the area were covered." % unread
-        )
+    # DELETED 2026-08-31: test_every_requested_property_is_either_parsed_or
+    # _passed_through. It asserted that nothing in `DASHBOARD_PROPERTIES` may
+    # be discarded. That constant is gone -- the request is bare now -- so the
+    # check has no input, and the direction it guarded was vacuous even before
+    # that: with nothing requested, "nothing requested is discarded" is true
+    # for free.
+    #
+    # It was also the wrong direction the whole time. It could only catch a
+    # name REQUESTED and not read; the live defect was four names READ and not
+    # requested, and this check was blind to every one of them while green.
+    # That direction is now guarded, against a real captured payload rather
+    # than a fabricated one, by
+    # tests/test_dashboard_request_shape.py::TestEveryDashboardReadIsReachable.
+    #
+    # Its natural successor -- "every key the endpoint SENDS is either parsed
+    # or passed through" -- is measured and NOT guarded: 25 of the 46 live
+    # top-level keys are read by nothing in `_get_dashboard`. Pinning that
+    # needs a judgement about which of the 25 are worth surfacing, which is
+    # separate work. The count is in _audit/2026-08-31-naukri-dashboard.md so
+    # it is not lost.

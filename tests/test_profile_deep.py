@@ -1047,25 +1047,37 @@ class TestDFPTargeting:
 # =====================================================================
 
 class TestDashboardSelectiveProperties:
-    @pytest.mark.asyncio
-    @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
-    async def test_dashboard_passes_properties_param(self, mock_get):
-        mock_get.return_value = {"dashBoard": {"pc": 100, "ca": 0}}
-        from naukri_server.tools.profile import _get_dashboard
-        await _get_dashboard()
-        params = mock_get.call_args.kwargs.get("params") or (mock_get.call_args.args[1] if len(mock_get.call_args.args) > 1 else None)
-        assert params is not None
-        assert "properties" in params
+    """INVERTED 2026-08-31. Two tests here used to PIN THE DEFECT.
+
+    `test_dashboard_passes_properties_param` asserted that a `properties`
+    parameter IS sent, and `test_dashboard_properties_contains_expected_keys`
+    asserted the list contains `userDetails`, `profilePerformance`, `isPaidUser`
+    and `photoInfo`. Both were green for as long as the bug existed, because
+    they encoded the narrowing as the intended contract.
+
+    It was not. Measured against the live endpoint 2026-08-31: the narrowed
+    response is a strict SUBSET of the bare one -- `(narrowed) - (bare)` is
+    empty -- and the parameter dropped 15 keys, four of which `_get_dashboard`
+    reads by name. `unread_invites` (unread recruiter invites) read None on
+    every call as a result.
+
+    Replaced by the assertion that survives contact with the endpoint. The
+    reader-side guards live in tests/test_dashboard_request_shape.py.
+    """
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
-    async def test_dashboard_properties_contains_expected_keys(self, mock_get):
-        mock_get.return_value = {"dashBoard": {}}
+    async def test_dashboard_sends_no_properties_param(self, mock_get):
+        mock_get.return_value = {"dashBoard": {"pc": 100, "ca": 0}}
         from naukri_server.tools.profile import _get_dashboard
         await _get_dashboard()
-        props = mock_get.call_args.kwargs.get("params", {}).get("properties", "")
-        for key in ("userDetails", "profilePerformance", "isPaidUser", "photoInfo"):
-            assert key in props
+        params = mock_get.call_args.kwargs.get("params") or (
+            mock_get.call_args.args[1] if len(mock_get.call_args.args) > 1 else None
+        ) or {}
+        assert "properties" not in params, (
+            "a properties value narrows the response; the narrowed set contains "
+            "nothing the bare set lacks and drops four fields this function reads"
+        )
 
     @pytest.mark.asyncio
     @patch("naukri_server.tools.profile.api_client.get", new_callable=AsyncMock)
