@@ -1,7 +1,7 @@
 # Naukri MCP -- startup latency: the socket was never the problem
 
 **Date:** 2026-08-30 | **Branch:** `master` | **Commit:** `404f4883`
-**Scope:** `D:\Sundeep\projects\job-hunting\mcp-servers\naukri` only. The live scheduled
+**Scope:** `mcp-servers/naukri` only. The live scheduled
 task was never stopped, Chrome was never launched against `chrome-profile/`, and port 8321
 was never touched.
 
