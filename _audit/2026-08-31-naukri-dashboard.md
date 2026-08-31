@@ -406,3 +406,26 @@ the permission; its logic is unexercised and it should be treated as PROVISIONAL
 - **The candidate sweep tested 31 names, not the vocabulary.** "No name recovers
   `unreadMostRelevantMail`" means none of 31 guesses did. The endpoint's real property
   vocabulary is not published and I did not enumerate it.
+
+---
+
+## 8. Final state
+
+| | |
+|---|---|
+| Commits | `adab5b79` dashboard fix, `a1eee8c6` registry deregister, `e48ad9e9` instruments, `0fb69a96` this audit |
+| Pushed | **no** -- 4 commits ahead of `origin/master`, held for the PII scan |
+| Suite at finish | **4037 passed, 1 failed** -- the failure is the pre-existing one in section 0 |
+| Tree at finish | `git status --porcelain` **empty** |
+| Protected files | `git diff --name-only 76e9c0d9..HEAD` contains no `naukri.db*`, `sync_state.json`, `healing_state.json` or `chrome-profile/` path |
+| Account writes | zero |
+
+Test-count arithmetic, so the delta is auditable rather than asserted: baseline 4022 ->
+4028 after the code change (+10 new guards, -1 deleted pre-existing guard, -1 from merging
+two inverted tests into one, -2 parametrized cases from the two deleted config constants) ->
+4037 once the audit and sweep files became tracked and the PII scan began parametrizing over
+them (+9).
+
+**The one thing still owed to the operator:** the MCP server is pinned at `e9c39a5a` and must
+be restarted before `naukri_dashboard` serves the four repaired fields. Out of scope for this
+wave by constraint; it is the last step between the fix and him seeing it.
