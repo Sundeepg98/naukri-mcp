@@ -90,7 +90,7 @@ class TestDisplayPathUnderNeitherAnchor:
     """The case that only CI could see, made visible on every box.
 
     The test above passes on Windows for an accidental reason: a Windows temp
-    dir lives under ``C:\\Users\\Dell``, so the HOME anchor always caught it.
+    dir lives under ``C:\\Users\\user``, so the HOME anchor always caught it.
     On the Linux runner ``tmp_path`` is ``/tmp/pytest-of-runner/...``, under
     neither the checkout nor ``/home/runner`` -- both anchors missed, the old
     code fell through to ``p.name``, and every path collapsed to the identical

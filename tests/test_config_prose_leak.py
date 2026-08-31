@@ -734,6 +734,6 @@ class TestTheReprGuardCanActuallyFail:
         posix_shaped = "/home/runner/work/naukri/naukri/config/jobhunt.json"
         assert _doubled(posix_shaped) == posix_shaped
 
-        windows_shaped = "D:\\Sundeep\\config\\jobhunt.json"
+        windows_shaped = "D:\\workspace\\config\\jobhunt.json"
         assert _doubled(windows_shaped) != windows_shaped
         assert "\\\\" in _doubled(windows_shaped)

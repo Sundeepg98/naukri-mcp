@@ -222,7 +222,20 @@ PHONE_E164_SHAPE = re.compile(
 #: Windows half of the pattern goes dead without a single test changing.
 #: :func:`test_the_windows_path_shape_matches_both_separator_forms` asserts
 #: both halves so that degradation fails loudly instead of going quiet.
-WINDOWS_USER_PATH = re.compile(r"[A-Za-z]:[\\/]Users[\\/]([A-Za-z0-9._-]{2,})")
+#:
+#: ``+``, AND THE ``+`` IS THE 2026-08-31 FIX. Until that day this read
+#: ``[\\/]`` -- exactly ONE separator -- and the capture class had to start on
+#: the character immediately after it. On the DOUBLED spelling the next
+#: character is another separator, so the rule did not match at all. That is
+#: not an exotic spelling: a JSON config, a Python string literal, a docstring
+#: quoting either, and ``repr()`` of any Windows path ALL write the doubled
+#: form. So the rule was blind to precisely the spelling most likely to reach
+#: a committed file -- and MEASURED on 2026-08-31, all four of this repo's
+#: real ``Users<sep><account>`` leaks were the doubled form and this guard
+#: returned zero hits on every one of them while the suite stayed green.
+#: :func:`test_every_path_rule_sees_the_doubled_separator_spelling` is the
+#: control that now fails if any of these three loses its ``+``.
+WINDOWS_USER_PATH = re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+([A-Za-z0-9._-]{2,})")
 
 #: AN ACCOUNT'S PRIMARY KEY, which is the worst class for a shape check.
 #:
@@ -286,7 +299,14 @@ SYNTHETIC_ACCOUNT_IDS = frozenset(
 #: below is small, auditable, and holds ONLY generic tokens -- no real value is
 #: named here, which is what keeps this an allowlist of the synthetic rather
 #: than a blocklist of the real. Widen it when a genuinely generic root fires.
-DRIVE_ROOT_PATH = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]([A-Za-z0-9_.-]{2,})")
+#:
+#: The ``+`` is the same 2026-08-31 fix described on :data:`WINDOWS_USER_PATH`,
+#: and this rule is where it was found. On 2026-08-31 this repo carried four
+#: ``D:\<given name>`` leaks, every one of them written with DOUBLED
+#: separators, and this rule -- the rule whose entire subject is a drive root
+#: named after a person -- matched none of them. The guard was reported green
+#: that morning. It was green over four hits it structurally could not see.
+DRIVE_ROOT_PATH = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]+([A-Za-z0-9_.-]{2,})")
 
 GENERIC_DRIVE_ROOTS = frozenset(
     {
@@ -307,8 +327,54 @@ GENERIC_DRIVE_ROOTS = frozenset(
 #: counted once, by the shape above, and not twice; and it excludes word
 #: characters so the prose ``anchored/home/tail`` stops reading as a home
 #: directory.
+#:
+#: ``/`` JOINED THAT LOOKBEHIND WHEN THE SEPARATORS BECAME ``+``. Widening to
+#: ``/+`` to see ``//home//user`` also let the rule start on the SECOND slash
+#: of ``https://home/x``, where the preceding character is a slash rather than
+#: the colon the lookbehind was written to block -- so the widening that closes
+#: one blind spot opens a false positive on every URL unless ``/`` is excluded
+#: too. Measured both ways before committing: with ``/`` in the lookbehind the
+#: tracked-file hit set is UNCHANGED, and ``https://home/x`` stays silent.
 POSIX_HOME_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:])(?:/home/|/Users/)([A-Za-z0-9._-]{2,})"
+    r"(?<![A-Za-z0-9_:/])/+(?:home|Users)/+([A-Za-z0-9._-]{2,})"
+)
+
+#: ONE BACKSLASH, spelled rather than escaped. Every separator below is built
+#: from this, so no quoting layer between this file and the regex engine -- a
+#: heredoc, an editor, a patch tool -- can change what is being tested without
+#: changing this line. That is not decoration: the defect these rules had was
+#: itself a separator-count bug, and a control for a separator-count bug that
+#: writes its own separators in a language with separator escaping is the same
+#: mistake wearing a test's clothes.
+BS = chr(92)
+
+#: (name, rule, subject builder, the account the subject names).
+#:
+#: EVERY RULE IN THIS MODULE WHOSE SUBJECT IS A FILESYSTEM PATH, registered so
+#: the doubled-separator control below covers a rule added next year the moment
+#: it joins this tuple -- rather than the day somebody remembers to extend a
+#: test. The builder takes the Windows separator RUN and the POSIX separator
+#: RUN, so one subject serves both spellings and neither can drift from the
+#: other. Every account named here is invented.
+PATH_SHAPES = (
+    (
+        "WINDOWS_USER_PATH",
+        WINDOWS_USER_PATH,
+        lambda w, p: "C:" + w + "Users" + w + "Jmorrissey" + w + "x.json",
+        "Jmorrissey",
+    ),
+    (
+        "DRIVE_ROOT_PATH",
+        DRIVE_ROOT_PATH,
+        lambda w, p: "D:" + w + "Given" + w + "projects",
+        "Given",
+    ),
+    (
+        "POSIX_HOME_PATH",
+        POSIX_HOME_PATH,
+        lambda w, p: p + "home" + p + "jmorrissey" + p + ".config",
+        "jmorrissey",
+    ),
 )
 
 HEX32_SHAPE = re.compile(r"(?<![A-Za-z0-9_])[0-9a-fA-F]{32}(?![A-Za-z0-9_])")
@@ -378,10 +444,29 @@ def _phone_ok(match: re.Match, text: str, rel: str) -> bool:
 
 
 def _account_ok(match: re.Match, text: str, rel: str) -> bool:
+    r"""Is this account segment already synthetic?
+
+    THE ELLIPSIS CLAUSE WAS ADDED 2026-08-31, and it was the widening that
+    made it necessary rather than a preference. While the separator run was
+    exactly one character this predicate never saw ``C:\\Users\\...`` at all:
+    the doubled spelling did not match the rule, so the elided form never
+    reached a predicate. Widening the run to ``+`` made the rule see it, and
+    this function then reported an ELLIPSIS as a leaking account name.
+
+    ``_drive_root_ok`` had had the identical clause since the day it was
+    written. So the two predicates disagreed about what a documentation
+    placeholder is, and the disagreement was invisible only because one of
+    them could not see the case. Fixing that here rather than declaring the
+    file a plant is the whole difference: ``...`` and ``<name>`` name nobody,
+    and admitting them costs no coverage of anything real.
+    """
     account = match.group(1).lower().strip("._-")
     if account in PLACEHOLDER_ACCOUNTS:
         return True
-    return any(token in account for token in PLACEHOLDER_ACCOUNT_TOKENS)
+    if any(token in account for token in PLACEHOLDER_ACCOUNT_TOKENS):
+        return True
+    # Documentation, not layout -- the same two spellings _drive_root_ok takes.
+    return "." * 3 in match.group(1) or "<" in match.group(1)
 
 
 #: Opaque ids that are INVENTED. Safe to commit precisely because none of them
@@ -754,6 +839,15 @@ PLANTED = (
     ("user path", r"traceback from C:\Users\Jmorrissey\AppData\x.json"),
     ("user path", "traceback from C:/Users/Jmorrissey/AppData/x.json"),
     ("user path", "wrote /home/jmorrissey/.config/naukri/state.json"),
+    # THE DOUBLED SPELLING, added 2026-08-31. Every one of these three passed
+    # this register happily while the rules could not see the doubled form,
+    # because all three were written with a single separator -- the register
+    # was as blind as the rules it was meant to prove. Built from BS so the
+    # doubling is a fact about the string, not about how this file is quoted.
+    ("user path", "traceback from C:" + BS * 2 + "Users" + BS * 2
+                  + "Jmorrissey" + BS * 2 + "AppData" + BS * 2 + "x.json"),
+    ("user path", "state at //home//jmorrissey//.config//naukri"),
+    ("drive root", "the layout is D:" + BS * 2 + "Given" + BS * 2 + "projects"),
     ("hex32 id", 'row = {"mailId": "3f9c1d77b0e24a5581c6ff2049ab7e13"}'),
     ("hex64 id", "opaque = " + "9f" * 32),
     (
@@ -782,6 +876,17 @@ BENIGN = (
     ("user path", r"scrubbed to C:\Users\runner\work\naukri"),
     ("user path", "mock returns /home/user/some/file"),
     ("user path", "the anchored/home/tail form keeps its separator"),
+    # The elided form, in the doubled spelling that only became visible when
+    # the separator run was widened on 2026-08-31. It must stay QUIET: an
+    # ellipsis names nobody, and the first thing the widening did was report
+    # one as a leaking account. See :func:`_account_ok`.
+    ("user path", "could not append to C:" + BS * 2 + "Users" + BS * 2
+                  + "..." + BS * 2 + "policy_history.jsonl"),
+    ("user path", "lock held under C:" + BS * 2 + "Users" + BS * 2 + "<name>"),
+    # A URL is not a home directory, and widening POSIX_HOME_PATH to `/+` made
+    # that a live risk: the rule could otherwise start on the SECOND slash of
+    # `//`, past the colon its lookbehind was written to block.
+    ("user path", "the docs live at https://home/getting-started"),
     ("hex64 id", "sha256 = " + "9f" * 32),
     ("credential", "Bearer (`MCP_SHARED_SECRET`) enables remote auth"),
     ("credential", 'sessionid="xxxxxxxxxxxxxxxxxxxxxxxxxx"'),
@@ -858,6 +963,81 @@ def test_the_windows_path_shape_matches_both_separator_forms():
     # either one alone is caught rather than being a silent no-op.
     assert "\\" in WINDOWS_USER_PATH.pattern
     assert "/" in WINDOWS_USER_PATH.pattern
+
+
+def test_every_path_rule_sees_the_doubled_separator_spelling():
+    r"""THE BLIND SPOT THAT SHIPPED, AND THE ONE THIS FILE HAD NO CONTROL FOR.
+
+    The test above asserts both separator CHARACTERS. It never asserted the
+    separator COUNT, and that is the gap the whole 2026-08-31 sweep fell
+    through. Each rule read ``[\\/]`` -- exactly one separator, with the
+    capture class starting on the very next character. On the doubled spelling
+    that next character is another separator, so the rule did not match, and
+    every assertion in this module went on passing.
+
+    THE DOUBLED FORM IS THE COMMON ONE, not the exotic one. A JSON config, a
+    Python string literal, a docstring quoting either, and ``repr()`` of any
+    Windows path all write it. So the rules were blind to exactly the spelling
+    most likely to reach a committed file. MEASURED on 2026-08-31 across three
+    public repositories: 40 drive-root leaks and 12 account-name leaks, and
+    every single one of them was the doubled form.
+
+    Driven over :data:`PATH_SHAPES` rather than a hand-written list, so a path
+    rule added later is covered the moment it is registered.
+    """
+    for name, rule, subject, account in PATH_SHAPES:
+        single = subject(BS, "/")
+        doubled = subject(BS + BS, "//")
+
+        assert single != doubled, name + ": the two spellings are identical"
+
+        got_single = rule.search(single)
+        assert got_single, name + " cannot see the SINGLE-separator spelling"
+        assert got_single.group(1) == account, (
+            name + " matched the single form but captured "
+            + repr(got_single.group(1)) + " rather than the account"
+        )
+
+        got_doubled = rule.search(doubled)
+        assert got_doubled, (
+            name + " IS BLIND TO THE DOUBLED-SEPARATOR SPELLING -- the exact "
+            "defect that let 52 identity paths ship green on 2026-08-31"
+        )
+        assert got_doubled.group(1) == account, (
+            name + " matched the doubled form but captured "
+            + repr(got_doubled.group(1)) + " rather than the account, so it "
+            "would report a separator as the leaking value"
+        )
+
+
+def test_the_doubled_separator_control_fails_on_the_rule_it_replaced__CONTROL():
+    r"""THE MUTATION, EXECUTED. A check never seen to fail certifies nothing.
+
+    The narrow rule is not retyped here -- it is DERIVED from the shipped one
+    by undoing exactly the edit that fixed it (``]+`` back to ``]``, ``/+``
+    back to ``/``). So this cannot drift from what it claims to test, and it
+    reproduces the real historical defect rather than a plausible imitation of
+    it: on 2026-08-31 these narrow forms returned ZERO hits across all eight
+    of this repository's own real leaking lines while the suite was green.
+
+    If a future rewrite makes this test fail, the widening has been undone.
+    """
+    for name, rule, subject, account in PATH_SHAPES:
+        narrow = re.compile(rule.pattern.replace("]+", "]").replace("/+", "/"))
+        assert narrow.pattern != rule.pattern, (
+            name + ": the mutation changed nothing, so this control is inert "
+            "-- the separator run is no longer spelled the way it was fixed"
+        )
+
+        assert narrow.search(subject(BS, "/")), (
+            name + ": the narrow rule cannot see the SINGLE form either, so "
+            "this control would pass for the wrong reason"
+        )
+        assert not narrow.search(subject(BS + BS, "//")), (
+            name + ": the narrow rule now sees the doubled spelling, which "
+            "means the shipped rule's ``+`` is no longer what makes the "
+            "difference and the control above proves nothing"
+        )
 
 
 def test_a_digit_boundary_would_match_inside_a_git_sha_and_a_token_one_does_not():

@@ -15,7 +15,7 @@ That is a live hole of exactly the class the original census named.
 `resources/handlers.py` formats every failure as
 `f"Failed to load profile: {exc}"`, and OSError and Playwright errors embed the
 absolute filename they failed on -- so the leak needed no new code to appear,
-only a disk error on a machine whose layout is `D:\\Sundeep\\projects\\...`.
+only a disk error on a machine whose layout is `D:\\workspace\\projects\\...`.
 
 Two further asymmetries the tool wrapper did not cover, both tested here:
 
@@ -38,7 +38,7 @@ from tests.test_path_leaks import DRIVE_PATH, assert_no_absolute_path
 # class the census named and the one the resource handlers format verbatim.
 LEAKY_OSERROR = OSError(
     "[Errno 2] No such file or directory: "
-    "'D:\\Sundeep\\projects\\job-hunting\\mcp-servers\\naukri\\sync_state.json'"
+    "'D:\\workspace\\projects\\job-hunting\\mcp-servers\\naukri\\sync_state.json'"
 )
 
 
@@ -46,7 +46,7 @@ async def _read_resource_raw(uri: str) -> str:
     """Read a resource through the REGISTERED path and return its raw text.
 
     Deliberately not `json.loads`-ed first: the assertion is about the bytes a
-    client actually receives, and JSON escaping (`D:\\\\Sundeep`) still contains
+    client actually receives, and JSON escaping (`D:\\\\workspace`) still contains
     the drive letter the regex looks for.
     """
     from naukri_server import mcp

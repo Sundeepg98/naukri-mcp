@@ -9,7 +9,7 @@ dict verbatim.
 
 MEASURED at layer 2 on 2026-08-22, against a temp config, all three branches::
 
-    ok      result['path']          C:\\Users\\Dell\\...\\config\\jobhunt.json
+    ok      result['path']          C:\\Users\\user\\...\\config\\jobhunt.json
     ok      result['ledger_error']  could not append to C:\\Users\\...\\policy_history.jsonl
     error   result['detail']        config file locked by live PID 4242 (lock: C:\\Users\\...)
 
@@ -420,7 +420,7 @@ class TestTheSubstitutionStaysExact:
 #
 #     "detail":   "JOBHUNT_CONFIG=~/AppData/.../does-not-exist/jobhunt.json
 #                  points at no file"                       <- rendered
-#     "searched": ["C:\\Users\\Dell\\AppData\\...\\jobhunt.json"]  <- raw
+#     "searched": ["C:\\Users\\user\\AppData\\...\\jobhunt.json"]  <- raw
 #     scrub_result(...)["searched"] == ["jobhunt.json"]     <- leak-free, useless
 #
 # The identical measurement was taken on the uplers server, which has no

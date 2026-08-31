@@ -328,7 +328,7 @@ def display_path(raw: Optional[str]) -> Optional[str]:
 
     The tail form is the one CI found missing (2026-08-21, red on the Linux
     runner and green on every Windows box, because a Windows temp dir lives
-    under ``C:\\Users\\Dell`` and so the home anchor always caught it). jobcore
+    under ``C:\\Users\\user`` and so the home anchor always caught it). jobcore
     carries that fix and its ``DISPLAY_TAIL_PARTS`` / ``MAX_PARENT_HOPS``
     constants; see ``jobcore/paths.py`` for the full account.
     """
